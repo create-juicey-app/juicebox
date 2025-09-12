@@ -16,7 +16,7 @@ use serde_json;
 use rand::{Rng, rng};
 use std::collections::HashMap;
 use tokio::sync::{RwLock, Semaphore};
-use axum::http::header::CACHE_CONTROL;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use std::time::{SystemTime, Duration, UNIX_EPOCH};
 use tokio_util::io::ReaderStream;
 use std::task::{Context, Poll};
@@ -30,6 +30,7 @@ use axum::Form;
 use axum::extract::Query;
 use std::borrow::Cow;
 use axum::http::HeaderValue;
+use std::net::{IpAddr};
 
 // === Simple in-memory token bucket rate limiting (per IP) ===
 struct RateLimitConfig { capacity: u32, refill_per_second: u32 }
@@ -78,18 +79,22 @@ where S: tower::Service<Request<Body>, Response = Response> + Clone + Send + 'st
     type Future = Pin<Box<dyn Future<Output=Result<Self::Response, Self::Error>> + Send>>;
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> { self.inner.poll_ready(cx) }
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        let mut inner = self.inner.clone();
         let limiter = self.limiter.clone();
-        // Extract IP from extensions (ConnectInfo inserted by axum)
-        let ip_opt = req.extensions().get::<ClientAddr>().map(|s| s.ip().to_string());
-        let is_upload = req.uri().path() == "/upload";
+        let mut inner = self.inner.clone();
+        let headers_clone = req.headers().clone();
+        let maybe_ci = req.extensions().get::<ConnectInfo<ClientAddr>>().cloned();
+        let ip = if let Some(ci) = maybe_ci {
+            let remote = ci.0.ip();
+            if is_cloudflare_edge(remote) {
+                if let Some(cf) = headers_clone.get("cf-connecting-ip").and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<IpAddr>().ok()) { cf.to_string() }
+                else if let Some(xff) = headers_clone.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+                    xff.split(',').next().and_then(|first| first.trim().parse::<IpAddr>().ok()).map(|ip| ip.to_string()).unwrap_or_else(|| remote.to_string())
+                } else { remote.to_string() }
+            } else { remote.to_string() }
+        } else { "unknown".into() };
         Box::pin(async move {
-            if let Some(ip) = ip_opt {
-                // separate limits for uploads vs others (tighter for uploads)
-                let ok = if is_upload { limiter.check(&(ip.clone()+"|up")).await } else { limiter.check(&ip).await };
-                if !ok {
-                    return Ok(json_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "too many requests"));
-                }
+            if !limiter.check(&ip).await {
+                return Ok(json_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "slow down"));
             }
             inner.call(req).await
         })
@@ -117,6 +122,7 @@ struct AppState {
     owners: Arc<RwLock<HashMap<String, FileMeta>>>, // filename -> meta
     upload_sem: Arc<Semaphore>,        // limit concurrent uploads
     production: bool,                  // new: whether running in production (APP_ENV=production)
+    last_meta_mtime: Arc<RwLock<SystemTime>>, // new: track metadata file mtime for live admin edits
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -134,6 +140,7 @@ struct UploadResponse {
 struct ListResponse {
     files: Vec<String>,
     metas: Vec<FileMetaEntry>,
+    reconcile: Option<ReconcileReport>, // new: report of admin / disk adjustments
 }
 
 #[derive(Serialize)]
@@ -141,6 +148,9 @@ struct FileMetaEntry {
     file: String,
     expires: u64,
 }
+
+#[derive(Serialize)]
+struct ReconcileReport { added: Vec<String>, removed: Vec<String>, updated: Vec<String> }
 
 fn random_name(len: usize) -> String {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -162,6 +172,7 @@ async fn persist_owners(state: &AppState) {
             if let Err(e) = f.write_all(&json).await { eprintln!("persist write_all failed: {e}"); return; }
             if let Err(e) = f.sync_all().await { eprintln!("persist sync failed: {e}"); }
             if let Err(e) = fs::rename(&tmp, &*state.metadata_path).await { eprintln!("persist rename failed: {e}"); }
+            if let Ok(md) = fs::metadata(&*state.metadata_path).await { if let Ok(modified) = md.modified() { let mut lm = state.last_meta_mtime.write().await; *lm = modified; } }
         }
     }
 }
@@ -249,12 +260,68 @@ async fn cleanup_expired(state: &AppState) {
     persist_owners(state).await;
 }
 
+// Replace helper to extract real client IP with Cloudflare edge validation
+fn ip_in_cidr(ip: IpAddr, cidr: &str) -> bool {
+    // cidr like "173.245.48.0/20" or IPv6
+    let mut parts = cidr.split('/');
+    let base = parts.next().unwrap_or("");
+    let prefix: u8 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    if let Ok(base_ip) = base.parse::<IpAddr>() {
+        match (ip, base_ip) {
+            (IpAddr::V4(a), IpAddr::V4(b)) => {
+                let mask = if prefix==0 {0} else {u32::MAX << (32 - prefix) };
+                (u32::from(a) & mask) == (u32::from(b) & mask)
+            }
+            (IpAddr::V6(a), IpAddr::V6(b)) => {
+                let a_bytes = a.octets();
+                let b_bytes = b.octets();
+                let full_bytes = (prefix / 8) as usize;
+                if a_bytes[..full_bytes] != b_bytes[..full_bytes] { return false; }
+                let rem_bits = prefix % 8;
+                if rem_bits == 0 { return true; }
+                let mask = 0xFF << (8 - rem_bits);
+                (a_bytes[full_bytes] & mask) == (b_bytes[full_bytes] & mask)
+            }
+            _ => false
+        }
+    } else { false }
+}
+
+fn is_cloudflare_edge(remote: IpAddr) -> bool {
+    // Cloudflare published IP ranges (snapshot)
+    const CF_CIDRS: &[&str] = &[
+        // IPv4
+        "173.245.48.0/20","103.21.244.0/22","103.22.200.0/22","103.31.4.0/22","141.101.64.0/18","108.162.192.0/18","190.93.240.0/20","188.114.96.0/20","197.234.240.0/22","198.41.128.0/17","162.158.0.0/15","104.16.0.0/13","104.24.0.0/14","172.64.0.0/13","131.0.72.0/22",
+        // IPv6
+        "2400:cb00::/32","2606:4700::/32","2803:f800::/32","2405:b500::/32","2405:8100::/32","2a06:98c0::/29","2c0f:f248::/32"
+    ];
+    CF_CIDRS.iter().any(|c| ip_in_cidr(remote, c))
+}
+
+fn real_client_ip(headers: &HeaderMap, fallback: &ClientAddr) -> String {
+    let remote = fallback.ip();
+    if is_cloudflare_edge(remote) {
+        if let Some(cf) = headers.get("cf-connecting-ip").and_then(|v| v.to_str().ok()) {
+            if let Ok(parsed) = cf.parse::<IpAddr>() { return parsed.to_string(); }
+        }
+        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            if let Some(first) = xff.split(',').next() {
+                let cand = first.trim();
+                if let Ok(parsed) = cand.parse::<IpAddr>() { return parsed.to_string(); }
+            }
+        }
+    }
+    remote.to_string()
+}
+
 #[axum::debug_handler]
 async fn upload_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Response {
+    let client_ip = real_client_ip(&headers, &addr);
     // acquire permit to limit concurrent uploads
     let _permit = match state.upload_sem.clone().try_acquire_owned() {
         Ok(p) => p,
@@ -319,7 +386,7 @@ async fn upload_handler(
             let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
             {
                 let mut owners = state.owners.write().await;
-                owners.insert(storage_name.clone(), FileMeta { owner: addr.ip().to_string(), expires });
+                owners.insert(storage_name.clone(), FileMeta { owner: client_ip.clone(), expires });
             }
             persist_owners(&state).await;
             saved_files.push(format!("f/{}", storage_name));
@@ -342,18 +409,22 @@ async fn upload_handler(
 async fn list_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
 ) -> Response {
-    let ip = addr.ip().to_string();
+    reload_metadata_if_changed(&state).await; // reflect admin edits immediately
+    let client_ip = real_client_ip(&headers, &addr);
+    let reconcile_report = verify_user_entries_with_report(&state, &client_ip).await; // new: produce difference report
     cleanup_expired(&state).await;
+    check_storage_integrity(&state).await; // ensure removed disk files vanish from listing
     let owners = state.owners.read().await;
     let mut files: Vec<(String,u64)> = owners
         .iter()
-        .filter_map(|(file, meta)| if meta.owner == ip { Some((file.clone(), meta.expires)) } else { None })
+        .filter_map(|(file, meta)| if meta.owner == client_ip { Some((file.clone(), meta.expires)) } else { None })
         .collect();
     files.sort_by(|a,b| a.0.cmp(&b.0));
     let only_names: Vec<String> = files.iter().map(|(n,_)| qualify_path(&state, &format!("f/{}", n))).collect();
     let metas: Vec<FileMetaEntry> = files.into_iter().map(|(n,e)| FileMetaEntry { file: qualify_path(&state, &format!("f/{}", n)), expires: e }).collect();
-    let body = Json(ListResponse { files: only_names, metas });
+    let body = Json(ListResponse { files: only_names, metas, reconcile: reconcile_report });
     let mut resp = body.into_response();
     resp.headers_mut().insert(CACHE_CONTROL, "no-store".parse().unwrap());
     resp
@@ -378,8 +449,8 @@ async fn main() -> anyhow::Result<()> {
         },
         Err(_) => HashMap::new(),
     };
-
-    let state = AppState { upload_dir, static_dir, metadata_path, owners: Arc::new(RwLock::new(owners_map)), upload_sem: Arc::new(Semaphore::new(UPLOAD_CONCURRENCY)), production };
+    let initial_mtime = match fs::metadata(&*metadata_path).await.and_then(|m| Ok(m.modified().unwrap_or(SystemTime::UNIX_EPOCH))) { Ok(t)=>t, Err(_)=>SystemTime::UNIX_EPOCH };
+    let state = AppState { upload_dir, static_dir, metadata_path, owners: Arc::new(RwLock::new(owners_map)), upload_sem: Arc::new(Semaphore::new(UPLOAD_CONCURRENCY)), production, last_meta_mtime: Arc::new(RwLock::new(initial_mtime)) };
 
     // spawn periodic cleanup
     let cleanup_state = state.clone();
@@ -475,8 +546,10 @@ async fn fetch_file_handler(
 async fn delete_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
     Path(file): Path<String>,
 ) -> Response {
+    let ip = real_client_ip(&headers, &addr);
     if file.contains('/') || file.contains("..") || file.contains('\\') {
         return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file name");
     }
@@ -484,7 +557,7 @@ async fn delete_handler(
     {
         let owners = state.owners.read().await;
         match owners.get(&file) {
-            Some(meta) if meta.owner == addr.ip().to_string() => {},
+            Some(meta) if meta.owner == ip => {},
             _ => return (StatusCode::NOT_FOUND, "not found").into_response(),
         }
     }
@@ -569,48 +642,35 @@ fn simple_page(message: Option<&str>, files: &[(String,u64)], now: u64) -> Strin
     format!("<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'/><title>JuiceBox – Simple</title><meta name='viewport' content='width=device-width,initial-scale=1'/><style>body{{background:#0f141b;color:#e8ecf3;font-family:system-ui,Segoe UI,Roboto,sans-serif;margin:0;padding:1.2rem;max-width:880px}}h1{{margin:.2rem 0 .8rem;font-size:1.6rem}}form.upload{{background:#1a2230;padding:1rem 1.1rem 1.2rem;border:1px solid #273242;border-radius:12px;margin:0 0 1.1rem}}fieldset{{border:none;padding:0;margin:0}}label{{font-size:.7rem;letter-spacing:.5px;display:block;margin:0 0 .4rem;opacity:.75}}input[type=file]{{display:block;margin:.4rem 0 .8rem}}select,button,input[type=file]{{font-size:.75rem}}table{{width:100%;border-collapse:collapse;font-size:.65rem}}th,td{{padding:.45rem .5rem;border-bottom:1px solid #273242;text-align:left}}th{{font-weight:600;letter-spacing:.5px;font-size:.6rem;text-transform:uppercase;opacity:.8}}tr:hover td{{background:#1f2935}}.note{{font-size:.58rem;opacity:.55;line-height:1.4;margin-top:.8rem}}.ttl-box{{display:flex;align-items:center;gap:.5rem;margin:.4rem 0 .9rem}}.ttl-box select{{background:#121b24;color:#e8ecf3;border:1px solid #2b394a;padding:.35rem .5rem;border-radius:6px}}button.primary{{background:#ff9800;color:#111;border:1px solid #ffa733;padding:.5rem 1rem;border-radius:8px;cursor:pointer;font-weight:600;letter-spacing:.5px}}button.primary:hover{{filter:brightness(1.1)}}.files-panel{{background:#1a2230;padding:1rem 1.1rem 1.25rem;border:1px solid #273242;border-radius:12px}}</style></head><body><h1>JuiceBox – No&nbsp;Script</h1><p style='margin:0 0 1.1rem;font-size:.8rem;opacity:.75'>Basic uploader for old browsers and disabled JavaScript.</p>{msg_html}<form class='upload' method='post' enctype='multipart/form-data' action='/simple/upload'><fieldset><label>Files</label><input type='file' name='file' multiple required/><div class='ttl-box'><label for='ttl' style='margin:0'>Retention:</label><select name='ttl' id='ttl'><option>1h</option><option>3h</option><option>12h</option><option>1d</option><option selected>3d</option><option>7d</option><option>14d</option></select><span style='font-size:.6rem;opacity:.55'>auto delete</span></div><button class='primary' type='submit'>Upload</button></fieldset></form><div class='files-panel'><h2 style='margin:.1rem 0  .6rem;font-size:.9rem;letter-spacing:.5px;opacity:.8;text-transform:uppercase'>Your Files</h2><table><thead><tr><th>Name</th><th>Expires In</th><th>Delete</th></tr></thead><tbody>{rows}</tbody></table><p class='note'>Files are linked to your IP. They expire automatically. Keep page for reference or bookmark links.</p></div><p class='note'>Return to <a href='/' style='color:#ff9800'>JS interface</a>.</p></body></html>")
 }
 
-async fn simple_root(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, Query(q): Query<SimpleQuery>) -> Response {
+async fn simple_root(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Query(q): Query<SimpleQuery>) -> Response {
+    reload_metadata_if_changed(&state).await; // ensure admin changes visible here too
+    let ip = real_client_ip(&headers, &addr);
+    verify_user_entries(&state, &ip).await; // NEW: reconcile
     cleanup_expired(&state).await;
-    let ip = addr.ip().to_string();
+    check_storage_integrity(&state).await;
+    // Restrict listing to files owned by this client's IP only (privacy)
     let now = now_secs();
     let owners = state.owners.read().await;
-    let mut files: Vec<(String,u64)> = owners.iter().filter_map(|(f,m)| if m.owner==ip { Some((f.clone(), m.expires)) } else { None }).collect();
-    files.sort_by(|a,b| a.0.cmp(&b.0));
-    // Build rows
-    let mut rows = String::new();
-    for (name, exp) in files.iter() {
-        let remain = if *exp <= now { Cow::Borrowed("expired") } else {
-            let mut secs = *exp as i64 - now as i64;
-            let d = secs / 86400; secs %= 86400;
-            let h = secs / 3600; secs %= 3600;
-            let m = secs / 60; secs %= 60;
-            let mut parts = Vec::new();
-            if d>0 { parts.push(format!("{}d", d)); }
-            if h>0 { parts.push(format!("{}h", h)); }
-            if m>0 && parts.len()<2 { parts.push(format!("{}m", m)); }
-            if parts.is_empty() { parts.push(format!("{}s", secs)); }
-            Cow::Owned(parts.join(" "))
-        };
-        rows.push_str(&format!("<tr><td style='font-family:monospace'><a href='/f/{0}'>{0}</a></td><td>{1}</td><td><form method='post' action='/simple/delete' style='display:inline'><input type='hidden' name='f' value='{0}'/><button style='background:#942;padding:.25rem .6rem;border:1px solid #b54;color:#fff;border-radius:4px;cursor:pointer;font-size:.65rem'>del</button></form></td></tr>", name, remain));
-    }
-    let msg_html = q.m.as_ref().map(|m| format!("<div class=\"msg\">{}</div>", htmlescape::encode_minimal(m))).unwrap_or_default();
-    // Try loading template file
-    let template_path = state.static_dir.join("simple.html");
-    let body = if let Ok(bytes) = fs::read(&template_path).await {
-        let mut s = String::from_utf8_lossy(&bytes).into_owned();
-        s = s.replace("{{MESSAGE}}", &msg_html).replace("{{ROWS}}", &rows);
-        s
-    } else {
-        // Fallback to old generator
-        simple_page(q.m.as_deref(), &files, now)
-    };
-    ([(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response()
+    let mut my_files: Vec<(String,u64)> = owners.iter()
+        .filter(|(_, meta)| meta.owner == ip)
+        .map(|(name, meta)| (name.clone(), meta.expires))
+        .collect();
+    my_files.sort_by(|a,b| a.0.cmp(&b.0));
+    drop(owners);
+    let html = simple_page(q.m.as_deref(), &my_files, now);
+    (StatusCode::OK,
+        [
+            (CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"))
+        ],
+        html
+    ).into_response()
 }
 
 #[axum::debug_handler]
 #[allow(non_snake_case)]
-async fn simple_upload(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, mut multipart: Multipart) -> Response {
-    let ip = addr.ip().to_string();
+async fn simple_upload(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, mut multipart: Multipart) -> Response {
+    let ip = real_client_ip(&headers, &addr);
     let mut saved: Vec<String> = Vec::new();
     let mut ttl_choice: Option<String> = None;
     while let Ok(Some(field)) = multipart.next_field().await {
@@ -662,11 +722,108 @@ async fn simple_upload(State(state): State<AppState>, ConnectInfo(addr): Connect
 struct SimpleDeleteForm { f: String }
 
 #[axum::debug_handler]
-async fn simple_delete(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, Form(frm): Form<SimpleDeleteForm>) -> Response {
-    let ip = addr.ip().to_string();
+async fn simple_delete(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Form(frm): Form<SimpleDeleteForm>) -> Response {
+    let ip = real_client_ip(&headers, &addr);
     let target = frm.f;
     let owned = { let owners = state.owners.read().await; owners.get(&target).map(|m| m.owner.clone()) };
     if owned.is_some() && owned.unwrap()==ip { let _={ let mut owners = state.owners.write().await; owners.remove(&target); }; let _=fs::remove_file(state.upload_dir.join(&target)).await; persist_owners(&state).await; let hv = HeaderValue::from_static("/simple?m=Deleted"); return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response(); }
     let hv = HeaderValue::from_static("/simple?m=Not+found");
     (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
+}
+
+// New: reload metadata from disk if file_owners.json modified externally (e.g. admin changes)
+async fn reload_metadata_if_changed(state: &AppState) {
+    let meta_res = fs::metadata(&*state.metadata_path).await;
+    let md = match meta_res { Ok(m)=>m, Err(_)=>return };
+    let modified = match md.modified() { Ok(t)=>t, Err(_)=>return };
+    let need_reload = {
+        let lm = state.last_meta_mtime.read().await;
+        modified > *lm
+    };
+    if !need_reload { return; }
+    if let Ok(bytes) = fs::read(&*state.metadata_path).await {
+        // Try HashMap<String, FileMeta>, fallback to legacy
+        if let Ok(map) = serde_json::from_slice::<HashMap<String, FileMeta>>(&bytes) {
+            let mut owners = state.owners.write().await;
+            owners.clear();
+            owners.extend(map.into_iter());
+        } else if let Ok(old) = serde_json::from_slice::<HashMap<String,String>>(&bytes) {
+            let mut owners = state.owners.write().await;
+            owners.clear();
+            let default_exp = now_secs() + ttl_to_duration("3d").as_secs();
+            owners.extend(old.into_iter().map(|(k,v)|(k, FileMeta{ owner:v, expires: default_exp })));
+        }
+        let mut lm = state.last_meta_mtime.write().await; *lm = modified;
+    }
+}
+
+// NEW: verify and reconcile a specific user's entries with on-disk file_owners.json (detect admin tampering)
+async fn verify_user_entries(state: &AppState, ip: &str) {
+    if let Ok(bytes) = fs::read(&*state.metadata_path).await {
+        if let Ok(disk_map) = serde_json::from_slice::<HashMap<String, FileMeta>>(&bytes) {
+            // Collect differences only for this user's files (or files that moved away from this user)
+            let mut to_remove: Vec<String> = Vec::new();
+            let mut to_update: Vec<(String, FileMeta)> = Vec::new();
+            let mut to_add: Vec<(String, FileMeta)> = Vec::new();
+            {
+                let owners = state.owners.read().await;
+                // Mark removals / changes
+                for (fname, meta_mem) in owners.iter() {
+                    if meta_mem.owner == ip {
+                        match disk_map.get(fname) {
+                            Some(meta_disk) => {
+                                if meta_disk.owner != meta_mem.owner || meta_disk.expires != meta_mem.expires { to_update.push((fname.clone(), meta_disk.clone())); }
+                            }
+                            None => to_remove.push(fname.clone()), // deleted by admin
+                        }
+                    }
+                }
+                // Additions: any disk entries for this ip not in memory
+                for (fname, meta_disk) in disk_map.iter() {
+                    if meta_disk.owner == ip && !owners.contains_key(fname) { to_add.push((fname.clone(), meta_disk.clone())); }
+                }
+            }
+            if !(to_remove.is_empty() && to_update.is_empty() && to_add.is_empty()) {
+                let mut owners = state.owners.write().await;
+                for f in to_remove { owners.remove(&f); }
+                for (f,m) in to_update { owners.insert(f,m); }
+                for (f,m) in to_add { owners.insert(f,m); }
+            }
+        }
+    }
+}
+
+async fn verify_user_entries_with_report(state: &AppState, ip: &str) -> Option<ReconcileReport> {
+    if let Ok(bytes) = fs::read(&*state.metadata_path).await {
+        if let Ok(disk_map) = serde_json::from_slice::<HashMap<String, FileMeta>>(&bytes) {
+            let mut to_remove: Vec<String> = Vec::new();
+            let mut to_update: Vec<(String, FileMeta)> = Vec::new();
+            let mut to_add: Vec<(String, FileMeta)> = Vec::new();
+            {
+                let owners = state.owners.read().await;
+                for (fname, meta_mem) in owners.iter() {
+                    if meta_mem.owner == ip {
+                        match disk_map.get(fname) {
+                            Some(meta_disk) => {
+                                if meta_disk.owner != meta_mem.owner || meta_disk.expires != meta_mem.expires { to_update.push((fname.clone(), meta_disk.clone())); }
+                            }
+                            None => to_remove.push(fname.clone()),
+                        }
+                    }
+                }
+                for (fname, meta_disk) in disk_map.iter() {
+                    if meta_disk.owner == ip && !owners.contains_key(fname) { to_add.push((fname.clone(), meta_disk.clone())); }
+                }
+            }
+            if to_remove.is_empty() && to_update.is_empty() && to_add.is_empty() { return None; }
+            {
+                let mut owners = state.owners.write().await;
+                for f in &to_remove { owners.remove(f); }
+                for (f,m) in &to_update { owners.insert(f.clone(), m.clone()); }
+                for (f,m) in &to_add { owners.insert(f.clone(), m.clone()); }
+            }
+            return Some(ReconcileReport { added: to_add.into_iter().map(|(f,_)| f).collect(), removed: to_remove, updated: to_update.into_iter().map(|(f,_)| f).collect() });
+        }
+    }
+    None
 }
