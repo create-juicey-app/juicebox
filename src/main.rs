@@ -507,6 +507,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/simple", get(simple_root))
         .route("/simple/upload", post(simple_upload))
         .route("/simple/delete", post(simple_delete))
+        .route("/thumbnail", get(thumbnail_handler))
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .route("/{*path}", get(file_handler));
@@ -629,7 +630,8 @@ async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     if !h.contains_key("X-Content-Type-Options") { h.insert("X-Content-Type-Options", "nosniff".parse().unwrap()); }
     if !h.contains_key("X-Frame-Options") { h.insert("X-Frame-Options", "DENY".parse().unwrap()); }
     if !h.contains_key("Referrer-Policy") { h.insert("Referrer-Policy", "no-referrer".parse().unwrap()); }
-    if (!h.contains_key("Content-Security-Policy")) { h.insert("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:".parse().unwrap()); }
+    // Updated CSP: allow blob: for img-src so thumbnail generator can load blob images
+    if !h.contains_key("Content-Security-Policy") { h.insert("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:".parse().unwrap()); }
     if !h.contains_key("Cache-Control") { h.insert("Cache-Control", "private, max-age=0, no-store".parse().unwrap()); }
     resp
 }
@@ -849,4 +851,16 @@ async fn verify_user_entries_with_report(state: &AppState, ip: &str) -> Option<R
         }
     }
     None
+}
+
+// New thumbnail page handler
+async fn thumbnail_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>) -> Response {
+    // Allow only loopback visitors
+    if !addr.ip().is_loopback() { return (StatusCode::NOT_FOUND, "not found").into_response(); }
+    let path = state.static_dir.join("thumbnail.html");
+    if !path.exists() { return (StatusCode::NOT_FOUND, "thumbnail missing").into_response(); }
+    match fs::read(&path).await {
+        Ok(bytes) => ([ (axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8") ], bytes).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "cant read thumbnail").into_response(),
+    }
 }

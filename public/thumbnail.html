@@ -1,0 +1,69 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><title>JuiceBox Thumbnail Maker</title><meta name="viewport" content="width=device-width,initial-scale=1"/><link rel="stylesheet" href="/css/app.css"/>
+<style>
+body{background:#0d1218;color:#f2f6fb;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;margin:0;display:flex;flex-direction:column;align-items:center;gap:1.2rem;padding:1.2rem}
+header{margin-top:.2rem;text-align:center}
+#stageWrapper{position:relative}
+#captureFrame{width:800px;height:600px;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.2rem;border:4px dashed #ff9800;border-radius:20px;overflow:hidden;padding:1rem;text-align:center;background:linear-gradient(145deg,#462605,#2d1803 58%,#271503);box-shadow:0 8px 30px -12px rgba(0,0,0,.65),0 0 0 2px rgba(255,152,0,.18);}
+#captureFrame.animate::before{animation:dzDiag 24s linear infinite}
+#captureFrame.drag::before{animation:dzDiagFast 2.2s linear infinite;opacity:.28}
+#captureFrame::before{content:"";position:absolute;inset:0;pointer-events:none;background:
+radial-gradient(circle, transparent 20%, #1b232c 20%, #1b232c 80%, transparent 80%, transparent) 0% 0%/64px 64px,
+radial-gradient(circle, transparent 20%, #1b232c 20%, #1b232c 80%, transparent 80%, transparent) 32px 32px/64px 64px,
+linear-gradient(#ffa200 2px, transparent 2px) 0 -1px/32px 32px,
+linear-gradient(90deg,#ffa200 2px,#1b232c 2px) -1px 0/32px 32px #1b232c;opacity:.16}
+#captureFrame::after{content:"";position:absolute;inset:0;background:linear-gradient(to bottom,rgba(15,20,27,0) 58%,rgba(15,20,27,.82) 100%);pointer-events:none}
+#captureFrame h1{margin:0;font-size:3.4rem;letter-spacing:.5px;color:#fff;text-shadow:0 4px 18px rgba(0,0,0,.55)}
+#captureFrame p.tag{margin:0;font-size:1.05rem;letter-spacing:.6px;color:#ffb347;font-weight:500;text-shadow:0 2px 8px rgba(0,0,0,.55)}
+#captureFrame .silly{font-size:1.4rem;letter-spacing:.8px;background:linear-gradient(90deg,#ff9800,#ffc069,#ff9800);-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:600;animation:shine 4.5s linear infinite;background-size:220% 100%;text-shadow:none}
+@keyframes shine{0%{background-position:0 50%}100%{background-position:200% 50%}}
+.controls{display:flex;flex-wrap:wrap;gap:.6rem;justify-content:center}
+.controls button{background:#2f3b49;border:1px solid #3b4a5a;color:#d3dde6;font-size:.68rem;padding:.55rem .9rem;border-radius:7px;cursor:pointer;letter-spacing:.4px;transition:.25s background,.25s transform}
+.controls button:hover{background:#354554;transform:translateY(-2px)}
+.controls button:active{transform:translateY(0) scale(.95)}
+.output{display:flex;flex-direction:column;align-items:center;gap:.65rem;max-width:820px;width:100%}
+#preview{max-width:100%;border:1px solid #273242;border-radius:12px;box-shadow:0 4px 18px -8px rgba(0,0,0,.6);image-rendering:crisp-edges}
+.note{font-size:.58rem;letter-spacing:.5px;color:#9aa7b5;text-align:center;max-width:820px;line-height:1.5}
+.small{font-size:.55rem;opacity:.65}
+.status{font-size:.6rem;letter-spacing:.4px;color:#ff9800;text-align:center;min-height:1.1rem}
+.anim-controls{display:flex;flex-wrap:wrap;gap:.65rem;justify-content:center;margin-top:.4rem}
+.anim-controls label{font-size:.58rem;display:flex;flex-direction:column;gap:.25rem;letter-spacing:.5px;color:#b5c0cc;background:#1f2733;border:1px solid #2b3746;padding:.55rem .65rem .6rem;border-radius:8px;min-width:110px;align-items:flex-start}
+.anim-controls input[type=range]{width:110px}
+.anim-controls input[type=number]{background:#121b24;border:1px solid #2b394a;color:#cfd6de;border-radius:5px;padding:.3rem .4rem;font-size:.65rem;width:70px}
+#makeAnim{background:#ff9800;color:#111;border:1px solid #ffa733;font-size:.65rem;padding:.55rem .95rem;border-radius:8px;cursor:pointer;font-weight:600;letter-spacing:.5px}
+#makeAnim:hover{filter:brightness(1.1)}
+#animPreview{max-width:100%;border:1px solid #273242;border-radius:12px;box-shadow:0 4px 18px -8px rgba(0,0,0,.6);margin-top:.8rem}
+@media (max-width:850px){#captureFrame{transform:scale(.7);transform-origin:top center;height:600px}}
+</style>
+</head><body>
+<header>
+  <h2 style="margin:.2rem 0 0;font-size:1.2rem;letter-spacing:.6px;color:#ff9800">Social Thumbnail Maker</h2>
+  <p style="margin:.35rem 0 .2rem;font-size:.7rem;letter-spacing:.5px;color:#b5c0cc">Generate high quality still or animated JuiceBox card.</p>
+</header>
+<div id="stageWrapper">
+  <div id="captureFrame" class="animate" data-anim="1" aria-label="Thumbnail frame 800 by 600">
+    <h1>JuiceBox</h1>
+    <p class="tag">Temporary File Host</p>
+    <p class="silly">the silly file share.</p>
+  </div>
+</div>
+<div class="controls">
+  <button id="toggleAnim">Pause Animation</button>
+  <button id="capturePng">Capture PNG</button>
+  <button id="captureWebp">Capture WebP</button>
+  <button id="captureBoth">Capture Both</button>
+</div>
+<div class="anim-controls">
+  <label>Quality (WebP)<input type="range" id="quality" min="0.80" max="1" step="0.01" value="0.97"/></label>
+  <label>FPS<input type="number" id="fps" min="5" max="60" value="24"/></label>
+  <label>Seconds<input type="number" id="seconds" min="1" max="20" value="6"/></label>
+  <label>Loop<input type="number" id="loopCount" min="0" max="50" value="0"/></label>
+  <button id="makeAnim" title="Generate animated looping rendition (WebM). Convert to WebP externally if needed.">Generate Animation</button>
+</div>
+<div class="status" id="status"></div>
+<div class="output">
+  <img id="preview" alt="Generated preview" />
+  <video id="animPreview" autoplay loop muted playsinline style="display:none"></video>
+  <div class="note">Animation is exported as WebM (VP8) for broad modern support & smooth looping. Use a CLI like: <code style='background:#121b24;border:1px solid #2b394a;padding:2px 4px;border-radius:4px'>ffmpeg -i anim.webm -loop 0 -c:v libwebp -lossless 0 -q:v 75 animated.webp</code> to convert to animated WebP if required by a platform.<br/><span class="small">Quality slider only affects WebP still capture. PNG is always lossless. Animation uses real-time drawing at selected FPS & duration. Loop count 0 = infinite.</span></div>
+</div>
+<script src="/js/thumbgen.js" defer></script>
+</body></html>

@@ -49,9 +49,9 @@
         <span id="ttlValue" class="ttl-value" title="Current retention value">3d</span>
         <span class="subtle" title="Files are automatically deleted after retention">auto delete</span>
       </div>
-      <!-- Updated drop zone: div instead of label to avoid invalid ARIA roles on label -->
-      <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="File upload. Click or drag files to select (maximum 500 megabytes each)." aria-describedby="dropHint" title="Click or drag files here to upload (max 500MB each)">
-        <input type="file" id="fileInput" multiple title="File picker" />
+      <!-- Updated drop zone: div acts as passive drop target; file input provides interactive control -->
+      <div class="drop-zone" id="dropZone" aria-describedby="dropHint" title="Click or drag files here to upload (max 500MB each)">
+        <input type="file" id="fileInput" multiple title="File picker" aria-label="Select files to upload (maximum 500 megabytes each)" aria-describedby="dropHint" />
         <div class="icon" title="Folder icon">📁</div>
         <div class="muted" id="dropHint" title="Click or drop to begin selecting files">Click or drop files</div>
       </div>
