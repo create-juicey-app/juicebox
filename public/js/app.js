@@ -1,5 +1,4 @@
-
-    // Rewritten client logic for stable uploads & deletes
+// Rewritten client logic for stable uploads & deletes
     const dropZone = document.getElementById('dropZone');
     // ensure input exists
     if(!document.getElementById('fileInput')) {
@@ -286,8 +285,18 @@
     if(dropZone){
       // trigger idle animation after slight delay
       setTimeout(()=> dropZone.classList.add('animate'), 500);
-      // ripple on click (capture before file dialog)
+      const iconEl = dropZone.querySelector('.icon');
+      function setOpen(open){ if(iconEl){ iconEl.textContent = open ? '📂' : '📁'; } }
+      dropZone.addEventListener('mouseenter', ()=> setOpen(true));
+      dropZone.addEventListener('mouseleave', ()=> setOpen(false));
+      dropZone.addEventListener('focusin', ()=> setOpen(true));
+      dropZone.addEventListener('focusout', ()=> setOpen(false));
+      dropZone.addEventListener('dragenter', ()=> setOpen(true));
+      dropZone.addEventListener('dragleave', ()=> !dropZone.classList.contains('drag') && setOpen(false));
+      // ripple + click (non-capture to let normal handlers run first)
       dropZone.addEventListener('click', e=>{
+        // Prevent duplicate ripples: remove existing
+        dropZone.querySelectorAll('.ripple').forEach(r=>{ try{ r.remove(); }catch{} });
         const rect = dropZone.getBoundingClientRect();
         const size = Math.max(rect.width, rect.height);
         const ripple = document.createElement('span');
@@ -297,7 +306,11 @@
         ripple.style.top = (e.clientY - rect.top - size/2)+'px';
         dropZone.appendChild(ripple);
         ripple.addEventListener('animationend', ()=> ripple.remove(), {once:true});
-      }, {capture:true});
+        // Open file picker unless user clicked an existing interactive element
+        if(fileInput && !e.defaultPrevented && e.target !== fileInput){
+          fileInput.click();
+        }
+      });
     }
 
     // Attach per-file expiration after upload without altering original uploadOne body
@@ -305,11 +318,11 @@
       if(typeof uploadOne === 'function'){
         const _origUploadOne = uploadOne;
         uploadOne = function(f,batch){
-          const ttlVal = (ttlSelect && ttlSelect.value) || '3d';
+          // Use getTTL() so range slider numeric value is mapped to code (e.g. 1 -> 3h)
+          const ttlVal = (typeof getTTL === 'function') ? getTTL() : ((ttlSelect && ttlSelect.value) || '3d');
           return _origUploadOne(f,batch).then(()=>{
             if(f.done && f.remoteName && !f.expires){
-              const map = {'1h':3600,'3h':10800,'12h':43200,'1d':86400,'3d':259200,'7d':604800,'14d':1209600};
-              const seconds = (typeof ttlCodeSeconds==='function'? ttlCodeSeconds(ttlVal): (map[ttlVal]||259200));
+              const seconds = (typeof ttlCodeSeconds==='function') ? ttlCodeSeconds(ttlVal) : ({'1h':3600,'3h':10800,'12h':43200,'1d':86400,'3d':259200,'7d':604800,'14d':1209600}[ttlVal]||259200);
               f.expires = Math.floor(Date.now()/1000) + seconds; f.total = seconds;
               if(f.container){ f.container.dataset.exp = f.expires; f.container.dataset.total = seconds; }
             }

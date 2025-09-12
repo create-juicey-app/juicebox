@@ -81,17 +81,9 @@ where S: tower::Service<Request<Body>, Response = Response> + Clone + Send + 'st
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let limiter = self.limiter.clone();
         let mut inner = self.inner.clone();
-        let headers_clone = req.headers().clone();
+        // Always use the connecting (Cloudflare edge) IP; ignore CF-Connecting-IP to avoid storing real client IP.
         let maybe_ci = req.extensions().get::<ConnectInfo<ClientAddr>>().cloned();
-        let ip = if let Some(ci) = maybe_ci {
-            let remote = ci.0.ip();
-            if is_cloudflare_edge(remote) {
-                if let Some(cf) = headers_clone.get("cf-connecting-ip").and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<IpAddr>().ok()) { cf.to_string() }
-                else if let Some(xff) = headers_clone.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-                    xff.split(',').next().and_then(|first| first.trim().parse::<IpAddr>().ok()).map(|ip| ip.to_string()).unwrap_or_else(|| remote.to_string())
-                } else { remote.to_string() }
-            } else { remote.to_string() }
-        } else { "unknown".into() };
+        let ip = if let Some(ci) = maybe_ci { ci.0.ip().to_string() } else { "unknown".into() };
         Box::pin(async move {
             if !limiter.check(&ip).await {
                 return Ok(json_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "slow down"));
@@ -313,20 +305,9 @@ fn is_cloudflare_edge(remote: IpAddr) -> bool {
     CF_CIDRS.iter().any(|c| ip_in_cidr(remote, c))
 }
 
-fn real_client_ip(headers: &HeaderMap, fallback: &ClientAddr) -> String {
-    let remote = fallback.ip();
-    if is_cloudflare_edge(remote) {
-        if let Some(cf) = headers.get("cf-connecting-ip").and_then(|v| v.to_str().ok()) {
-            if let Ok(parsed) = cf.parse::<IpAddr>() { return parsed.to_string(); }
-        }
-        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-            if let Some(first) = xff.split(',').next() {
-                let cand = first.trim();
-                if let Ok(parsed) = cand.parse::<IpAddr>() { return parsed.to_string(); }
-            }
-        }
-    }
-    remote.to_string()
+fn real_client_ip(_headers: &HeaderMap, fallback: &ClientAddr) -> String {
+    // Return only the (Cloudflare edge) remote IP; do not derive end-user IP from headers.
+    fallback.ip().to_string()
 }
 
 #[axum::debug_handler]
@@ -508,6 +489,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/simple/upload", post(simple_upload))
         .route("/simple/delete", post(simple_delete))
         .route("/thumbnail", get(thumbnail_handler))
+        .route("/faq", get(faq_handler)) // new
+        .route("/terms", get(terms_handler)) // new
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .route("/{*path}", get(file_handler));
@@ -630,9 +613,10 @@ async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     if !h.contains_key("X-Content-Type-Options") { h.insert("X-Content-Type-Options", "nosniff".parse().unwrap()); }
     if !h.contains_key("X-Frame-Options") { h.insert("X-Frame-Options", "DENY".parse().unwrap()); }
     if !h.contains_key("Referrer-Policy") { h.insert("Referrer-Policy", "no-referrer".parse().unwrap()); }
-    // Updated CSP: allow blob: for img-src so thumbnail generator can load blob images
     if !h.contains_key("Content-Security-Policy") { h.insert("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:".parse().unwrap()); }
     if !h.contains_key("Cache-Control") { h.insert("Cache-Control", "private, max-age=0, no-store".parse().unwrap()); }
+    // Add safe Permissions-Policy (exclude deprecated/unsupported features like browsing-topics)
+    if !h.contains_key("Permissions-Policy") { h.insert("Permissions-Policy", "camera=(), microphone=(), geolocation=(), fullscreen=(), payment=()".parse().unwrap()); }
     resp
 }
 
@@ -851,6 +835,19 @@ async fn verify_user_entries_with_report(state: &AppState, ip: &str) -> Option<R
         }
     }
     None
+}
+
+// Serve faq.html
+async fn faq_handler(State(state): State<AppState>) -> Response {
+    let path = state.static_dir.join("faq.html");
+    if !path.exists() { return (StatusCode::NOT_FOUND, "faq missing").into_response(); }
+    match fs::read(&path).await { Ok(bytes) => ([(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")], bytes).into_response(), Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "cant read faq").into_response() }
+}
+// Serve terms.html
+async fn terms_handler(State(state): State<AppState>) -> Response {
+    let path = state.static_dir.join("terms.html");
+    if !path.exists() { return (StatusCode::NOT_FOUND, "terms missing").into_response(); }
+    match fs::read(&path).await { Ok(bytes) => ([(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")], bytes).into_response(), Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "cant read terms").into_response() }
 }
 
 // New thumbnail page handler

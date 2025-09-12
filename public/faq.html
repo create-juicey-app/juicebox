@@ -1,0 +1,36 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><title>JuiceBox FAQ</title><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="description" content="Frequently asked questions about JuiceBox temporary file host"/><link rel="stylesheet" href="/css/app.css"/><style>body{max-width:860px;margin:0 auto;padding:1.4rem;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#0f141b;color:#e8ecf3}h1{margin:.2rem 0 1rem;font-size:1.8rem}h2{font-size:1rem;margin:1.6rem 0 .6rem;letter-spacing:.5px;text-transform:uppercase;opacity:.8}p,li{line-height:1.5;font-size:.85rem}code{background:#1d2732;padding:.15rem .35rem;border-radius:4px;font-size:.75rem}a{color:#ff9800}hr{border:none;height:1px;background:#253240;margin:2rem 0}.qa{margin:0 0 1.4rem;padding:1rem 1rem 1.1rem;background:#1a2230;border:1px solid #273242;border-radius:12px}details{background:#141d26;padding:.9rem 1rem;border:1px solid #22303b;border-radius:10px;margin:.85rem 0}details[open]{border-color:#314356}summary{cursor:pointer;font-weight:600;letter-spacing:.4px;font-size:.8rem;list-style:none}summary::-webkit-details-marker{display:none}.small{font-size:.62rem;opacity:.55}footer{margin:2.5rem 0 1rem;font-size:.6rem;opacity:.55;text-align:center}</style></head><body><header><h1>JuiceBox FAQ</h1><p class="lead" style="opacity:.75;font-size:.9rem">Everything you usually ask before uploading.</p></header><main><section>
+<h2>Basics</h2>
+<details open><summary>What is JuiceBox?</summary><p>JuiceBox is a minimal temporary file host. You upload a file (max 500MB) and instantly get a direct link. Files auto‑expire after the retention you select (1 hour – 14 days).</p></details>
+<details><summary>Do I need an account?</summary><p>No. Ownership is associated with the IP address that uploaded the file (Cloudflare edge IP only retained internally for rate limiting; end‑user IP is not stored).</p></details>
+<details><summary>What is the file size limit?</summary><p>Each file can be up to <strong>500MB</strong>. Folders dropped in the UI are zipped client‑side first; the resulting ZIP must also fit the 500MB cap.</p></details>
+<details><summary>Which file types are blocked?</summary><p>Potentially dangerous executables / scripts (e.g. <code>.exe .dll .bat .cmd .com .js .ps1 .sh .php</code> etc.) are rejected to reduce abuse.</p></details>
+<details><summary>Can I hotlink files?</summary><p>Yes. Links returned ( <code>/f/&lt;id&gt;</code> ) are direct and cacheable by browsers/CDN while still expiring server‑side.</p></details>
+
+<h2>Retention & Expiration</h2>
+<details><summary>How is expiration determined?</summary><p>A UNIX timestamp is stored at upload time: <code>now + chosen_ttl_seconds</code>. A background task plus on‑access checks remove expired metadata and disk files.</p></details>
+<details><summary>Can I extend a file's life?</summary><p>Not currently. Re‑upload the file with a longer retention.</p></details>
+<details><summary>What happens after expiration?</summary><p>The metadata entry is dropped and the file is deleted from disk. The link returns 404.</p></details>
+
+<h2>Privacy & Security</h2>
+<details><summary>Do you log my actual IP?</summary><p>The service runs behind Cloudflare. Only the Cloudflare edge IP (not the true end‑user IP) is persisted for ownership mapping. CF headers exposing the visitor IP are ignored.</p></details>
+<details><summary>Are uploads encrypted?</summary><p>In transit: yes (HTTPS). At rest: files are stored unencrypted on the server's filesystem. Do not upload sensitive personal data.</p></details>
+<details><summary>Do you scan malware?</summary><p>No automated malware scanning right now. Executable/script extensions are blocked by name only. Treat downloaded files cautiously.</p></details>
+<details><summary>Can other people list my files?</summary><p>No. Listings are IP‑scoped. Without your exact link a stranger cannot enumerate your files.</p></details>
+
+<h2>Abuse & Limits</h2>
+<details><summary>Rate limits?</summary><p>A simple token bucket (per edge IP) allows bursts up to 60 requests refilling at 1 token/second.</p></details>
+<details><summary>Content rules?</summary><p>No illegal content, malware, personal data you lack rights to share, or anything that violates applicable laws. See <a href="/terms">Terms of Service</a>.</p></details>
+
+<h2>Removal</h2>
+<details><summary>How do I delete a file early?</summary><p>Use the UI delete button (❌) or send <code>DELETE /d/&lt;filename&gt;</code> from the same network that uploaded it.</p></details>
+<details><summary>Can staff remove files?</summary><p>Yes. Admin intervention (e.g. abuse reports) can purge content immediately; your listing will reconcile automatically.</p></details>
+
+<h2>API Notes</h2>
+<details><summary>Is there an API?</summary><p>Unofficial: POST <code>/upload</code> (multipart form with one or more <code>file</code> fields and an optional <code>ttl</code> field) returns JSON: <code>{ files: ["f/abc123..."] }</code>.</p></details>
+<details><summary>Retention field values?</summary><p><code>1h 3h 12h 1d 3d 7d 14d</code>. Invalid values default to <code>3d</code>.</p></details>
+</section>
+<section>
+<hr/>
+<p class="small">Need something clarified? Open an issue / send feedback.</p>
+<p class="small"><a href="/terms">Terms of Service</a> • <a href="/">Home</a></p>
+</section></main><footer>JuiceBox – temporary file host</footer></body></html>
