@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <!-- Social & SEO meta additions -->
   <meta name="description" content="JuiceBox – simple high-speed temporary file host. Click, upload, share lightweight expiring links with selectable retention." />
-  <link rel="canonical" href="/" />
+  <link rel="canonical" href="https://box.juicey.dev/" />
   <meta name="keywords" content="file upload, temporary file host, share files, expiring links, quick file sharing" />
   <meta name="author" content="JuiceBox" />
   <meta name="theme-color" content="#0f141b" />
@@ -16,52 +16,53 @@
   <meta property="og:description" content="Upload files up to 500MB and share instant expiring links (1h–14d retention)." />
   <meta property="og:url" content="/" />
   <meta property="og:site_name" content="JuiceBox" />
-  <meta property="og:image" content="/social-card.png" />
+  <meta property="og:image" content="/silly.webp" />
   <meta property="og:image:alt" content="JuiceBox file sharing preview" />
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="JuiceBox – Fast Temporary File Host" />
   <meta name="twitter:description" content="Upload files (≤500MB) and share expiring links with selectable retention." />
-  <meta name="twitter:image" content="/social-card.png" />
+  <meta name="twitter:image" content="/silly.webp" />
   <meta name="twitter:image:alt" content="JuiceBox preview" />
   <!-- End social meta -->
   <link rel="stylesheet" href="/css/app.css" />
 </head>
 <body>
-  <!-- Add dedicated skip link to owned files (before main) -->
-  <a href="#ownedFiles" class="skip-link">Skip to your files</a>
-  <!-- Existing skip to main content (keep if present) -->
-  <a href="#mainContent" class="skip-link">Skip to main content</a>
+  <!-- Reworked skip links in a nav landmark -->
+  <nav class="skip-links" aria-label="Skip links">
+    <a href="#mainContent" class="skip-link">Skip to main content</a>
+    <a href="#yourFiles" class="skip-link">Skip to your files</a>
+  </nav>
   <noscript><div style="padding:.9rem 1rem;text-align:center;background:#222e3d;border-bottom:1px solid #2c394a;font-size:.7rem;letter-spacing:.5px;">JavaScript is disabled or unsupported. Use the <a href="/simple" style="color:var(--accent);text-decoration:underline;">basic no‑script uploader</a>.</div></noscript>
   <header>
-    <h1 style="margin:0;font-size:0;line-height:0;" class="visually-hidden">JuiceBox Temporary File Host</h1>
-    <h1>JuiceBox</h1>
+    <!-- Single H1 (visible brand + hidden descriptive text) -->
+    <h1>JuiceBox <span class="visually-hidden">Temporary File Host</span></h1>
     <p class="lead">Click, Upload, Share!</p>
   </header>
   <main id="mainContent" tabindex="-1">
-    <!-- Placeholder anchor so skip link always has a valid target -->
-    <div id="ownedFiles" class="visually-hidden" aria-hidden="true" tabindex="-1"></div>
-    <div class="panel"><section>
+    <!-- Removed empty aria-hidden anchor; skip link now targets actual section heading below -->
+    <div class="panel"><section id="uploadSection">
       <h2 title="Upload new files below">Upload</h2>
       <div class="ttl-row" style="display:flex;align-items:center;gap:.55rem;margin:.3rem 0 1rem;font-size:.62rem;letter-spacing:.4px;" title="Choose how long the uploaded files will be kept before automatic deletion">
-        <label for="ttlSelect" style="opacity:.75;" title="Retention period">Retention:</label>
+        <label for="ttlSelect" class="subtle" title="Retention period">Retention:</label>
         <input id="ttlSelect" type="range" min="0" max="6" step="1" value="4" aria-label="Retention" title="Adjust retention from 1 hour up to 14 days" />
         <span id="ttlValue" class="ttl-value" title="Current retention value">3d</span>
-        <span style="opacity:.5;" title="Files are automatically deleted after retention">auto delete</span>
+        <span class="subtle" title="Files are automatically deleted after retention">auto delete</span>
       </div>
-      <label class="drop-zone" id="dropZone" title="Click or drag files here to upload (max 500MB each)">
+      <!-- Updated drop zone: div instead of label to avoid invalid ARIA roles on label -->
+      <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="File upload. Click or drag files to select (maximum 500 megabytes each)." aria-describedby="dropHint" title="Click or drag files here to upload (max 500MB each)">
         <input type="file" id="fileInput" multiple title="File picker" />
         <div class="icon" title="Folder icon">📁</div>
-        <div class="muted" title="Click or drop to begin selecting files">Click or drop files</div>
-      </label>
-      <ul id="fileList" title="Upload queue showing files, progress bars, and actions"></ul>
+        <div class="muted" id="dropHint" title="Click or drop to begin selecting files">Click or drop files</div>
+      </div>
+      <ul id="fileList" title="Upload queue showing files, progress bars, and actions" role="list"></ul>
       <p class="site-note" title="Upload usage note">Upload your files. Links show after each finishes. Maximum file size is 500MB, Files expire after selected retention. See <a href="/faq" target="_blank" rel="noopener" title="Open FAQ in new tab">FAQ</a>.</p>
-      <p class="site-note" style="margin-top:.6rem" title="Privacy notice">GDPR notice: Your IP address is processed only to associate uploads with your session, apply limits, and enable abuse/moderation actions. It is not shared and is removed once all related files expire.</p>
+      <p class="site-note" title="Privacy notice">GDPR notice: Your IP address is processed only to associate uploads with your session, apply limits, and enable abuse/moderation actions. It is not shared and is removed once all related files expire.</p>
     </section></div>
     <div class="panel" id="ownedPanel" style="display:none"><section>
-      <h2 title="Files previously uploaded from this connection">Your Files</h2>
-      <ul id="ownedList" title="List of files you have uploaded"></ul>
-      <p class="site-note" style="margin-top:.6rem" title="Owned files note">These are files linked to your IP, They persist across refresh until deleted.</p>
+      <h2 id="yourFiles" title="Files previously uploaded from this connection">Your Files</h2>
+      <ul id="ownedList" title="List of files you have uploaded" role="list"></ul>
+      <p class="site-note" title="Owned files note">These are files linked to your IP, They persist across refresh until deleted.</p>
     </section></div>
   </main>
   <footer title="Service tagline">juicebox // simple high-speed file host</footer>
