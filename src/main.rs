@@ -105,6 +105,10 @@ const RANDOM_NAME_LEN: usize = 18; // increased length for reduced collision pro
 const UPLOAD_CONCURRENCY: usize = 8; // simple cap on simultaneous uploads
 const MAX_FILE_BYTES: u64 = 500 * 1024 * 1024; // 500MB soft limit (server body limit 512MB)
 const PROD_HOST: &str = "box.juicey.dev"; // canonical production hostname
+// New: disallowed / risky file extensions (lowercase, without dot)
+const FORBIDDEN_EXTENSIONS: &[&str] = &[
+    "exe","dll","bat","cmd","com","scr","cpl","msi","msp","jar","ps1","psm1","vbs","js","jse","wsf","wsh","reg","sh","php","pl","py","rb","gadget","hta","mht","mhtml"
+];
 
 #[derive(Serialize)]
 struct ErrorBody { code: &'static str, message: &'static str }
@@ -161,6 +165,17 @@ fn random_name(len: usize) -> String {
             CHARSET[idx] as char
         })
         .collect()
+}
+
+// New: helper to determine if filename has forbidden extension
+fn is_forbidden_extension(name: &str) -> bool {
+    if let Some(dot) = name.rfind('.') {
+        if dot > 0 { // ignore leading dot files
+            let ext = &name[dot+1..].to_ascii_lowercase();
+            return FORBIDDEN_EXTENSIONS.contains(&ext.as_str());
+        }
+    }
+    false
 }
 
 async fn persist_owners(state: &AppState) {
@@ -343,6 +358,10 @@ async fn upload_handler(
         }
         let mut field = field; // keep mutable for reading file
         if let Some(filename) = field.file_name() {
+            // NEW: deny unsafe extensions early
+            if is_forbidden_extension(filename) {
+                return json_error(StatusCode::BAD_REQUEST, "forbidden_type", "file type not allowed");
+            }
             let storage_name = make_storage_name(Some(filename));
             let path = state.upload_dir.join(&storage_name);
 
@@ -677,6 +696,10 @@ async fn simple_upload(State(state): State<AppState>, ConnectInfo(addr): Connect
         if let Some(name) = field.name() { if name == "ttl" { if let Ok(v) = field.text().await { ttl_choice = Some(v); } continue; } }
         let mut field = field;
         if let Some(orig_filename) = field.file_name() {
+            // NEW: deny unsafe extensions
+            if is_forbidden_extension(orig_filename) {
+                return json_error(StatusCode::BAD_REQUEST, "forbidden_type", "file type not allowed");
+            }
             let new_name = make_storage_name(Some(orig_filename));
             let path = state.upload_dir.join(&new_name);
             let mut file = match fs::File::create(&path).await { Ok(f)=>f, Err(_)=> return json_error(StatusCode::INTERNAL_SERVER_ERROR, "fs_error", "failed create") };

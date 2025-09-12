@@ -310,7 +310,12 @@
     // helper: map ttl code -> seconds
     function ttlCodeSeconds(code){ return ({'1h':3600,'3h':10800,'12h':43200,'1d':86400,'3d':259200,'7d':604800,'14d':1209600})[code] || 259200; }
 
-    function addBatch(fileList){ if(!fileList || !fileList.length) return; const batch={ files:[...fileList].map(f=>({ file:f, remoteName:null, done:false, deleting:false, bar:null, barSpan:null, container:null, linksBox:null, xhr:null })) }; batches.push(batch); renderList(); autoUpload(); }
+    function addBatch(fileList){ if(!fileList || !fileList.length) return; 
+      // Filter out zero-byte (often directory placeholder or malformed) files to prevent 0B uploads
+      let skippedEmpty=false; const cleaned=[...fileList].filter(f=>{ if(f.size===0){ skippedEmpty=true; return false; } return true; });
+      if(skippedEmpty) { try{ showSnack('Skipped empty files'); }catch{} }
+      fileList = cleaned; if(!fileList.length) return;
+      const batch={ files:[...fileList].map(f=>({ file:f, remoteName:null, done:false, deleting:false, bar:null, barSpan:null, container:null, linksBox:null, xhr:null })) }; batches.push(batch); renderList(); autoUpload(); }
 
     function renderList(){
       // incremental: only create DOM for file objects lacking container
@@ -513,7 +518,8 @@
       if(fileInput){ fileInput.addEventListener('change', ()=>{ if(fileInput.files && fileInput.files.length) addBatch(fileInput.files); try{ fileInput.value=''; }catch{} }); }
     }
 
-    dropZone.addEventListener('drop',e=>{ e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('drag'); if(e.dataTransfer && e.dataTransfer.files.length) addBatch(e.dataTransfer.files); });
+    // Existing bubble-phase drop handler; modify to avoid duplicate addBatch when prefilter active
+    dropZone.addEventListener('drop',e=>{ e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('drag'); if(window.__JB_PREFILTER_ACTIVE) return; if(e.dataTransfer && e.dataTransfer.files.length) addBatch(e.dataTransfer.files); });
     // Removed manual fileInput.click() to avoid duplicate dialogs; label already opens the file picker.
 
     setupUploadEvents();
@@ -772,6 +778,7 @@
     (function(){
       const MAX_BYTES = 500 * 1024 * 1024;
       const MAX_BOXES = 10;
+      window.__JB_PREFILTER_ACTIVE = true; // flag to disable legacy drop addBatch path
       const snack = document.getElementById('snackbar');
       // Use global showSnack; fallback if missing
       function showSnackLocal(msg){ if(window.showSnack){ window.showSnack(msg); } else { if(!snack) return; snack.textContent = msg; snack.classList.add('show','error'); setTimeout(()=> snack.classList.remove('show','error'), 5000); } }
@@ -779,14 +786,17 @@
       const dz = document.querySelector('.drop-zone');
       const input = dz && dz.querySelector('input[type=file]');
       if(!input) return;
+      // Return list of acceptable files given leftover slots
       function filterFileList(list, leftover){
         const accept = [];
-        let sizeRejected = false;
+        let sizeRejected = 0; let emptySkipped = 0;
         for(const f of list){
-          if(f.size > MAX_BYTES){ sizeRejected = true; continue; }
-          if(leftover <= 0) break;
-            accept.push(f); leftover--; }
-        return {accept, sizeRejected};
+          if(accept.length >= leftover) break;
+          if(f.size === 0){ emptySkipped++; continue; }
+          if(f.size > MAX_BYTES){ sizeRejected++; continue; }
+          accept.push(f);
+        }
+        return {accept, sizeRejected, emptySkipped};
       }
       function applyAcceptedToInput(inp, files){
         const dt = new DataTransfer();
@@ -795,24 +805,23 @@
       }
       function handleSelection(e, files){
         const current = activeBoxes();
-        if(current >= MAX_BOXES){
-          showSnackLocal('You cannot have more than 10 boxes at the same time');
-          if(e){ e.preventDefault(); e.stopImmediatePropagation(); }
-          if(input) input.value='';
-          return false;
-        }
+        if(current >= MAX_BOXES){ showSnackLocal('Maximum of 10 files in queue'); return false; }
+        if(!files || !files.length) return false; // nothing dragged
         const leftover = MAX_BOXES - current;
-        const {accept, sizeRejected} = filterFileList(files, leftover);
-        if(sizeRejected) showSnackLocal('You cannot upload a file thats more than 500MB');
+        const {accept, sizeRejected, emptySkipped} = filterFileList(files, leftover);
+        // Feedback hierarchy
         if(accept.length === 0){
-          if(!sizeRejected) showSnackLocal('No more boxes allowed (limit 10)');
-          if(e){ e.preventDefault(); e.stopImmediatePropagation(); }
-          if(input) input.value='';
+          if(sizeRejected && !emptySkipped){ showSnackLocal('File too large (limit 500MB)'); return false; }
+          if(emptySkipped && !sizeRejected){ showSnackLocal('File appears empty'); return false; }
+          if(sizeRejected && emptySkipped){ showSnackLocal('Files skipped (empty / too large)'); return false; }
+          // Fallback: only reason left would be no slots actually available
+          if(leftover <= 0){ showSnackLocal('No slots available'); } // should rarely happen due to earlier guard
           return false;
         }
-        if(accept.length !== files.length){
-          // Some trimmed due to box limit
-          showSnackLocal('Limited to '+accept.length+' file(s) (max 10 boxes)');
+        if(sizeRejected || emptySkipped){
+          const parts=[]; if(accept.length !== files.length) parts.push('added '+accept.length+' of '+files.length);
+          if(sizeRejected) parts.push(sizeRejected+' too large'); if(emptySkipped) parts.push(emptySkipped+' empty');
+          showSnackLocal(parts.join('; '));
         }
         applyAcceptedToInput(input, accept);
         return true;
@@ -824,10 +833,9 @@
       }, true);
       if(dz){
         dz.addEventListener('drop', (e)=>{
-          if(!e.dataTransfer) return;
+          if(!e.dataTransfer) return; // already handled upstream
           const list = Array.from(e.dataTransfer.files||[]);
-          if(!handleSelection(e, list)) return;
-          // Re-dispatch a synthetic change so existing handler picks up filtered list
+          if(!handleSelection(e, list)) return; // prevent adding if nothing acceptable
           const evt = new Event('change', {bubbles:true});
           input.dispatchEvent(evt);
         }, true);
