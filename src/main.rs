@@ -366,7 +366,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(DefaultBodyLimit::max(1024 * 1024 * 512))
         .with_state(state);
 
-    let addr: SocketAddr = ([0, 0, 0, 0], 3000).into();
+    let addr: SocketAddr = ([0, 0, 0, 0], 1200).into();
     println!("listening on {addr}");
     axum_server::bind(addr)
         .serve(app.into_make_service_with_connect_info::<ClientAddr>())
