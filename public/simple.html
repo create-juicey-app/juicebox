@@ -36,8 +36,8 @@
   {{MESSAGE}}
   <form class="upload" method="post" enctype="multipart/form-data" action="/simple/upload" aria-describedby="mainDesc" aria-label="Upload files form">
     <fieldset>
-      <label>Files</label>
-      <input type="file" name="file" multiple required />
+      <label for="file">Files</label>
+      <input id="file" type="file" name="file" multiple required />
       <div class="ttl-box">
         <label for="ttl" style="margin:0">Retention:</label>
         <select name="ttl" id="ttl">

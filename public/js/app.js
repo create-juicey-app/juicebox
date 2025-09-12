@@ -1,0 +1,644 @@
+
+    // Rewritten client logic for stable uploads & deletes
+    const dropZone = document.getElementById('dropZone');
+    // ensure input exists
+    if(!document.getElementById('fileInput')) {
+      const inp = document.createElement('input'); inp.type='file'; inp.multiple=true; inp.id='fileInput'; inp.style.display='none'; dropZone.appendChild(inp);
+    }
+    const fileInput = document.getElementById('fileInput');
+    const list = document.getElementById('fileList');
+    const snackbar = document.getElementById('snackbar');
+    const ownedList = document.getElementById('ownedList');
+    const ownedPanel = document.getElementById('ownedPanel');
+    const ttlSelect = document.getElementById('ttlSelect');
+    const ttlValueLabel = document.getElementById('ttlValue');
+    const ttlMap = ['1h','3h','12h','1d','3d','7d','14d'];
+    function getTTL(){ if(!ttlSelect) return '3d'; if(ttlSelect.tagName==='INPUT' && ttlSelect.type==='range'){ return ttlMap[parseInt(ttlSelect.value,10)] || '3d'; } return ttlSelect.value; }
+    let ownedMeta = new Map(); // name -> expires (unix seconds)
+    if(ttlSelect){
+      const saved = localStorage.getItem('ttlChoice');
+      if(saved && ttlMap.includes(saved)) ttlSelect.value = String(ttlMap.indexOf(saved));
+      function updateTTL(){ const code = getTTL(); if(ttlValueLabel) ttlValueLabel.textContent = code; localStorage.setItem('ttlChoice', code); }
+      ttlSelect.addEventListener('input', updateTTL);
+      ttlSelect.addEventListener('change', updateTTL);
+      updateTTL();
+    }
+
+    function flashCopied(msg='Link copied'){ snackbar.textContent = msg; snackbar.classList.remove('error'); snackbar.classList.add('show'); clearTimeout(flashCopied._t); flashCopied._t=setTimeout(()=>snackbar.classList.remove('show'),1600); }
+    async function copyToClipboard(text){ try{ await navigator.clipboard.writeText(text);}catch{ const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch{} document.body.removeChild(ta);} }
+    function fmtBytes(b){ if(!isFinite(b) || b<0) return '–'; if(b===0) return '0 B'; const k=1024; const s=['B','KB','MB','GB','TB']; const i=Math.min(s.length-1, Math.floor(Math.log(b)/Math.log(k))); return (b/Math.pow(k,i)).toFixed(i?2:0)+' '+s[i]; }
+
+    // Added: generic snackbar helper alias expected by later code (now specialized for errors and shake)
+    function showSnack(msg){
+      if(!snackbar) return;
+      snackbar.textContent = msg;
+      snackbar.classList.add('show','error');
+      clearTimeout(showSnack._t);
+      showSnack._t = setTimeout(()=> snackbar.classList.remove('show','error'), 5000);
+      if(dropZone){ dropZone.classList.add('shake'); dropZone.addEventListener('animationend',()=> dropZone.classList.remove('shake'), {once:true}); }
+      if(window._announce) window._announce(msg);
+    }
+
+    let batches=[]; // [{files:[] , linksBox?}]
+    let uploading=false;
+    let ownedCache=new Set();
+
+    function makeLinkInput(rel, autoCopy=true){ const full=location.origin+'/'+rel; const inp=document.createElement('input'); inp.type='text'; inp.readOnly=true; inp.value=full; inp.className='link-input'; inp.title='Click to copy direct download link'; inp.setAttribute('aria-label','Download link (click to copy)'); if(autoCopy){ copyToClipboard(full).then(()=>flashCopied()); } inp.addEventListener('click',()=>{ inp.select(); copyToClipboard(inp.value).then(()=>flashCopied()); }); return inp; }
+    const _origMakeLinkInput = makeLinkInput; makeLinkInput = function(rel, autoCopy){ const el=_origMakeLinkInput(rel, autoCopy); if(rel.startsWith('f/')) addOwned(rel.slice(2)); return el; };
+    // helper: map ttl code -> seconds
+    function ttlCodeSeconds(code){ return ({'1h':3600,'3h':10800,'12h':43200,'1d':86400,'3d':259200,'7d':604800,'14d':1209600})[code] || 259200; }
+
+    function addBatch(fileList){ if(!fileList || !fileList.length) return; 
+      // Filter out zero-byte (often directory placeholder or malformed) files to prevent 0B uploads
+      let skippedEmpty=false; const cleaned=[...fileList].filter(f=>{ if(f.size===0){ skippedEmpty=true; return false; } return true; });
+      if(skippedEmpty) { try{ showSnack('Skipped empty files'); }catch{} }
+      fileList = cleaned; if(!fileList.length) return;
+      const batch={ files:[...fileList].map(f=>({ file:f, remoteName:null, done:false, deleting:false, bar:null, barSpan:null, container:null, linksBox:null, xhr:null })) }; batches.push(batch); renderList(); autoUpload(); }
+
+    function renderList(){
+      // incremental: only create DOM for file objects lacking container
+      batches.forEach(batch=>{
+        const multi = batch.files.length>1;
+        if(multi && !batch.linksBox){ batch.linksBox=document.createElement('div'); batch.linksBox.className='links'; }
+        batch.files.forEach((f, idx)=>{
+          if(f.container) return; // already rendered
+          const li=document.createElement('li'); f.container=li;
+          const row=document.createElement('div'); row.className='file-row';
+          const name=document.createElement('div'); name.className='name'; name.textContent=f.file?f.file.name:(f.remoteName||'file');
+          const size=document.createElement('div'); size.className='size'; size.textContent=f.file?fmtBytes(f.file.size):'';
+          const actions=document.createElement('div'); actions.className='actions';
+          const del=document.createElement('button'); del.type='button'; del.className='remove'; del.textContent='x'; del.title='Remove'; del.setAttribute('aria-label','Remove file from queue');
+          del.addEventListener('click', (e)=>{ e.stopPropagation(); handleDeleteClick(f, batch); });
+          f.deleteBtn = del;
+          actions.appendChild(del);
+          row.appendChild(name); row.appendChild(size); row.appendChild(actions); li.appendChild(row);
+          const bar=document.createElement('div'); bar.className='bar'; bar.innerHTML='<span></span>'; bar.title='Upload progress'; const span=bar.querySelector('span'); span.setAttribute('aria-label','Upload progress'); f.bar=bar; f.barSpan=span; li.appendChild(bar);
+          if(!multi){ /* single upload gets links after completion */ }
+          list.appendChild(li);
+          // entry animation
+          li.classList.add('adding'); requestAnimationFrame(()=> li.classList.add('in'));
+          if(multi && batch.linksBox && !batch.linksBox.isConnected){ li.appendChild(batch.linksBox); }
+        });
+      });
+    }
+
+    function updateDeleteButton(f){ if(!f.deleteBtn) return; if(f.deleting){ f.deleteBtn.disabled=true; f.deleteBtn.textContent='…'; f.deleteBtn.title='Deleting...'; f.deleteBtn.setAttribute('aria-label','Deleting file'); return; } if(!f.remoteName){ f.deleteBtn.textContent='x'; f.deleteBtn.disabled=false; f.deleteBtn.title='Remove (not uploaded)'; f.deleteBtn.setAttribute('aria-label','Remove file from queue'); } else { f.deleteBtn.textContent='❌'; f.deleteBtn.disabled=false; f.deleteBtn.title='Delete from server'; f.deleteBtn.setAttribute('aria-label','Delete file from server'); } }
+
+    function handleDeleteClick(f, batch){
+      if(f.deleting) return;
+      if(!f.remoteName){
+        if(f.xhr){
+          // Mark as canceled before aborting so uploadOne handlers ignore it
+          f.canceled = true; f.aborted = true;
+          try{ f.xhr.abort(); }catch{}
+        }
+        if(f.container) animateRemove(f.container, ()=>{ batch.files = batch.files.filter(x=>x!==f); if(!batch.files.length){ batches = batches.filter(b=>b!==batch); } });
+        else { batch.files = batch.files.filter(x=>x!==f); if(!batch.files.length){ batches = batches.filter(b=>b!==batch); } }
+        return;
+      }
+      deleteRemote(f, batch);
+    }
+
+    function deleteRemote(f, batch){ if(!f.remoteName || f.deleting) return; f.deleting=true; updateDeleteButton(f);
+      fetch('/d/'+encodeURIComponent(f.remoteName), {method:'DELETE'})
+        .then(r=>{ if(r.ok){ if(f.container) animateRemove(f.container, ()=>{ batch.files = batch.files.filter(x=>x!==f); if(!batch.files.length) batches = batches.filter(b=>b!==batch); ownedCache.delete(f.remoteName); renderOwned([...ownedCache]); }); else { batch.files = batch.files.filter(x=>x!==f); if(!batch.files.length) batches = batches.filter(b=>b!==batch); ownedCache.delete(f.remoteName); renderOwned([...ownedCache]); } }
+          else { f.deleting=false; updateDeleteButton(f); }
+        })
+        .catch(()=>{ f.deleting=false; updateDeleteButton(f); });
+    }
+
+    async function uploadSequential(){ if(uploading) return; uploading=true; for(const batch of batches){ for(const f of batch.files){ if(f.done || f.deleting) continue; await uploadOne(f, batch); } } uploading=false; }
+
+    function uploadOne(f, batch){ return new Promise(resolve=>{
+      const fd=new FormData();
+      const ttlVal = getTTL();
+      fd.append('ttl', ttlVal);
+      fd.append('file', f.file, f.file.name);
+      const xhr=new XMLHttpRequest(); f.xhr=xhr; xhr.open('POST','/upload'); xhr.responseType='json';
+      let finished = false;
+      xhr.upload.onprogress=(e)=>{ if(e.lengthComputable && f.barSpan){ const pct=(e.loaded / f.file.size)*100; f.barSpan.style.width=pct.toFixed(2)+'%'; } };
+      xhr.onabort=()=>{ if(finished) return; finished=true; f.canceled=true; if(f.barSpan){ f.barSpan.style.opacity='.35'; }
+        // Do not mark as done or create link; resolve immediately
+        resolve(); };
+      xhr.onload=()=>{ if(finished) return; if(f.canceled){ finished=true; resolve(); return; } const ok = xhr.status>=200 && xhr.status<300; if(ok){
+          if(f.barSpan){ if(!f.barSpan._animated){ f.barSpan._animated=true; }
+            f.barSpan.style.width='100%';
+            requestAnimationFrame(()=>{
+              f.barSpan.classList.add('complete');
+              setTimeout(()=>{ if(f.bar && f.barSpan.classList.contains('complete')) f.bar.classList.add('divider'); },1000);
+            });
+          }
+          let rel=null; try { const data=xhr.response || JSON.parse(xhr.responseText||'{}'); rel = data.files && data.files[0]; } catch{}
+          if(rel){ f.remoteName = rel.startsWith('f/')? rel.slice(2): rel; }
+          const ttlSeconds = ttlCodeSeconds(ttlVal);
+          const exp = Math.floor(Date.now()/1000) + ttlSeconds;
+          ownedMeta.set(f.remoteName, {expires: exp, total: ttlSeconds});
+          f.done=true; updateDeleteButton(f);
+          if(f.remoteName){ const input = makeLinkInput('f/'+f.remoteName, !batch.files.some(x=>!x.done)); if(batch.files.length>1){ if(batch.linksBox) batch.linksBox.appendChild(input); } else { const links=document.createElement('div'); links.className='links'; links.appendChild(input); f.container.appendChild(links); } }
+          finished=true; resolve();
+        } else { if(!f.canceled){ f.container?.classList.add('error'); updateDeleteButton(f); } finished=true; resolve(); }
+      };
+      xhr.onerror=()=>{ if(finished) return; if(!f.canceled){ f.container?.classList.add('error'); updateDeleteButton(f); } finished=true; resolve(); };
+      xhr.send(fd);
+      updateDeleteButton(f);
+    }); }
+
+    function autoUpload(){ uploadSequential(); }
+
+    async function loadExisting(){ try { const r=await fetch('/mine'); if(!r.ok) return; const data=await r.json(); if(data && Array.isArray(data.files)){ data.files.forEach(f=> addOwned(f.replace(/^f\//,''))); if(Array.isArray(data.metas)){ data.metas.forEach(m=>{ const name=m.file.replace(/^f\//,''); ownedMeta.set(name, {expires: m.expires}); }); } } } catch {} }
+    let ownedInitialRender = false;
+    function renderOwned(names){
+      if(!ownedList || !ownedPanel) return;
+      const want = new Set(names);
+      // Existing chips map
+      const existing = new Map();
+      ownedList.querySelectorAll('.owned-chip').forEach(chip=> existing.set(chip.dataset.name, chip));
+      // Remove chips no longer present
+      existing.forEach((chip,name)=>{
+        if(!want.has(name)){
+          if(!chip.classList.contains('removing')){
+            // Changed: use animateRemove so CSS vars are set for smooth cardSquish animation
+            animateRemove(chip, ()=>{ if(!ownedList.querySelector('.owned-chip')) hideOwnedPanel(); });
+          }
+        }
+      });
+      if(!names.length){ hideOwnedPanel(); return; }
+      showOwnedPanel();
+      const nowSec = Date.now()/1000;
+      names.sort();
+      names.forEach(n=>{
+        let chip = existing.get(n);
+        let meta = ownedMeta.get(n);
+        let exp = -1, total = null;
+        if(typeof meta === 'number'){ exp = meta; }
+        else if(meta && typeof meta === 'object'){ exp = meta.expires || -1; total = meta.total || null; }
+        const remain = exp - nowSec;
+        function fmtRemain(sec){ if(exp<0) return '...'; if(sec<=0) return 'expired'; const units=[['d',86400],['h',3600],['m',60],['s',1]]; let rem=sec; let out=[]; for(const [u,v] of units){ if(out.length>=2) break; if(rem>=v){ const val=Math.floor(rem/v); out.push(val+u); rem%=v; } } return out.length?out.join(' '):'secs'; }
+        if(!chip){
+          chip=document.createElement('div');
+          chip.className='owned-chip';
+          chip.dataset.name=n;
+            if(exp>=0) chip.dataset.exp=exp;
+            if(total) chip.dataset.total=total;
+          // Only animate on additions after initial render
+          if(ownedInitialRender) { chip.classList.add('adding'); requestAnimationFrame(()=> chip.classList.add('in')); }
+          chip.innerHTML=`<div class="top"><div class="name" title="${n}">${n}</div><div class="actions"></div></div><div class="ttl" style="font-size:.5rem;opacity:.55;letter-spacing:.4px;">${fmtRemain(remain)}</div>`;
+          const actions=chip.querySelector('.actions');
+          const copyBtn=document.createElement('button'); copyBtn.className='small'; copyBtn.textContent='📋'; copyBtn.setAttribute('title','Copy direct link'); copyBtn.setAttribute('aria-label','Copy file link to clipboard'); copyBtn.addEventListener('click',()=>{ copyToClipboard(location.origin+'/f/'+n).then(()=>flashCopied()); }); actions.appendChild(copyBtn);
+          const delBtn=document.createElement('button'); delBtn.className='small'; delBtn.textContent='❌'; delBtn.setAttribute('title','Delete file from server'); delBtn.setAttribute('aria-label','Delete file from server'); delBtn.addEventListener('click',()=>{ fetch('/d/'+encodeURIComponent(n), {method:'DELETE'}).then(r=>{ if(r.ok){ ownedCache.delete(n); ownedMeta.delete(n); removeFromUploads(n); renderOwned([...ownedCache]); } }); }); actions.appendChild(delBtn);
+          const mini=document.createElement('input'); mini.type='text'; mini.readOnly=true; mini.className='link-input mini'; mini.value=location.origin+'/f/'+n; mini.title='Click to copy direct link'; mini.setAttribute('aria-label','File direct link (click to copy)'); mini.addEventListener('click',()=>{ mini.select(); copyToClipboard(mini.value).then(()=>flashCopied()); }); chip.appendChild(mini);
+          // Insert into grid container (create if missing)
+          let grid = ownedList.querySelector('.owned-grid');
+          if(!grid){ grid=document.createElement('div'); grid.className='owned-grid'; ownedList.appendChild(grid); }
+          grid.appendChild(chip);
+        } else {
+          // Update meta/time remaining
+          if(exp>=0) chip.dataset.exp=exp; else chip.removeAttribute('data-exp');
+          if(total) chip.dataset.total=total; else chip.removeAttribute('data-total');
+          const ttlEl = chip.querySelector('.ttl'); if(ttlEl) ttlEl.textContent = fmtRemain(remain);
+        }
+        if(total && remain>0 && remain/total <= 0.01){ chip.classList.add('expiring'); } else { chip.classList.remove('expiring'); }
+      });
+      ownedInitialRender = true;
+    }
+    function hideOwnedPanel(){
+      if(ownedPanel.style.display==='none') return;
+      if(!ownedPanel.classList.contains('closing')){
+        ownedPanel.classList.remove('opening');
+        ownedPanel.classList.add('closing');
+        ownedPanel.addEventListener('animationend',()=>{
+          ownedPanel.style.display='none';
+          ownedPanel.classList.remove('closing');
+          try { window.scrollTo({ top:0, behavior:'smooth' }); }
+          catch { window.scrollTo(0,0); }
+        }, {once:true});
+      }
+    }
+    function showOwnedPanel(){
+      if(ownedPanel.style.display==='none' || !ownedPanel.style.display){
+        if(ownedPanel.style.display==='none'){
+          ownedPanel.style.display='';
+          ownedPanel.classList.add('opening');
+          ownedPanel.addEventListener('animationend',()=> ownedPanel.classList.remove('opening'), {once:true});
+        }
+      }
+    }
+    async function refreshOwned(){ try { const r=await fetch('/mine',{cache:'no-store'}); if(!r.ok) return; const data=await r.json(); if(data && Array.isArray(data.files)){ const set=new Set(data.files.map(f=>f.replace(/^f\//,''))); ownedCache=set; if(Array.isArray(data.metas)){ ownedMeta.clear(); data.metas.forEach(m=> ownedMeta.set(m.file.replace(/^f\//,''), {expires: m.expires})); } renderOwned([...ownedCache]); } } catch{} }
+    function addOwned(remoteName){ if(!remoteName) return; if(!ownedCache.has(remoteName)){ ownedCache.add(remoteName); renderOwned([...ownedCache]); } }
+
+    // New helper: remove a file (by remoteName) from current upload batches & UI
+    function removeFromUploads(remoteName){
+      if(!remoteName) return;
+      batches.slice().forEach(batch=>{
+        batch.files.slice().forEach(f=>{
+          if(f.remoteName === remoteName){
+            if(f.container){
+              animateRemove(f.container, ()=>{
+                batch.files = batch.files.filter(x=>x!==f);
+                if(!batch.files.length) batches = batches.filter(b=>b!==batch);
+              });
+            } else {
+              batch.files = batch.files.filter(x=>x!==f);
+              if(!batch.files.length) batches = batches.filter(b=>b!==batch);
+            }
+          }
+        });
+      });
+    }
+
+    // Added: setupUploadEvents implementation (was previously missing)
+    function setupUploadEvents(){
+      if(!dropZone) return;
+      ['dragenter','dragover'].forEach(evt=> dropZone.addEventListener(evt, e=>{ e.preventDefault(); e.stopPropagation(); dropZone.classList.add('drag'); }));
+      ['dragleave','dragend'].forEach(evt=> dropZone.addEventListener(evt, e=>{ e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('drag'); }));
+      document.addEventListener('dragover', e=> e.preventDefault());
+      document.addEventListener('drop', e=> e.preventDefault());
+      if(fileInput){ fileInput.addEventListener('change', ()=>{ if(fileInput.files && fileInput.files.length) addBatch(fileInput.files); try{ fileInput.value=''; }catch{} }); }
+    }
+
+    // Existing bubble-phase drop handler; modify to avoid duplicate addBatch when prefilter active
+    dropZone.addEventListener('drop',e=>{ e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('drag'); if(window.__JB_PREFILTER_ACTIVE) return; if(e.dataTransfer && e.dataTransfer.files.length) addBatch(e.dataTransfer.files); });
+    // Removed manual fileInput.click() to avoid duplicate dialogs; label already opens the file picker.
+
+    setupUploadEvents();
+    loadExisting();
+    document.addEventListener('paste', e=>{ if(e.clipboardData && e.clipboardData.files.length) addBatch(e.clipboardData.files); });
+    refreshOwned(); setInterval(refreshOwned,15000); window.addEventListener('focus', refreshOwned);
+
+    // Animation helper: squish & fade then remove
+    function animateRemove(el, cb){
+      if(!el) return cb&&cb();
+      const rect = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      el.style.setProperty('--orig-h', rect.height + 'px');
+      el.style.setProperty('--orig-mt', cs.marginTop);
+      el.style.setProperty('--orig-mb', cs.marginBottom);
+      el.style.setProperty('--orig-pt', cs.paddingTop);
+      el.style.setProperty('--orig-pb', cs.paddingBottom);
+      el.classList.add('removing');
+      el.addEventListener('animationend', ()=>{ try{ el.remove(); }catch{} cb&&cb(); }, { once:true });
+    }
+
+    // Panel reveal for owned panel (initial)
+    if(ownedPanel){ ownedPanel.classList.add('reveal-start'); requestAnimationFrame(()=> ownedPanel.classList.add('reveal')); }
+
+    // Additional drop-zone animation setup
+    if(dropZone){
+      // trigger idle animation after slight delay
+      setTimeout(()=> dropZone.classList.add('animate'), 500);
+      // ripple on click (capture before file dialog)
+      dropZone.addEventListener('click', e=>{
+        const rect = dropZone.getBoundingClientRect();
+        const size = Math.max(rect.width, rect.height);
+        const ripple = document.createElement('span');
+        ripple.className='ripple';
+        ripple.style.width = ripple.style.height = size+'px';
+        ripple.style.left = (e.clientX - rect.left - size/2)+'px';
+        ripple.style.top = (e.clientY - rect.top - size/2)+'px';
+        dropZone.appendChild(ripple);
+        ripple.addEventListener('animationend', ()=> ripple.remove(), {once:true});
+      }, {capture:true});
+    }
+
+    // Attach per-file expiration after upload without altering original uploadOne body
+    (function(){
+      if(typeof uploadOne === 'function'){
+        const _origUploadOne = uploadOne;
+        uploadOne = function(f,batch){
+          const ttlVal = (ttlSelect && ttlSelect.value) || '3d';
+          return _origUploadOne(f,batch).then(()=>{
+            if(f.done && f.remoteName && !f.expires){
+              const map = {'1h':3600,'3h':10800,'12h':43200,'1d':86400,'3d':259200,'7d':604800,'14d':1209600};
+              const seconds = (typeof ttlCodeSeconds==='function'? ttlCodeSeconds(ttlVal): (map[ttlVal]||259200));
+              f.expires = Math.floor(Date.now()/1000) + seconds; f.total = seconds;
+              if(f.container){ f.container.dataset.exp = f.expires; f.container.dataset.total = seconds; }
+            }
+          });
+        };
+      }
+
+      let expiryWatcherStarted = false;
+      function startExpiryWatcher(){
+        if(expiryWatcherStarted) return; expiryWatcherStarted=true;
+        setInterval(()=>{
+          const now = Date.now()/1000;
+          // Recently uploaded list
+          batches.forEach(batch=> batch.files.forEach(f=>{
+            if(f.remoteName && f.expires && !f.expired){
+              if(f.total && !f.expired && (f.expires - now)/f.total <= 0.01 && (f.expires - now) > 0){ f.container?.classList.add('expiring'); }
+              if(now >= f.expires){
+                f.expired = true;
+                if(f.container){
+                  f.container.classList.add('expired','removing');
+                  f.container.addEventListener('animationend',()=>{ try{ f.container.remove(); }catch{} }, {once:true});
+                }
+              }
+            }
+          }));
+          // Owned panel chips
+          if(ownedList){
+            ownedList.querySelectorAll('.owned-chip[data-exp]').forEach(chip=>{
+              const exp = parseFloat(chip.dataset.exp||'0');
+              if(exp){
+                const total = parseFloat(chip.dataset.total||'0');
+                if(total>0){ const remain = exp - now; if(remain>0 && remain/total <= 0.01){ chip.classList.add('expiring'); } }
+              }
+              if(exp && now >= exp){
+                if(!chip.classList.contains('removing')){
+                  chip.classList.add('removing');
+                  chip.addEventListener('animationend',()=>{ chip.remove(); if(!ownedList.querySelector('.owned-chip')){ ownedPanel.style.display='none'; } }, {once:true});
+                }
+              }
+            });
+          }
+        }, 5000);
+      }
+      startExpiryWatcher();
+    })();
+
+    (function(){
+      const SIZE_LIMIT = 500 * 1024 * 1024; // 500MB
+      // Safe fallback if no previous handleFiles existed
+      const origHandleFiles = window.handleFiles || function(files){ addBatch(files); };
+      window.handleFiles = function(fileList){
+        const arr = Array.from(fileList);
+        const filtered = [];
+        arr.forEach(f=>{
+          if(f.size > SIZE_LIMIT){
+            showSnack('Refused '+ f.name +' (over 500MB)');
+          } else { filtered.push(f); }
+        });
+        return origHandleFiles(filtered);
+      };
+      if(typeof uploadOne === 'function'){
+        const _uo = uploadOne;
+        uploadOne = function(f,b){
+          if(f.file.size > SIZE_LIMIT){
+            f.error = true; markFileTooLarge(f,'File exceeds 500MB limit'); return Promise.resolve();
+          }
+          return new Promise(res=>{
+            _uo(f,b).then(()=> res());
+          });
+        };
+      }
+      function markFileTooLarge(f,msg){
+        if(!f.container){
+          const li=document.createElement('li');
+          li.className='error';
+          li.textContent = f.file.name + ' - '+msg;
+          li.style.color='#e53935';
+          list.appendChild(li);
+          f.container=li;
+        } else {
+          f.container.classList.add('error');
+          f.container.style.color='#e53935';
+        }
+      }
+      // Override local showSnack for this closure to reuse global error styling
+      function showSnack(msg){ if(window.showSnack){ window.showSnack(msg); } }
+    })();
+
+    // Live countdown updater (updates every second for owned chips & any file rows with data-exp)
+    (function(){
+      function formatRemain(sec){
+        if(sec<=0) return 'expired';
+        if(sec < 60) return Math.floor(sec)+'s';
+        if(sec < 3600){ const m=Math.floor(sec/60); const s=Math.floor(sec%60); return m+'m '+s+'s'; }
+        if(sec < 86400){ const h=Math.floor(sec/3600); const m=Math.floor((sec%3600)/60); return h+'h '+m+'m'; }
+        const d=Math.floor(sec/86400); const h=Math.floor((sec%86400)/3600); return d+'d '+h+'h';
+      }
+      function tick(){
+        const now = Date.now()/1000;
+        // Owned chips
+        document.querySelectorAll('.owned-chip[data-exp]').forEach(chip=>{
+          const exp = parseFloat(chip.dataset.exp||'0');
+            if(!exp) return;
+          const remain = exp - now;
+          const ttlEl = chip.querySelector('.ttl');
+          if(ttlEl){ ttlEl.textContent = formatRemain(remain); }
+          const total = parseFloat(chip.dataset.total||'0');
+          if(total>0 && remain>0 && remain/total <= 0.01){ chip.classList.add('expiring'); } else if(remain>0){ chip.classList.remove('expiring'); }
+        });
+        // File list items (if they store exp data)
+        document.querySelectorAll('#fileList li[data-exp]').forEach(li=>{
+          const exp = parseFloat(li.dataset.exp||'0');
+          if(!exp) return;
+          const remain = exp - now;
+          let ttlEl = li.querySelector('.ttl-inline');
+          if(!ttlEl){ ttlEl=document.createElement('div'); ttlEl.className='ttl-inline'; ttlEl.style.cssText='font-size:.5rem;opacity:.55;letter-spacing:.4px;margin-top:2px'; li.appendChild(ttlEl); }
+          ttlEl.textContent = 'Expires: '+formatRemain(remain);
+          const total = parseFloat(li.dataset.total||'0');
+          if(total>0 && remain>0 && remain/total <= 0.01){ li.classList.add('expiring'); } else if(remain>0){ li.classList.remove('expiring'); }
+        });
+      }
+      setInterval(tick,1000);
+      tick();
+    })();
+
+    // Accessibility enhancements
+    (function(){
+      const dz=document.querySelector('.drop-zone');
+      if(dz){
+        dz.setAttribute('role','button');
+        dz.setAttribute('tabindex','0');
+        dz.setAttribute('aria-label','Upload files: activate to choose or drag and drop');
+        dz.addEventListener('keydown',e=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); dz.click(); }});
+      }
+      const list=document.getElementById('fileList'); if(list){ list.setAttribute('aria-label','Upload queue'); }
+      // Observe progress bar width changes to update aria-valuenow
+      const updateBar = (el)=>{
+        if(!el) return; const span=el.querySelector('span'); if(span){
+          span.setAttribute('role','progressbar');
+          span.setAttribute('aria-valuemin','0');
+          span.setAttribute('aria-valuemax','100');
+          const w=parseFloat(span.style.width)||0; span.setAttribute('aria-valuenow', Math.round(w));
+        }};
+      const mo=new MutationObserver(m=>m.forEach(x=>{ if(x.type==='attributes' && x.target.tagName==='SPAN'){ const s=x.target; if(s.getAttribute('role')==='progressbar'){ const w=parseFloat(s.style.width)||0; s.setAttribute('aria-valuenow',Math.round(w)); } } }));
+      document.addEventListener('DOMContentLoaded',()=>{
+        document.querySelectorAll('.bar').forEach(b=>{ updateBar(b); const span=b.querySelector('span'); if(span) mo.observe(span,{attributes:true,attributeFilter:['style']}); });
+      });
+      // Patch global upload width changes if function exists
+      const origSetWidth = (el, w)=>{ if(el){ el.style.width=w+'%'; el.setAttribute('aria-valuenow', Math.round(w)); } };
+      // Expose helper if needed
+      window._a11ySetBarWidth = origSetWidth;
+      // Announce events
+      const live=document.getElementById('liveStatus');
+      window._announce = (msg)=>{ if(live){ live.textContent=''; setTimeout(()=> live.textContent=msg, 40); } };
+      // Hook copy snackbar
+      const sb=document.getElementById('snackbar'); if(sb){ const obs=new MutationObserver(()=>{ if(sb.classList.contains('show')) window._announce('Action: '+sb.textContent.trim()); }); obs.observe(sb,{attributes:true,attributeFilter:['class']}); }
+    })();
+    (function(){
+      // Assign stable IDs if missing for skip targets
+      const ownedPanelEl = window.ownedPanel || document.querySelector('.owned-panel, .owned');
+      if(ownedPanelEl && !ownedPanelEl.id) ownedPanelEl.id = 'ownedFiles';
+      const fileListEl = document.getElementById('fileList');
+      if(fileListEl) fileListEl.setAttribute('tabindex','-1');
+
+      // Enhance any TTL slider dynamically (range input with data-ttl-range)
+      document.querySelectorAll('input[type=range][data-ttl-range]').forEach(range=>{
+        if(range.closest('.range-wrapper')) return;
+        const wrap=document.createElement('div'); wrap.className='range-wrapper';
+        range.parentNode.insertBefore(wrap, range); wrap.appendChild(range);
+        const extra=document.createElement('div'); extra.className='range-extra'; extra.setAttribute('aria-hidden','true');
+        const dec=document.createElement('button'); dec.type='button'; dec.textContent='-'; dec.setAttribute('aria-label','Decrease TTL');
+        const inc=document.createElement('button'); inc.type='button'; inc.textContent='+'; inc.setAttribute('aria-label','Increase TTL');
+        const lab=document.createElement('div'); lab.style.fontSize='.55rem'; lab.style.textAlign='center'; lab.style.opacity='.8';
+        function syncLabel(){ lab.textContent = range.getAttribute('aria-label') || ('Value '+range.value); }
+        syncLabel();
+        dec.addEventListener('click',()=>{ range.stepDown(); range.dispatchEvent(new Event('input',{bubbles:true})); syncLabel(); });
+        inc.addEventListener('click',()=>{ range.stepUp(); range.dispatchEvent(new Event('input',{bubbles:true})); syncLabel(); });
+        extra.appendChild(inc); extra.appendChild(dec); extra.appendChild(lab); wrap.appendChild(extra);
+        range.addEventListener('focus',()=>{ wrap.classList.add('keyboard-focus'); });
+        range.addEventListener('blur',()=>{ setTimeout(()=>{ if(!wrap.contains(document.activeElement)) wrap.classList.remove('keyboard-focus'); }, 10); });
+        wrap.addEventListener('keydown',e=>{ if(e.key==='Escape'){ wrap.classList.remove('keyboard-focus'); range.blur(); } });
+        // Update on input
+        range.addEventListener('input', syncLabel);
+      });
+
+      // Show controls only for keyboard navigation (detect last input modality)
+      let lastPointer = false;
+      window.addEventListener('pointerdown',()=>{ lastPointer=true; });
+      window.addEventListener('keydown',e=>{ if(e.key !== 'Tab') return; lastPointer=false; });
+      document.addEventListener('focusin',e=>{
+        const wrap = e.target && e.target.closest && e.target.closest('.range-wrapper');
+        if(wrap){ if(lastPointer){ wrap.classList.remove('keyboard-focus'); } else { wrap.classList.add('keyboard-focus'); } }
+      });
+    })();
+    // Ensure owned panel (when created) reuses the ownedFiles id target for skip link
+    (function(){
+      const placeholder = document.getElementById('ownedFiles');
+      const observer = new MutationObserver(()=>{
+        const panel = document.querySelector('.owned-panel, .owned');
+        if(panel && !panel.id){ panel.id='ownedFiles'; panel.setAttribute('tabindex','-1'); if(document.activeElement===placeholder){ panel.focus(); } observer.disconnect(); }
+      });
+      observer.observe(document.body,{subtree:true,childList:true});
+    })();
+    (function(){
+      const MAX_BYTES = 500 * 1024 * 1024;
+      const MAX_BOXES = 10;
+      window.__JB_PREFILTER_ACTIVE = true; // flag to disable legacy drop addBatch path
+      const snack = document.getElementById('snackbar');
+      // Use global showSnack; fallback if missing
+      function showSnackLocal(msg, opts){
+        opts = opts || {}; const isError = opts.error !== false; // default true
+        // If error and global showSnack exists, use it (includes shake)
+        if(isError && window.showSnack){ window.showSnack(msg); return; }
+        if(!snack) return;
+        snack.textContent = msg;
+        // Neutral path: ensure we remove error styling & no shake
+        if(isError){ snack.classList.add('error'); } else { snack.classList.remove('error'); }
+        snack.classList.add('show');
+        clearTimeout(showSnackLocal._t);
+        showSnackLocal._t = setTimeout(()=> snack.classList.remove('show','error'), isError?5000:1800);
+      }
+      function activeBoxes(){ return document.querySelectorAll('#fileList li:not(.removing)').length; }
+      const dz = document.querySelector('.drop-zone');
+      const input = dz && dz.querySelector('input[type=file]');
+      if(!input) return;
+
+      // === New: Folder (directory) support with client-side ZIP packaging ===
+      // Build CRC32 table once
+      let _crcTable; function crc32(buf){ if(!_crcTable){ _crcTable = new Uint32Array(256); for(let n=0;n<256;n++){ let c=n; for(let k=0;k<8;k++){ c = (c & 1)? (0xEDB88320 ^ (c>>>1)) : (c>>>1); } _crcTable[n]=c>>>0; } }
+        let crc = 0 ^ (-1); for(let i=0;i<buf.length;i++){ crc = (_crcTable[(crc ^ buf[i]) & 0xFF] ^ (crc>>>8)); } return (crc ^ (-1))>>>0; }
+      function msToDosDateTime(ms){ const d=new Date(ms); let year=d.getFullYear(); if(year<1980) year=1980; const dosTime = (d.getHours()<<11)|(d.getMinutes()<<5)|Math.floor(d.getSeconds()/2); const dosDate=((year-1980)<<9)|((d.getMonth()+1)<<5)|d.getDate(); return {dosTime,dosDate}; }
+      function pushU16(arr,v){ arr.push(v & 0xFF, (v>>8)&0xFF); }
+      function pushU32(arr,v){ arr.push(v & 0xFF, (v>>8)&0xFF, (v>>16)&0xFF, (v>>24)&0xFF); }
+      function pushStr(arr,str){ for(let i=0;i<str.length;i++){ const c=str.charCodeAt(i); arr.push(c & 0xFF); } }
+      async function buildZipFile(fileEntries, rootName){ // fileEntries: [{file, relPath}]
+        const localParts=[]; const centralParts=[]; let offset=0;
+        for(const entry of fileEntries){ const file = entry.file; const data = new Uint8Array(await file.arrayBuffer()); const nameInZip = (rootName? rootName+'/' : '') + entry.relPath.replace(/\\/g,'/'); const {dosTime,dosDate} = msToDosDateTime(file.lastModified||Date.now()); const crc = crc32(data); const local=[]; // Local file header
+          pushU32(local, 0x04034b50); pushU16(local, 20); pushU16(local, 0); pushU16(local, 0); pushU16(local, dosTime); pushU16(local, dosDate); pushU32(local, crc); pushU32(local, data.length); pushU32(local, data.length); pushU16(local, nameInZip.length); pushU16(local, 0); pushStr(local, nameInZip);
+          localParts.push(new Uint8Array(local)); localParts.push(data); // Central directory
+          const central=[]; pushU32(central, 0x02014b50); pushU16(central, 20); pushU16(central, 20); pushU16(central, 0); pushU16(central, 0); pushU16(central, dosTime); pushU16(central, dosDate); pushU32(central, crc); pushU32(central, data.length); pushU32(central, data.length); pushU16(central, nameInZip.length); pushU16(central, 0); pushU16(central, 0); pushU16(central, 0); pushU16(central, 0); pushU32(central, 0); pushU32(central, offset); pushStr(central, nameInZip); centralParts.push(new Uint8Array(central)); offset += local.length + data.length; }
+        // Combine local parts length
+        let centralSize = centralParts.reduce((n,a)=> n + a.length, 0); let centralOffset = offset;
+        const end=[]; pushU32(end, 0x06054b50); pushU16(end, 0); pushU16(end, 0); const count=fileEntries.length; pushU16(end, count); pushU16(end, count); pushU32(end, centralSize); pushU32(end, centralOffset); pushU16(end, 0);
+        const blobParts=[...localParts, ...centralParts, new Uint8Array(end)];
+        const zipBlob = new Blob(blobParts, {type:'application/zip'});
+        const zipFile = new File([zipBlob], (rootName||'folder') + '.zip', {type:'application/zip', lastModified: Date.now()});
+        return zipFile;
+      }
+      async function traverseDirectoryEntry(dirEntry, rootName){ // returns File objects list wrapped in {file, relPath}
+        const out=[]; async function walk(entry, path){ if(entry.isFile){ await new Promise(res=> entry.file(f=>{ out.push({file:f, relPath: path + f.name}); res(); }, ()=>res())); } else if(entry.isDirectory){ const reader = entry.createReader(); async function readAll(){ await new Promise(resolve=>{ reader.readEntries(async entries=>{ if(!entries.length) return resolve(); for(const e of entries){ await walk(e, path + entry.name + '/'); } await readAll(); resolve(); }); }); } await readAll(); } }
+        await walk(dirEntry, ''); return out;
+      }
+      async function packageDirectories(entries){ // entries: DataTransferItemEntry directories
+        const zips=[]; for(const dir of entries){ const name = dir.name || 'folder'; showSnackLocal('Packaging '+name+' ...', {error:false}); let files = await traverseDirectoryEntry(dir, name); if(!files.length){ showSnackLocal('Empty folder skipped: '+name, {error:false}); continue; } // size check
+            const totalSize = files.reduce((n,o)=> n + o.file.size, 0); if(totalSize > MAX_BYTES){ showSnackLocal('Folder too large (>500MB): '+name); continue; }
+            // Build zip
+
+
+
+            const zipFile = await buildZipFile(files, name); if(zipFile.size > MAX_BYTES){ showSnackLocal('Zipped folder exceeds 500MB: '+name); continue; }
+            zips.push(zipFile); showSnackLocal('Folder zipped: '+name, {error:false}); }
+        return zips;
+      }
+      // === End folder ZIP support ===
+
+      // Return list of acceptable files given leftover slots
+      function filterFileList(list, leftover){
+        const accept = [];
+        let sizeRejected = 0; let emptySkipped = 0;
+        for(const f of list){
+          if(accept.length >= leftover) break;
+          if(f.size === 0){ emptySkipped++; continue; }
+            if(f.size > MAX_BYTES){ sizeRejected++; continue; }
+          accept.push(f);
+        }
+        return {accept, sizeRejected, emptySkipped};
+      }
+      function applyAcceptedToInput(inp, files){
+        const dt = new DataTransfer();
+        files.forEach(f=> dt.items.add(f));
+        inp.files = dt.files;
+      }
+      function handleSelection(e, files){
+        const current = activeBoxes();
+        if(current >= MAX_BOXES){ showSnackLocal('Maximum of 10 files in queue'); return false; }
+        if(!files || !files.length) return false; // nothing dragged
+        const leftover = MAX_BOXES - current;
+        const {accept, sizeRejected, emptySkipped} = filterFileList(files, leftover);
+        // Feedback hierarchy
+        if(accept.length === 0){
+          if(sizeRejected && !emptySkipped){ showSnackLocal('File too large (limit 500MB)'); return false; }
+          if(emptySkipped && !sizeRejected){ showSnackLocal('File appears empty'); return false; }
+          if(sizeRejected && emptySkipped){ showSnackLocal('Files skipped (empty / too large)'); return false; }
+          // Fallback: only reason left would be no slots actually available
+          if(leftover <= 0){ showSnackLocal('No slots available'); }
+          return false;
+        }
+        if(sizeRejected || emptySkipped){
+          const parts=[]; if(accept.length !== files.length) parts.push('added '+accept.length+' of '+files.length);
+          if(sizeRejected) parts.push(sizeRejected+' too large'); if(emptySkipped) parts.push(emptySkipped+' empty');
+          showSnackLocal(parts.join('; '));
+        }
+        applyAcceptedToInput(input, accept);
+        return true;
+      }
+      // Capture phase to pre-filter before existing listeners (also handle folders)
+      input.addEventListener('change', (e)=>{
+        const list = Array.from(input.files||[]);
+        handleSelection(e, list);
+      }, true);
+      if(dz){
+        dz.addEventListener('drop', (e)=>{
+          (async()=>{
+            if(!e.dataTransfer) return; // already handled upstream
+            const items = Array.from(e.dataTransfer.items||[]);
+            const dirEntries = items.map(it=> it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(en=> en && en.isDirectory);
+            let producedZips = [];
+            if(dirEntries.length){ e.preventDefault(); e.stopPropagation(); try { producedZips = await packageDirectories(dirEntries); } catch(err){ showSnackLocal('Folder packaging failed'); } }
+            // Non-directory file objects (ignore ones representing directories).
+            const regularFiles = Array.from(e.dataTransfer.files||[]);
+            const combined = producedZips.concat(regularFiles);
+            if(!handleSelection(e, combined)) { dz.classList.remove('drag'); return; }
+            const evt = new Event('change', {bubbles:true});
+            input.dispatchEvent(evt);
+            // Ensure drag visual state cleared post processing
+            dz.classList.remove('drag');
+          })();
+        }, true);
+        // Global safety: clear drag state after any drop anywhere
+        window.addEventListener('drop', ()=> dz.classList.remove('drag'), true);
+      }
+    })();
