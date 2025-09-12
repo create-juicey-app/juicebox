@@ -99,6 +99,7 @@ where S: tower::Service<Request<Body>, Response = Response> + Clone + Send + 'st
 const RANDOM_NAME_LEN: usize = 18; // increased length for reduced collision probability
 const UPLOAD_CONCURRENCY: usize = 8; // simple cap on simultaneous uploads
 const MAX_FILE_BYTES: u64 = 500 * 1024 * 1024; // 500MB soft limit (server body limit 512MB)
+const PROD_HOST: &str = "box.juicey.dev"; // canonical production hostname
 
 #[derive(Serialize)]
 struct ErrorBody { code: &'static str, message: &'static str }
@@ -115,6 +116,7 @@ struct AppState {
     metadata_path: Arc<PathBuf>,       // ./files/file_owners.json
     owners: Arc<RwLock<HashMap<String, FileMeta>>>, // filename -> meta
     upload_sem: Arc<Semaphore>,        // limit concurrent uploads
+    production: bool,                  // new: whether running in production (APP_ENV=production)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -164,6 +166,47 @@ async fn persist_owners(state: &AppState) {
     }
 }
 
+// New: integrity check to remove metadata entries whose files are missing
+async fn check_storage_integrity(state: &AppState) {
+    let mut to_remove: Vec<String> = Vec::new();
+    {
+        let owners = state.owners.read().await;
+        for (fname, _meta) in owners.iter() {
+            if !state.upload_dir.join(fname).exists() {
+                to_remove.push(fname.clone());
+            }
+        }
+    }
+    if to_remove.is_empty() { return; }
+    {
+        let mut owners = state.owners.write().await;
+        for f in &to_remove { owners.remove(f); }
+    }
+    persist_owners(state).await;
+}
+
+// Spawn integrity check in background so upload response is not delayed
+fn spawn_integrity_check(state: AppState) {
+    tokio::spawn(async move { check_storage_integrity(&state).await; });
+}
+
+// New: create storage name preserving safe extension (alphanumeric only, <=12 chars)
+fn make_storage_name(original: Option<&str>) -> String {
+    if let Some(orig) = original {
+        let sanitized = sanitize(orig);
+        // Treat leading-dot files (e.g. ".bashrc") as extensionless
+        if let Some(dot) = sanitized.rfind('.') {
+            if dot > 0 { // ensure not a leading dot
+                let ext = &sanitized[dot+1..];
+                if !ext.is_empty() && ext.len() <= 12 && ext.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    return format!("{}.{}", random_name(RANDOM_NAME_LEN), ext);
+                }
+            }
+        }
+    }
+    random_name(RANDOM_NAME_LEN)
+}
+
 fn ttl_to_duration(code: &str) -> Duration {
     match code {
         "1h" => Duration::from_secs(3600),
@@ -178,6 +221,15 @@ fn ttl_to_duration(code: &str) -> Duration {
 }
 
 fn now_secs() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or(Duration::from_secs(0)).as_secs() }
+
+// Helper: prefix file path with production hostname when applicable
+fn qualify_path(state: &AppState, path: &str) -> String {
+    if state.production {
+        // ensure single slash between host and path
+        let p = path.trim_start_matches('/');
+        format!("https://{}/{}", PROD_HOST, p)
+    } else { path.to_string() }
+}
 
 async fn cleanup_expired(state: &AppState) {
     let now = now_secs();
@@ -224,18 +276,8 @@ async fn upload_handler(
         }
         let mut field = field; // keep mutable for reading file
         if let Some(filename) = field.file_name() {
-            let original = sanitize(filename);
-            // loop until unique name (extremely unlikely to loop more than once)
-            let rand_part = loop {
-                let candidate = random_name(RANDOM_NAME_LEN);
-                if !state.upload_dir.join(&candidate).exists() { break candidate; }
-            };
-            let new_name = if let Some(ext) = std::path::Path::new(&original).extension().and_then(|s| s.to_str()) {
-                format!("{}.{}", rand_part, ext)
-            } else {
-                rand_part
-            };
-            let path = state.upload_dir.join(&new_name);
+            let storage_name = make_storage_name(Some(filename));
+            let path = state.upload_dir.join(&storage_name);
 
             let mut file = match fs::File::create(&path).await {
                 Ok(f) => f,
@@ -247,27 +289,29 @@ async fn upload_handler(
             let mut written: u64 = 0;
             let mut aborted = false; // aborted for this file
             loop {
-                match field.chunk().await {
-                    Ok(Some(chunk)) => {
-                        written += chunk.len() as u64;
-                        if written > MAX_FILE_BYTES {
-                            let _ = fs::remove_file(&path).await;
-                            let mut resp = json_error(StatusCode::PAYLOAD_TOO_LARGE, "file_too_large", "file exceeds 500MB limit");
-                            resp.headers_mut().insert("X-File-Too-Large", "1".parse().unwrap());
-                            return resp;
-                        }
-                        if let Err(_) = file.write_all(&chunk).await {
-                            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "fs_error", "failed writing chunk");
-                        }
+                let next = field.chunk().await;
+                match next {
+                    Ok(opt) => {
+                        if let Some(chunk) = opt {
+                            written += chunk.len() as u64;
+                            if written > MAX_FILE_BYTES {
+                                let _ = fs::remove_file(&path).await;
+                                let mut resp = json_error(StatusCode::PAYLOAD_TOO_LARGE, "file_too_large", "file exceeds 500MB limit");
+                                resp.headers_mut().insert("X-File-Too-Large", "1".parse().unwrap());
+                                return resp;
+                            }
+                            if let Err(_) = file.write_all(&chunk).await {
+                                return json_error(StatusCode::INTERNAL_SERVER_ERROR, "fs_error", "failed writing chunk");
+                            }
+                        } else { break; } // completed normally
                     }
-                    Ok(None) => { break; } // completed normally
                     Err(_e) => {
                         // client aborted / stream error
                         aborted = true; any_aborted = true; break;
                     }
                 }
             }
-            if aborted {
+            if aborted || written == 0 {
                 let _ = fs::remove_file(&path).await; // remove partial file
                 continue; // do NOT record metadata or include in response
             }
@@ -275,10 +319,10 @@ async fn upload_handler(
             let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
             {
                 let mut owners = state.owners.write().await;
-                owners.insert(new_name.clone(), FileMeta { owner: addr.ip().to_string(), expires });
+                owners.insert(storage_name.clone(), FileMeta { owner: addr.ip().to_string(), expires });
             }
             persist_owners(&state).await;
-            saved_files.push(format!("f/{}", new_name));
+            saved_files.push(format!("f/{}", storage_name));
         }
     }
 
@@ -287,7 +331,12 @@ async fn upload_handler(
         return json_error(StatusCode::BAD_REQUEST, "no_files", "no files uploaded");
     }
 
-    Json(UploadResponse { files: saved_files }).into_response()
+    // After successful saves and before building final response, trigger integrity check
+    if !saved_files.is_empty() { spawn_integrity_check(state.clone()); }
+
+    // Map saved files to qualified URLs in production
+    let out_files: Vec<String> = saved_files.iter().map(|f| qualify_path(&state, f)).collect();
+    Json(UploadResponse { files: out_files }).into_response()
 }
 
 async fn list_handler(
@@ -302,8 +351,8 @@ async fn list_handler(
         .filter_map(|(file, meta)| if meta.owner == ip { Some((file.clone(), meta.expires)) } else { None })
         .collect();
     files.sort_by(|a,b| a.0.cmp(&b.0));
-    let only_names: Vec<String> = files.iter().map(|(n,_)| format!("f/{}", n)).collect();
-    let metas: Vec<FileMetaEntry> = files.into_iter().map(|(n,e)| FileMetaEntry { file: format!("f/{}", n), expires: e }).collect();
+    let only_names: Vec<String> = files.iter().map(|(n,_)| qualify_path(&state, &format!("f/{}", n))).collect();
+    let metas: Vec<FileMetaEntry> = files.into_iter().map(|(n,e)| FileMetaEntry { file: qualify_path(&state, &format!("f/{}", n)), expires: e }).collect();
     let body = Json(ListResponse { files: only_names, metas });
     let mut resp = body.into_response();
     resp.headers_mut().insert(CACHE_CONTROL, "no-store".parse().unwrap());
@@ -312,6 +361,7 @@ async fn list_handler(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let production = std::env::var("APP_ENV").map(|v| v.eq_ignore_ascii_case("production")).unwrap_or(false);
     let static_dir = Arc::new(PathBuf::from("./public"));
     let upload_dir = Arc::new(PathBuf::from("./files"));
     let metadata_path = Arc::new(PathBuf::from("./files/file_owners.json"));
@@ -329,7 +379,7 @@ async fn main() -> anyhow::Result<()> {
         Err(_) => HashMap::new(),
     };
 
-    let state = AppState { upload_dir, static_dir, metadata_path, owners: Arc::new(RwLock::new(owners_map)), upload_sem: Arc::new(Semaphore::new(UPLOAD_CONCURRENCY)) };
+    let state = AppState { upload_dir, static_dir, metadata_path, owners: Arc::new(RwLock::new(owners_map)), upload_sem: Arc::new(Semaphore::new(UPLOAD_CONCURRENCY)), production };
 
     // spawn periodic cleanup
     let cleanup_state = state.clone();
@@ -343,6 +393,19 @@ async fn main() -> anyhow::Result<()> {
     async fn ready(State(state): State<AppState>) -> Response {
         // simple readiness: check we can read lock and metadata path directory exists
         if state.metadata_path.parent().map(|p| p.exists()).unwrap_or(false) { "ready".into_response() } else { json_error(StatusCode::SERVICE_UNAVAILABLE, "not_ready", "storage not ready") }
+    }
+
+    // Host enforcement middleware (redirect to canonical host in production)
+    async fn enforce_host(req: Request<Body>, next: Next) -> Response {
+        if let Some(host) = req.headers().get(axum::http::header::HOST).and_then(|h| h.to_str().ok()) {
+            if host != PROD_HOST && host != "localhost:1200" && host != "127.0.0.1:1200" && host != "0.0.0.0:1200" {
+                let uri = req.uri();
+                let pq = match uri.path_and_query() { Some(pq)=>pq.as_str(), None=>uri.path() };
+                let loc = format!("https://{}{}", PROD_HOST, pq);
+                return (StatusCode::PERMANENT_REDIRECT, [(axum::http::header::LOCATION, HeaderValue::from_str(&loc).unwrap())]).into_response();
+            }
+        }
+        next.run(req).await
     }
 
     let base_router = Router::new()
@@ -359,12 +422,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/{*path}", get(file_handler));
 
     // Build middleware stack: body limit, rate limit, (future) timeout.
-    let limiter_layer = RateLimitLayer { limiter: RateLimiterInner::new(60, 1) }; // burst 60, 1 token/sec refill
-    let app = base_router
+    let limiter_layer = RateLimitLayer { limiter: RateLimiterInner::new(60, 1) };
+    let mut app = base_router
         .layer(middleware::from_fn(add_security_headers))
         .layer(limiter_layer)
-        .layer(DefaultBodyLimit::max(1024 * 1024 * 512))
-        .with_state(state);
+        .layer(DefaultBodyLimit::max(1024 * 1024 * 512));
+    if state.production { app = app.layer(middleware::from_fn(enforce_host)); }
+    let app = app.with_state(state);
 
     let addr: SocketAddr = ([0, 0, 0, 0], 1200).into();
     println!("listening on {addr}");
@@ -473,7 +537,7 @@ async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     if !h.contains_key("X-Content-Type-Options") { h.insert("X-Content-Type-Options", "nosniff".parse().unwrap()); }
     if !h.contains_key("X-Frame-Options") { h.insert("X-Frame-Options", "DENY".parse().unwrap()); }
     if !h.contains_key("Referrer-Policy") { h.insert("Referrer-Policy", "no-referrer".parse().unwrap()); }
-    if !h.contains_key("Content-Security-Policy") { h.insert("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:".parse().unwrap()); }
+    if (!h.contains_key("Content-Security-Policy")) { h.insert("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:".parse().unwrap()); }
     if !h.contains_key("Cache-Control") { h.insert("Cache-Control", "private, max-age=0, no-store".parse().unwrap()); }
     resp
 }
@@ -550,23 +614,34 @@ async fn simple_upload(State(state): State<AppState>, ConnectInfo(addr): Connect
     let mut saved: Vec<String> = Vec::new();
     let mut ttl_choice: Option<String> = None;
     while let Ok(Some(field)) = multipart.next_field().await {
-        if let Some(name) = field.name() {
-            if name == "ttl" { if let Ok(v) = field.text().await { ttl_choice = Some(v); } continue; }
-        }
+        if let Some(name) = field.name() { if name == "ttl" { if let Ok(v) = field.text().await { ttl_choice = Some(v); } continue; } }
         let mut field = field;
-        if let Some(_filename) = field.file_name() {
-            let rand_part = random_name(RANDOM_NAME_LEN);
-            let new_name = rand_part; // ignore original for simplicity
+        if let Some(orig_filename) = field.file_name() {
+            let new_name = make_storage_name(Some(orig_filename));
             let path = state.upload_dir.join(&new_name);
             let mut file = match fs::File::create(&path).await { Ok(f)=>f, Err(_)=> return json_error(StatusCode::INTERNAL_SERVER_ERROR, "fs_error", "failed create") };
             let mut written: u64 = 0;
+            let mut aborted = false;
             loop {
-                match field.chunk().await {
-                    Ok(Some(chunk)) => { written += chunk.len() as u64; if written > MAX_FILE_BYTES { let _=fs::remove_file(&path).await; return json_error(StatusCode::PAYLOAD_TOO_LARGE,"file_too_large","file too large"); } if file.write_all(&chunk).await.is_err(){ return json_error(StatusCode::INTERNAL_SERVER_ERROR,"fs_error","write fail"); } },
-                    Ok(None) => break,
-                    Err(_) => { let _=fs::remove_file(&path).await; break; }
+                let next = field.chunk().await;
+                match next {
+                    Ok(opt) => {
+                        if let Some(chunk) = opt {
+                            written += chunk.len() as u64;
+                            if written > MAX_FILE_BYTES {
+                                let _=fs::remove_file(&path).await;
+                                let msg = urlencoding::encode("File exceeds 500MB limit");
+                                let loc = format!("/simple?m={}", msg);
+                                let hv = HeaderValue::from_str(&loc).unwrap();
+                                return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response();
+                            }
+                            if file.write_all(&chunk).await.is_err(){ aborted = true; break; }
+                        } else { break; }
+                    }
+                    Err(_) => { aborted = true; let _=fs::remove_file(&path).await; break; }
                 }
             }
+            if aborted || written == 0 { let _ = fs::remove_file(&path).await; continue; }
             let ttl_code = ttl_choice.clone().unwrap_or_else(||"3d".into());
             let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
             { let mut owners = state.owners.write().await; owners.insert(new_name.clone(), FileMeta { owner: ip.clone(), expires }); }
@@ -575,8 +650,10 @@ async fn simple_upload(State(state): State<AppState>, ConnectInfo(addr): Connect
         }
     }
     if saved.is_empty() { return (StatusCode::BAD_REQUEST, "no files").into_response(); }
+    // Kick off background integrity verification after upload(s)
+    spawn_integrity_check(state.clone());
     let msg = format!("Uploaded {} file(s)", saved.len());
-    let redirect = format!("/simple?m={}", urlencoding::encode(&msg));
+    let redirect = if state.production { format!("https://{}/simple?m={}", PROD_HOST, urlencoding::encode(&msg)) } else { format!("/simple?m={}", urlencoding::encode(&msg)) };
     let hv = HeaderValue::from_str(&redirect).unwrap();
     (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
 }
