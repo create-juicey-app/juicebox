@@ -23,7 +23,20 @@
       updateTTL();
     }
 
-    function flashCopied(msg='Link copied'){ snackbar.textContent = msg; snackbar.classList.remove('error'); snackbar.classList.add('show'); clearTimeout(flashCopied._t); flashCopied._t=setTimeout(()=>snackbar.classList.remove('show'),1600); }
+    // Updated: resilient flashCopied (creates snackbar if missing)
+    function flashCopied(msg='Link copied'){
+      let sb = snackbar || document.getElementById('snackbar');
+      if(!sb){
+        sb = document.createElement('div');
+        sb.id='snackbar';
+        document.body.appendChild(sb);
+      }
+      sb.textContent = msg;
+      sb.classList.remove('error');
+      sb.classList.add('show');
+      clearTimeout(flashCopied._t);
+      flashCopied._t = setTimeout(()=> sb.classList.remove('show'),1600);
+    }
     async function copyToClipboard(text){ try{ await navigator.clipboard.writeText(text);}catch{ const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch{} document.body.removeChild(ta);} }
     function fmtBytes(b){ if(!isFinite(b) || b<0) return '–'; if(b===0) return '0 B'; const k=1024; const s=['B','KB','MB','GB','TB']; const i=Math.min(s.length-1, Math.floor(Math.log(b)/Math.log(k))); return (b/Math.pow(k,i)).toFixed(i?2:0)+' '+s[i]; }
 
@@ -42,6 +55,19 @@
     let uploading=false;
     let ownedCache=new Set();
 
+    // NEW: ensure group header count updates & remove empty group card
+    function updateGroupHeader(batch){
+      if(!batch || !batch.isGroup || !batch.groupLi) return;
+      const headName = batch.groupLi.querySelector('.group-head .name');
+      const remaining = batch.files.filter(f=> !f.removed).length;
+      if(remaining <= 0){
+        if(!batch.groupLi.classList.contains('removing')){
+          animateRemove(batch.groupLi, ()=>{ batches = batches.filter(b=> b!==batch); });
+        }
+        return;
+      }
+      if(headName){ headName.textContent = remaining + ' file' + (remaining===1?'':'s'); }
+    }
     function makeLinkInput(rel, autoCopy=true){ const full=location.origin+'/'+rel; const inp=document.createElement('input'); inp.type='text'; inp.readOnly=true; inp.value=full; inp.className='link-input'; inp.title='Click to copy direct download link'; inp.setAttribute('aria-label','Download link (click to copy)'); if(autoCopy){ copyToClipboard(full).then(()=>flashCopied()); } inp.addEventListener('click',()=>{ inp.select(); copyToClipboard(inp.value).then(()=>flashCopied()); }); return inp; }
     const _origMakeLinkInput = makeLinkInput; makeLinkInput = function(rel, autoCopy){ const el=_origMakeLinkInput(rel, autoCopy); if(rel.startsWith('f/')) addOwned(rel.slice(2)); return el; };
     // helper: map ttl code -> seconds
@@ -52,12 +78,40 @@
       let skippedEmpty=false; const cleaned=[...fileList].filter(f=>{ if(f.size===0){ skippedEmpty=true; return false; } return true; });
       if(skippedEmpty) { try{ showSnack('Skipped empty files'); }catch{} }
       fileList = cleaned; if(!fileList.length) return;
-      const batch={ files:[...fileList].map(f=>({ file:f, remoteName:null, done:false, deleting:false, bar:null, barSpan:null, container:null, linksBox:null, xhr:null })) }; batches.push(batch); renderList(); autoUpload(); }
+      const batch={ files:[...fileList].map(f=>({ file:f, remoteName:null, done:false, deleting:false, bar:null, barSpan:null, container:null, linksBox:null, xhr:null })) };
+      batch.isGroup = batch.files.length > 1; // NEW flag
+      batches.push(batch); renderList(); autoUpload(); }
 
     function renderList(){
-      // incremental: only create DOM for file objects lacking container
       batches.forEach(batch=>{
-        const multi = batch.files.length>1;
+        if(batch.isGroup){
+          if(!batch.groupLi){
+            const li=document.createElement('li');
+            li.className='group-batch';
+            li.innerHTML='<div class="file-row group-head"><div class="name"></div><div class="size"></div><div class="actions"></div></div><div class="group-files"></div>';
+            const headName=li.querySelector('.group-head .name'); headName.textContent = batch.files.length + ' files';
+            const headSize=li.querySelector('.group-head .size'); headSize.textContent='';
+            list.appendChild(li); batch.groupLi=li;
+            li.classList.add('adding'); requestAnimationFrame(()=> li.classList.add('in'));
+          }
+          const filesWrap = batch.groupLi.querySelector('.group-files');
+          batch.files.forEach(f=>{
+            if(f.container) return;
+            const entry=document.createElement('div'); entry.className='file-entry';
+            entry.innerHTML='<div class="file-row"><div class="name"></div><div class="size"></div><div class="actions"></div></div><div class="bar"><span></span></div>';
+            const nameEl=entry.querySelector('.name'); nameEl.textContent = f.file.name;
+            const sizeEl=entry.querySelector('.size'); sizeEl.textContent = fmtBytes(f.file.size);
+            const actions=entry.querySelector('.actions');
+            const del=document.createElement('button'); del.type='button'; del.className='remove'; del.textContent='x'; del.title='Remove'; del.setAttribute('aria-label','Remove file from queue');
+            del.addEventListener('click', e=>{ e.stopPropagation(); handleDeleteClick(f,batch); });
+            f.deleteBtn = del; actions.appendChild(del);
+            f.bar = entry.querySelector('.bar'); f.barSpan = f.bar.querySelector('span'); f.container = entry;
+            filesWrap.appendChild(entry);
+          });
+          return; // skip legacy per-file li path
+        }
+        // Legacy single-file path
+        const multi = batch.files.length>1; // will be false here
         if(multi && !batch.linksBox){ batch.linksBox=document.createElement('div'); batch.linksBox.className='links'; }
         batch.files.forEach((f, idx)=>{
           if(f.container) return; // already rendered
@@ -72,25 +126,37 @@
           actions.appendChild(del);
           row.appendChild(name); row.appendChild(size); row.appendChild(actions); li.appendChild(row);
           const bar=document.createElement('div'); bar.className='bar'; bar.innerHTML='<span></span>'; bar.title='Upload progress'; const span=bar.querySelector('span'); span.setAttribute('aria-label','Upload progress'); f.bar=bar; f.barSpan=span; li.appendChild(bar);
-          if(!multi){ /* single upload gets links after completion */ }
           list.appendChild(li);
-          // entry animation
           li.classList.add('adding'); requestAnimationFrame(()=> li.classList.add('in'));
-          if(multi && batch.linksBox && !batch.linksBox.isConnected){ li.appendChild(batch.linksBox); }
         });
       });
     }
 
     function updateDeleteButton(f){ if(!f.deleteBtn) return; if(f.deleting){ f.deleteBtn.disabled=true; f.deleteBtn.textContent='…'; f.deleteBtn.title='Deleting...'; f.deleteBtn.setAttribute('aria-label','Deleting file'); return; } if(!f.remoteName){ f.deleteBtn.textContent='x'; f.deleteBtn.disabled=false; f.deleteBtn.title='Remove (not uploaded)'; f.deleteBtn.setAttribute('aria-label','Remove file from queue'); } else { f.deleteBtn.textContent='❌'; f.deleteBtn.disabled=false; f.deleteBtn.title='Delete from server'; f.deleteBtn.setAttribute('aria-label','Delete file from server'); } }
 
+    // NEW helper: remove an entry from a grouped batch & clean up card if empty
+    function removeGroupedEntry(batch, f){
+      f.removed = true; // mark first so upload loop skips
+      const finalize = ()=>{ batch.files = batch.files.filter(x=> !x.removed); if(!batch.files.length && batch.groupLi){ animateRemove(batch.groupLi, ()=>{ batches = batches.filter(b=> b!==batch); }); } else { updateGroupHeader(batch); } };
+      if(f.container){ f.container.classList.add('removing'); animateRemove(f.container, finalize); }
+      else finalize();
+    }
+
+    // Adjusted deletion to support grouped batches
     function handleDeleteClick(f, batch){
       if(f.deleting) return;
-      if(!f.remoteName){
-        if(f.xhr){
-          // Mark as canceled before aborting so uploadOne handlers ignore it
-          f.canceled = true; f.aborted = true;
-          try{ f.xhr.abort(); }catch{}
+      if(batch && batch.isGroup){
+        if(!f.remoteName){
+          if(f.xhr){ f.canceled=true; f.aborted=true; try{ f.xhr.abort(); }catch{} }
+          removeGroupedEntry(batch,f); return;
         }
+        // remote deletion path for grouped
+        deleteRemote(f,batch); return;
+      }
+      // Non-group (existing logic with linksBox reattach not needed now for groups)
+      if(batch && batch.linksBox && batch.linksBox.parentElement === f.container){ batch.linksBox.remove(); }
+      if(!f.remoteName){
+        if(f.xhr){ f.canceled = true; f.aborted = true; try{ f.xhr.abort(); }catch{} }
         if(f.container) animateRemove(f.container, ()=>{ batch.files = batch.files.filter(x=>x!==f); if(!batch.files.length){ batches = batches.filter(b=>b!==batch); } });
         else { batch.files = batch.files.filter(x=>x!==f); if(!batch.files.length){ batches = batches.filter(b=>b!==batch); } }
         return;
@@ -99,14 +165,38 @@
     }
 
     function deleteRemote(f, batch){ if(!f.remoteName || f.deleting) return; f.deleting=true; updateDeleteButton(f);
+      let timeoutId = setTimeout(()=>{ // force cleanup if backend silent
+        if(f.deleting){ f.deleting=false; updateDeleteButton(f); if(batch && batch.isGroup){ removeGroupedEntry(batch,f); } else { if(f.container) animateRemove(f.container, ()=>{ batch.files = batch.files.filter(x=>x!==f); if(!batch.files.length) batches = batches.filter(b=>b!==batch); }); } }
+      }, 8000);
+      if(batch && batch.isGroup){ // grouped removal
+        fetch('/d/'+encodeURIComponent(f.remoteName), {method:'DELETE'})
+          .then(r=>{ clearTimeout(timeoutId); if(r.ok){ ownedCache.delete(f.remoteName); ownedMeta.delete(f.remoteName); f.deleting=false; removeGroupedEntry(batch,f); renderOwned([...ownedCache]); autoUpload(); } else { f.deleting=false; updateDeleteButton(f); } })
+          .catch(()=>{ clearTimeout(timeoutId); f.deleting=false; updateDeleteButton(f); });
+        return;
+      }
       fetch('/d/'+encodeURIComponent(f.remoteName), {method:'DELETE'})
-        .then(r=>{ if(r.ok){ if(f.container) animateRemove(f.container, ()=>{ batch.files = batch.files.filter(x=>x!==f); if(!batch.files.length) batches = batches.filter(b=>b!==batch); ownedCache.delete(f.remoteName); renderOwned([...ownedCache]); }); else { batch.files = batch.files.filter(x=>x!==f); if(!batch.files.length) batches = batches.filter(b=>b!==batch); ownedCache.delete(f.remoteName); renderOwned([...ownedCache]); } }
+        .then(r=>{ clearTimeout(timeoutId); if(r.ok){ if(f.container) animateRemove(f.container, ()=>{ batch.files = batch.files.filter(x=>x!==f); if(!batch.files.length) batches = batches.filter(b=>b!==batch); ownedCache.delete(f.remoteName); renderOwned([...ownedCache]); autoUpload(); }); else { batch.files = batch.files.filter(x=>x!==f); if(!batch.files.length) batches = batches.filter(b=>b!==batch); ownedCache.delete(f.remoteName); renderOwned([...ownedCache]); autoUpload(); } }
           else { f.deleting=false; updateDeleteButton(f); }
         })
-        .catch(()=>{ f.deleting=false; updateDeleteButton(f); });
+        .catch(()=>{ clearTimeout(timeoutId); f.deleting=false; updateDeleteButton(f); });
     }
 
-    async function uploadSequential(){ if(uploading) return; uploading=true; for(const batch of batches){ for(const f of batch.files){ if(f.done || f.deleting) continue; await uploadOne(f, batch); } } uploading=false; }
+    async function uploadSequential(){
+      if(uploading) return; uploading=true;
+      for(const batch of batches){
+        for(let i=0; i < batch.files.length; i++){
+          const f = batch.files[i];
+          if(!f || f.removed) continue;
+            if(f.done || f.deleting) continue;
+          await uploadOne(f,batch);
+        }
+        // After a pass, drop any removed placeholders
+        batch.files = batch.files.filter(f=> !f.removed);
+      }
+      // Prune empty batches
+      batches = batches.filter(b=> b.files.length);
+      uploading=false;
+    }
 
     function uploadOne(f, batch){ return new Promise(resolve=>{
       const fd=new FormData();
@@ -117,7 +207,6 @@
       let finished = false;
       xhr.upload.onprogress=(e)=>{ if(e.lengthComputable && f.barSpan){ const pct=(e.loaded / f.file.size)*100; f.barSpan.style.width=pct.toFixed(2)+'%'; } };
       xhr.onabort=()=>{ if(finished) return; finished=true; f.canceled=true; if(f.barSpan){ f.barSpan.style.opacity='.35'; }
-        // Do not mark as done or create link; resolve immediately
         resolve(); };
       xhr.onload=()=>{ if(finished) return; if(f.canceled){ finished=true; resolve(); return; } const ok = xhr.status>=200 && xhr.status<300; if(ok){
           if(f.barSpan){ if(!f.barSpan._animated){ f.barSpan._animated=true; }
@@ -133,7 +222,21 @@
           const exp = Math.floor(Date.now()/1000) + ttlSeconds;
           ownedMeta.set(f.remoteName, {expires: exp, total: ttlSeconds});
           f.done=true; updateDeleteButton(f);
-          if(f.remoteName){ const input = makeLinkInput('f/'+f.remoteName, !batch.files.some(x=>!x.done)); if(batch.files.length>1){ if(batch.linksBox) batch.linksBox.appendChild(input); } else { const links=document.createElement('div'); links.className='links'; links.appendChild(input); f.container.appendChild(links); } }
+          if(f.remoteName){
+            const input = makeLinkInput('f/'+f.remoteName, !batch.files.some(x=>!x.done));
+            if(batch.isGroup){
+              // Per-file link inside grouped batch entry
+              if(f.container){
+                let linksRow = f.container.querySelector('.links');
+                if(!linksRow){ linksRow=document.createElement('div'); linksRow.className='links'; f.container.appendChild(linksRow); }
+                linksRow.appendChild(input);
+              }
+              // Assign group expiration dataset once (first completed file) so global countdown logic updates one TTL line
+              if(!batch.groupLi.dataset.exp){ batch.groupLi.dataset.exp = exp; batch.groupLi.dataset.total = ttlSeconds; }
+            } else {
+              const links=document.createElement('div'); links.className='links'; links.appendChild(input); f.container.appendChild(links);
+            }
+          }
           finished=true; resolve();
         } else { if(!f.canceled){ f.container?.classList.add('error'); updateDeleteButton(f); } finished=true; resolve(); }
       };
@@ -504,7 +607,7 @@
         extra.appendChild(inc); extra.appendChild(dec); extra.appendChild(lab); wrap.appendChild(extra);
         range.addEventListener('focus',()=>{ wrap.classList.add('keyboard-focus'); });
         range.addEventListener('blur',()=>{ setTimeout(()=>{ if(!wrap.contains(document.activeElement)) wrap.classList.remove('keyboard-focus'); }, 10); });
-        wrap.addEventListener('keydown',e=>{ if(e.key==='Escape'){ wrap.classList.remove('keyboard-focus'); range.blur(); } });
+        wrap.addEventListener('keydown', e=>{ if(e.key==='Escape'){ wrap.classList.remove('keyboard-focus'); range.blur(); } });
         // Update on input
         range.addEventListener('input', syncLabel);
       });
@@ -726,8 +829,17 @@
     f.done = true; updateDeleteButton(f);
     if(f.remoteName){
       const input = makeLinkInput('f/'+f.remoteName, !batch.files.some(x=>!x.done));
-      if(batch.files.length>1){ if(!batch.linksBox){ batch.linksBox=document.createElement('div'); batch.linksBox.className='links'; f.container.appendChild(batch.linksBox); } batch.linksBox.appendChild(input); }
-      else { const links=document.createElement('div'); links.className='links'; links.appendChild(input); f.container.appendChild(links); }
+      if(batch.isGroup){
+        if(f.container){
+          let linksRow = f.container.querySelector('.links');
+          if(!linksRow){ linksRow=document.createElement('div'); linksRow.className='links'; f.container.appendChild(linksRow); }
+          linksRow.appendChild(input);
+        }
+        if(batch.groupLi && !batch.groupLi.dataset.exp){ batch.groupLi.dataset.exp = exp; batch.groupLi.dataset.total = ttlSeconds; }
+      } else {
+        if(batch.files.length>1){ if(batch.linksBox) batch.linksBox.appendChild(input); }
+        else { const links=document.createElement('div'); links.className='links'; links.appendChild(input); f.container.appendChild(links); }
+      }
     }
   }
   function chunkedUpload(f,batch){

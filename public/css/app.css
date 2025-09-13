@@ -127,6 +127,7 @@
 
     /* Override: card squish removal animation */
     ul#fileList li.removing, .owned-chip.removing { animation:cardSquish .48s var(--e-out) forwards; overflow:hidden; }
+    ul#fileList li.group-batch .file-entry.removing { animation:cardSquish .48s var(--e-out) forwards; overflow:hidden; }
     @keyframes cardSquish {
       0% { opacity:1; transform:scale(1); height:var(--orig-h); margin-top:var(--orig-mt); margin-bottom:var(--orig-mb); padding-top:var(--orig-pt); padding-bottom:var(--orig-pb); }
       35% { transform:scale(.97,.85); }
@@ -206,3 +207,72 @@
 
     /* Subtle helper class for secondary text with adequate contrast */
     .subtle { color:var(--text-subtle); }
+
+    /* === Accordion / FAQ Enhancements === */
+    .faq-intro, .terms-intro { animation:fadeIn .6s var(--e-out); }
+    .details-list details { position:relative; }
+    .details-list details:not(:last-child){ margin-bottom:.9rem; }
+    .details-list summary { display:flex; align-items:center; gap:.55rem; }
+    .details-list summary .arrow { flex:none; width:.85rem; height:.85rem; display:inline-flex; align-items:center; justify-content:center; transition:.45s var(--e-out) transform, .35s opacity; font-size:.7rem; line-height:1; opacity:.7; }
+    .details-list details[open] summary .arrow { transform:rotate(90deg); opacity:1; }
+
+    /* Generic arrow using pseudo if .arrow span omitted */
+    summary:not(.no-arrow)::before { content:""; display:inline-block; width:.55rem; height:.55rem; margin-right:.55rem; border-right:2px solid var(--text-subtle); border-bottom:2px solid var(--text-subtle); transform:rotate(-45deg) translateY(-1px); transition:.45s var(--e-out) transform, .35s border-color; opacity:.75; }
+    details[open] > summary:not(.no-arrow)::before { transform:rotate(45deg) translateY(-1px); border-color:var(--accent); opacity:1; }
+
+    /* Smooth reveal (height anim helper) */
+    .details-animate { overflow:hidden; transition: grid-template-rows .45s var(--e-out); display:grid; grid-template-rows:0fr; }
+    .details-animate > * { overflow:hidden; }
+    details[open] .details-animate { grid-template-rows:1fr; }
+
+    /* Subtle highlight on hover */
+    .details-list details { background:#141d26; border:1px solid #22303b; border-radius:10px; padding:.85rem 1rem .95rem; transition:.35s background, .35s border-color, .35s box-shadow; }
+    .details-list details:hover { border-color:#2e3e4d; }
+    .details-list details[open] { border-color:#314356; background:#18222d; }
+
+    /* Animated accent underline for headings */
+    .section-head { position:relative; display:inline-block; }
+    .section-head::after { content:""; position:absolute; left:0; bottom:-4px; width:100%; height:2px; background:linear-gradient(90deg,var(--accent),rgba(var(--accent-rgb)/0)); transform:scaleX(.4); transform-origin:left; transition:.6s var(--e-out); opacity:.65; }
+    .section-head.animate-in::after { transform:scaleX(1); opacity:1; }
+
+    /* Fade / slide utilities */
+    @keyframes fadeInUp { from { opacity:0; transform:translateY(8px);} to { opacity:1; transform:translateY(0);} }
+    .fade-in-up { animation:fadeInUp .55s var(--e-out) both; }
+    @keyframes fadeIn { from { opacity:0;} to { opacity:1;} }
+    .fade-in { animation:fadeIn .5s var(--e-out) both; }
+
+    /* Inline badge style */
+    .badge { display:inline-block; font-size:.55rem; letter-spacing:.5px; padding:.2rem .45rem .25rem; border:1px solid #2b3744; background:#18222d; border-radius:999px; text-transform:uppercase; color:var(--text-subtle); }
+    .badge.accent { border-color:rgba(var(--accent-rgb)/.5); background:linear-gradient(145deg,#1b1205,#281b08); color:var(--accent); }
+
+    /* Quick in-page nav pills */
+    .inline-nav { display:flex; flex-wrap:wrap; gap:.45rem; margin:0 0 1.1rem; padding:0; list-style:none; }
+    .inline-nav a { text-decoration:none; font-size:.6rem; letter-spacing:.6px; padding:.35rem .65rem .4rem; border:1px solid #273443; background:#162029; border-radius:999px; color:var(--text-subtle); transition:.3s background, .3s border-color, .3s color; }
+    .inline-nav a:hover, .inline-nav a:focus-visible { background:#1e2a35; border-color:#314356; color:var(--text); }
+    .inline-nav a:active { transform:translateY(1px); }
+
+    /* Accessible focus for summary element */
+    summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:6px; }
+
+    /* Terms panel animation */
+    .panel.slide-in { animation:fadeInUp .65s var(--e-out); }
+
+    /* Smooth accordion content transition */
+    .details-animate { position:relative; }
+    .details-animate > div { opacity:0; transform:translateY(-4px); transition:.45s var(--e-out); }
+    details[open] .details-animate > div { opacity:1; transform:translateY(0); transition-delay:.05s; }
+
+    /* Prefers-reduced-motion respect */
+    @media (prefers-reduced-motion:reduce){
+      .details-animate > div { transition:none; transform:none!important; }
+    }
+
+    ul#fileList li.group-batch { padding:0.85rem 0.9rem 0.95rem; display:flex; flex-direction:column; gap:.55rem; }
+    ul#fileList li.group-batch .group-head { margin-bottom:.25rem; }
+    ul#fileList li.group-batch .group-files { display:flex; flex-direction:column; gap:.75rem; margin-top:.4rem; }
+    ul#fileList li.group-batch .file-entry { padding:.55rem .65rem .6rem; border:1px solid #2c3948; border-radius:8px; background:#1a2430; display:flex; flex-direction:column; gap:.45rem; }
+    ul#fileList li.group-batch .file-entry .links { margin-top:.35rem; }
+    ul#fileList li.group-batch .file-entry:not(:first-child){ margin-top:.25rem; }
+    ul#fileList li.group-batch .file-entry .file-row { margin:0; }
+    ul#fileList li.group-batch .file-entry .bar { margin-top:2px; }
+    @media (max-width:640px){ ul#fileList li.group-batch { padding:0.9rem .85rem 1rem; } ul#fileList li.group-batch .file-entry { padding:.65rem .7rem .7rem; } }

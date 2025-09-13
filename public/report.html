@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Report Content – JuiceBox</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <link rel="canonical" href="/report" />
+  <meta name="description" content="Report abusive or illegal content hosted on JuiceBox." />
+  <style>
+    :root { --bg:#0f141b; --panel:#1a2230; --border:#273242; --border2:#2b394a; --accent:#ff9800; --text:#e8ecf3; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--text); line-height:1.45; padding:1.3rem; max-width:760px; }
+    h1 { margin:.2rem 0 1.1rem; font-size:1.55rem; letter-spacing:.5px; }
+    form { background:var(--panel); border:1px solid var(--border); padding:1.05rem 1.15rem 1.25rem; border-radius:14px; display:flex; flex-direction:column; gap:.95rem; }
+    fieldset { border:none; margin:0; padding:0; }
+    label { display:flex; flex-direction:column; gap:.45rem; font-size:.7rem; letter-spacing:.45px; text-transform:uppercase; font-weight:600; opacity:.85; }
+    span.req { color:#ff5252; margin-left:.25rem; font-weight:700; }
+    input[type=text], select, textarea { background:#121b24; color:var(--text); border:1px solid var(--border2); border-radius:8px; padding:.6rem .7rem; font:inherit; font-size:.78rem; resize:vertical; }
+    input[type=text]:focus, select:focus, textarea:focus { outline:2px solid var(--accent); outline-offset:1px; }
+    textarea { min-height:160px; }
+    button { align-self:flex-start; background:var(--accent); color:#111; border:1px solid #ffa733; padding:.65rem 1.25rem; font-size:.78rem; font-weight:600; border-radius:10px; cursor:pointer; letter-spacing:.6px; }
+    button:hover { filter:brightness(1.07); }
+    .note, .legal { font-size:.6rem; opacity:.62; letter-spacing:.4px; line-height:1.35; }
+    .note a { color:var(--accent); }
+    .msg, .report-msg { background:#223038; border:1px solid #33464f; padding:.6rem .8rem; border-radius:9px; font-size:.7rem; letter-spacing:.4px; margin:0 0 1rem; }
+    footer { margin-top:1.6rem; font-size:.55rem; opacity:.45; letter-spacing:.35px; }
+    .pair { display:flex; gap:.6rem; flex-wrap:wrap; }
+    .pair > label { flex:1 1 260px; }
+    @media (max-width:640px) { body { padding:1rem .9rem 2rem; } }
+  </style>
+</head>
+<body>
+  <h1>Report Content</h1>
+  <noscript><div class="msg">JavaScript is not required for this page. Form still works.</div></noscript>
+  <p class="note" style="margin:-.3rem 0 1.1rem">Use this form to notify moderators of abusive, infringing, or unsafe files. We store your IP with the report for abuse prevention. Do not submit false or automated reports.</p>
+  <form method="post" action="/report" autocomplete="off" novalidate>
+    <fieldset class="pair">
+      <label>File ID <span class="req" aria-hidden="true">*</span>
+        <input type="text" name="file" required maxlength="80" spellcheck="false" placeholder="Example: AbCdEf1234567890" aria-describedby="fileHelp" />
+      </label>
+      <label>Reason <span class="req" aria-hidden="true">*</span>
+        <select name="reason" required aria-describedby="reasonHelp">
+          <option value="spam">Spam / advertising</option>
+          <option value="malware">Malware</option>
+          <option value="copyright">Copyright</option>
+            <option value="personal">Personal data / privacy</option>
+          <option value="harassment">Harassment / hate</option>
+          <option value="other">Other</option>
+        </select>
+      </label>
+    </fieldset>
+    <div id="fileHelp" class="note">Paste just the file identifier (characters after /f/ in the link). Leave out any leading /f/.</div>
+    <div id="reasonHelp" class="note">Select the best match. Choose Other if none apply.</div>
+    <label style="margin-top:.4rem">Details (optional)
+      <textarea name="details" maxlength="1000" placeholder="Provide concise context (max 1000 chars). Do not include additional sensitive personal data."></textarea>
+    </label>
+    <button type="submit">Submit Report</button>
+    <p class="legal">You consent to processing of the submitted information (and your source IP) solely for moderation and legal compliance. Legitimate reports are reviewed manually. Duplicate or bad‑faith reports may be ignored. Submitting a report does not guarantee removal.</p>
+    <p class="note">Return to <a href="/">home</a>.</p>
+  </form>
+  <footer>juicebox // report interface</footer>
+  <script>
+  // Optional enhancement: auto-extract file id if user pastes a full link
+  (function(){
+    const input=document.querySelector('input[name=file]');
+    if(!input) return;
+    input.addEventListener('input',()=>{
+      const v=input.value.trim();
+      const m=v.match(/\/f\/?([A-Za-z0-9._-]{6,})$/); // capture trailing id
+      if(m) input.value=m[1];
+    });
+  })();
+  </script>
+</body>
+</html>
