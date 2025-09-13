@@ -81,11 +81,14 @@ where S: tower::Service<Request<Body>, Response = Response> + Clone + Send + 'st
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let limiter = self.limiter.clone();
         let mut inner = self.inner.clone();
-        // Always use the connecting (Cloudflare edge) IP; ignore CF-Connecting-IP to avoid storing real client IP.
-        let maybe_ci = req.extensions().get::<ConnectInfo<ClientAddr>>().cloned();
-        let ip = if let Some(ci) = maybe_ci { ci.0.ip().to_string() } else { "unknown".into() };
+        // Prefer CF-Connecting-IP then first X-Forwarded-For entry; fall back to edge IP only if headers missing/invalid.
+        let edge_ip = req.extensions().get::<ConnectInfo<ClientAddr>>().map(|c| c.0.ip());
+        let header_ip = {
+            let h = req.headers();
+            extract_client_ip(h, edge_ip)
+        };
         Box::pin(async move {
-            if !limiter.check(&ip).await {
+            if !limiter.check(&header_ip).await {
                 return Ok(json_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "slow down"));
             }
             inner.call(req).await
@@ -305,9 +308,21 @@ fn is_cloudflare_edge(remote: IpAddr) -> bool {
     CF_CIDRS.iter().any(|c| ip_in_cidr(remote, c))
 }
 
-fn real_client_ip(_headers: &HeaderMap, fallback: &ClientAddr) -> String {
-    // Return only the (Cloudflare edge) remote IP; do not derive end-user IP from headers.
-    fallback.ip().to_string()
+fn extract_client_ip(headers: &HeaderMap, fallback: Option<IpAddr>) -> String {
+    // 1. CF-Connecting-IP single IP
+    if let Some(val) = headers.get("CF-Connecting-IP").and_then(|v| v.to_str().ok()) {
+        if let Ok(ip) = val.trim().parse::<IpAddr>() { return ip.to_string(); }
+    }
+    // 2. X-Forwarded-For first comma-separated token
+    if let Some(val) = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok()) {
+        if let Some(first) = val.split(',').next() { if let Ok(ip) = first.trim().parse::<IpAddr>() { return ip.to_string(); } }
+    }
+    // 3. Fallback (edge/socket) IP
+    fallback.map(|ip| ip.to_string()).unwrap_or_else(|| "unknown".into())
+}
+
+fn real_client_ip(headers: &HeaderMap, fallback: &ClientAddr) -> String {
+    extract_client_ip(headers, Some(fallback.ip()))
 }
 
 #[axum::debug_handler]
