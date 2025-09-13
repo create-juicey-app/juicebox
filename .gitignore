@@ -1,3 +1,7 @@
 /target
 /files/*
 /files
+files
+files/*
+files/
+./files/

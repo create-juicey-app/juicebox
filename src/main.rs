@@ -401,6 +401,9 @@ async fn upload_handler(
     // After successful saves and before building final response, trigger integrity check
     if !saved_files.is_empty() { spawn_integrity_check(state.clone()); }
 
+    // Log upload details (edge IP) to terminal
+    println!("upload from {}: {} file(s): {}", client_ip, saved_files.len(), saved_files.join(","));
+
     // Map saved files to qualified URLs in production
     let out_files: Vec<String> = saved_files.iter().map(|f| qualify_path(&state, f)).collect();
     Json(UploadResponse { files: out_files }).into_response()
