@@ -238,7 +238,7 @@
             }
           }
           finished=true; resolve();
-        } else { if(!f.canceled){ f.container?.classList.add('error'); updateDeleteButton(f); } finished=true; resolve(); }
+        } else {{ f.container?.classList.add('error'); updateDeleteButton(f); } finished=true; resolve(); }
       };
       xhr.onerror=()=>{ if(finished) return; if(!f.canceled){ f.container?.classList.add('error'); updateDeleteButton(f); } finished=true; resolve(); };
       xhr.send(fd);
@@ -442,7 +442,7 @@
           // Recently uploaded list
           batches.forEach(batch=> batch.files.forEach(f=>{
             if(f.remoteName && f.expires && !f.expired){
-              if(f.total && !f.expired && (f.expires - now)/f.total <= 0.01 && (f.expires - now) > 0){ f.container?.classList.add('expiring'); }
+              if(f.total && (f.expires - now)/f.total <= 0.01 && (f.expires - now) > 0){ f.container?.classList.add('expiring'); }
               if(now >= f.expires){
                 f.expired = true;
                 if(f.container){
@@ -662,6 +662,7 @@
       function pushU32(arr,v){ arr.push(v & 0xFF, (v>>8)&0xFF, (v>>16)&0xFF, (v>>24)&0xFF); }
       function pushStr(arr,str){ for(let i=0;i<str.length;i++){ const c=str.charCodeAt(i); arr.push(c & 0xFF); } }
       async function buildZipFile(fileEntries, rootName){ // fileEntries: [{file, relPath}]
+        
         const localParts=[]; const centralParts=[]; let offset=0;
         for(const entry of fileEntries){ const file = entry.file; const data = new Uint8Array(await file.arrayBuffer()); const nameInZip = (rootName? rootName+'/' : '') + entry.relPath.replace(/\\/g,'/'); const {dosTime,dosDate} = msToDosDateTime(file.lastModified||Date.now()); const crc = crc32(data); const local=[]; // Local file header
           pushU32(local, 0x04034b50); pushU16(local, 20); pushU16(local, 0); pushU16(local, 0); pushU16(local, dosTime); pushU16(local, dosDate); pushU32(local, crc); pushU32(local, data.length); pushU32(local, data.length); pushU16(local, nameInZip.length); pushU16(local, 0); pushStr(local, nameInZip);
@@ -709,7 +710,7 @@
         files.forEach(f=> dt.items.add(f));
         inp.files = dt.files;
       }
-      function handleSelection(e, files){
+      function handleSelection(files){
         const current = activeBoxes();
         if(current >= MAX_BOXES){ showSnackLocal('Maximum of 10 files in queue'); return false; }
         if(!files || !files.length) return false; // nothing dragged
