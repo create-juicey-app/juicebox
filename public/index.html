@@ -40,6 +40,7 @@
     <p class="lead">Click, Upload, Share!</p>
   </header>
   <main id="mainContent" tabindex="-1">
+    <div id="ipDebug" style="font-family:monospace;font-size:.6rem;color:#ff4d4d;background:#2a0f12;padding:.35rem .5rem;border:1px solid #ff4d4d;border-radius:6px;margin:.4rem 0 .9rem;display:none">Resolving IP…</div>
     <!-- Removed empty aria-hidden anchor; skip link now targets actual section heading below -->
     <div class="panel"><section id="uploadSection">
       <h2 title="Upload new files below">Upload</h2>
@@ -68,6 +69,20 @@
   <footer title="Service tagline">juicebox // simple high-speed file host</footer>
   <div id="snackbar" role="status" aria-live="polite">Copied</div>
   <div id="liveStatus" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+  <script>
+  window.addEventListener('DOMContentLoaded',()=>{
+    const box=document.getElementById('ipDebug');
+    if(!box) return;
+    fetch('/debug-ip',{cache:'no-store'}).then(r=>r.json()).then(j=>{
+      box.style.display='block';
+      const parts=[];
+      if(j.cf && j.cf!=='-') parts.push('CF-Connecting-IP='+j.cf);
+      if(j.xff && j.xff!=='-') parts.push('XFF='+j.xff);
+      parts.push('edge='+j.edge);
+      box.textContent='DEBUG IP: '+parts.join(' | ');
+    }).catch(()=>{ box.style.display='block'; box.textContent='DEBUG IP: unavailable'; });
+  });
+  </script>
   <script src="/js/app.js" defer></script>
 </body>
 </html>

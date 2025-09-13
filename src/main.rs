@@ -492,8 +492,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/simple/upload", post(simple_upload))
         .route("/simple/delete", post(simple_delete))
         .route("/thumbnail", get(thumbnail_handler))
-        .route("/faq", get(faq_handler)) // new
-        .route("/terms", get(terms_handler)) // new
+        .route("/faq", get(faq_handler))
+        .route("/terms", get(terms_handler))
+        .route("/debug-ip", get(debug_ip_handler)) // new debug ip endpoint
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .route("/{*path}", get(file_handler));
@@ -863,4 +864,13 @@ async fn thumbnail_handler(State(state): State<AppState>, ConnectInfo(addr): Con
         Ok(bytes) => ([ (axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8") ], bytes).into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "cant read thumbnail").into_response(),
     }
+}
+
+// New debug IP handler
+async fn debug_ip_handler(ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap) -> Response {
+    let cf = headers.get("CF-Connecting-IP").and_then(|v| v.to_str().ok()).unwrap_or("-");
+    let xff = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok()).unwrap_or("-");
+    let edge = addr.ip().to_string();
+    let body = serde_json::json!({"cf":cf, "xff":xff, "edge":edge});
+    (StatusCode::OK, Json(body)).into_response()
 }
