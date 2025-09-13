@@ -40,8 +40,6 @@
     <p class="lead">Click, Upload, Share!</p>
   </header>
   <main id="mainContent" tabindex="-1">
-    <div id="ipDebug" style="font-family:monospace;font-size:.6rem;color:#ff4d4d;background:#2a0f12;padding:.35rem .5rem;border:1px solid #ff4d4d;border-radius:6px;margin:.4rem 0 .9rem;display:none">Resolving IP…</div>
-    <!-- Removed empty aria-hidden anchor; skip link now targets actual section heading below -->
     <div class="panel"><section id="uploadSection">
       <h2 title="Upload new files below">Upload</h2>
       <div class="ttl-row" style="display:flex;align-items:center;gap:.55rem;margin:.3rem 0 1rem;font-size:.62rem;letter-spacing:.4px;" title="Choose how long the uploaded files will be kept before automatic deletion">
@@ -66,21 +64,25 @@
       <p class="site-note" title="Owned files note">These are files linked to your IP, They persist across refresh until deleted.</p>
     </section></div>
   </main>
-  <footer title="Service tagline">juicebox // simple high-speed file host</footer>
-  <div id="snackbar" role="status" aria-live="polite">Copied</div>
-  <div id="liveStatus" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+  <footer title="Service tagline">juicebox // simple high-speed file host<br><span id="ipNote" style="display:block;font-size:.55rem;opacity:.45;margin-top:.4rem;letter-spacing:.3px"></span></footer>
   <script>
   window.addEventListener('DOMContentLoaded',()=>{
-    const box=document.getElementById('ipDebug');
-    if(!box) return;
+    const note=document.getElementById('ipNote');
+    if(!note) return;
     fetch('/debug-ip',{cache:'no-store'}).then(r=>r.json()).then(j=>{
-      box.style.display='block';
-      const parts=[];
-      if(j.cf && j.cf!=='-') parts.push('CF-Connecting-IP='+j.cf);
-      if(j.xff && j.xff!=='-') parts.push('XFF='+j.xff);
-      parts.push('edge='+j.edge);
-      box.textContent='DEBUG IP: '+parts.join(' | ');
-    }).catch(()=>{ box.style.display='block'; box.textContent='DEBUG IP: unavailable'; });
+      let text;
+      if(j.cf && j.cf !== '-') {
+        text = `Your ip is ${j.cf} btw.`;
+      } else if(j.xff && j.xff !== '-') {
+        const first = j.xff.split(',')[0].trim();
+        text = `Your ip is ${first} btw.`;
+      } else if(j.edge) {
+        text = `Your ip is ${j.edge} (edge!) btw.`;
+      } else {
+        text = 'Your ip is fucking weird btw.';
+      }
+      note.textContent = text;
+    }).catch(()=>{ note.textContent='Your ip is fucking weird btw.'; });
   });
   </script>
   <script src="/js/app.js" defer></script>
