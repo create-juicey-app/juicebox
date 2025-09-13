@@ -662,7 +662,7 @@
       function pushU32(arr,v){ arr.push(v & 0xFF, (v>>8)&0xFF, (v>>16)&0xFF, (v>>24)&0xFF); }
       function pushStr(arr,str){ for(let i=0;i<str.length;i++){ const c=str.charCodeAt(i); arr.push(c & 0xFF); } }
       async function buildZipFile(fileEntries, rootName){ // fileEntries: [{file, relPath}]
-        
+
         const localParts=[]; const centralParts=[]; let offset=0;
         for(const entry of fileEntries){ const file = entry.file; const data = new Uint8Array(await file.arrayBuffer()); const nameInZip = (rootName? rootName+'/' : '') + entry.relPath.replace(/\\/g,'/'); const {dosTime,dosDate} = msToDosDateTime(file.lastModified||Date.now()); const crc = crc32(data); const local=[]; // Local file header
           pushU32(local, 0x04034b50); pushU16(local, 20); pushU16(local, 0); pushU16(local, 0); pushU16(local, dosTime); pushU16(local, dosDate); pushU32(local, crc); pushU32(local, data.length); pushU32(local, data.length); pushU16(local, nameInZip.length); pushU16(local, 0); pushStr(local, nameInZip);
@@ -676,7 +676,7 @@
         const zipFile = new File([zipBlob], (rootName||'folder') + '.zip', {type:'application/zip', lastModified: Date.now()});
         return zipFile;
       }
-      async function traverseDirectoryEntry(dirEntry, rootName){ // returns File objects list wrapped in {file, relPath}
+      async function traverseDirectoryEntry(dirEntry){ // returns File objects list wrapped in {file, relPath}
         const out=[]; async function walk(entry, path){ if(entry.isFile){ await new Promise(res=> entry.file(f=>{ out.push({file:f, relPath: path + f.name}); res(); }, ()=>res())); } else if(entry.isDirectory){ const reader = entry.createReader(); async function readAll(){ await new Promise(resolve=>{ reader.readEntries(async entries=>{ if(!entries.length) return resolve(); for(const e of entries){ await walk(e, path + entry.name + '/'); } await readAll(); resolve(); }); }); } await readAll(); } }
         await walk(dirEntry, ''); return out;
       }
@@ -736,7 +736,7 @@
       // Capture phase to pre-filter before existing listeners (also handle folders)
       input.addEventListener('change', (e)=>{
         const list = Array.from(input.files||[]);
-        handleSelection(e, list);
+        handleSelection(list);
       }, true);
       if(dz){
         dz.addEventListener('drop', (e)=>{
@@ -749,7 +749,7 @@
             // Non-directory file objects (ignore ones representing directories).
             const regularFiles = Array.from(e.dataTransfer.files||[]);
             const combined = producedZips.concat(regularFiles);
-            if(!handleSelection(e, combined)) { dz.classList.remove('drag'); return; }
+            if(!handleSelection(combined)) { dz.classList.remove('drag'); return; }
             const evt = new Event('change', {bubbles:true});
             input.dispatchEvent(evt);
             // Ensure drag visual state cleared post processing
