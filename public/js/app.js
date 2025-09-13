@@ -681,7 +681,7 @@
         await walk(dirEntry, ''); return out;
       }
       async function packageDirectories(entries){ // entries: DataTransferItemEntry directories
-        const zips=[]; for(const dir of entries){ const name = dir.name || 'folder'; showSnackLocal('Packaging '+name+' ...', {error:false}); let files = await traverseDirectoryEntry(dir, name); if(!files.length){ showSnackLocal('Empty folder skipped: '+name, {error:false}); continue; } // size check
+        const zips=[]; for(const dir of entries){ const name = dir.name || 'folder'; showSnackLocal('Packaging '+name+' ...', {error:false}); let files = await traverseDirectoryEntry(dir); if(!files.length){ showSnackLocal('Empty folder skipped: '+name, {error:false}); continue; } // size check
             const totalSize = files.reduce((n,o)=> n + o.file.size, 0); if(totalSize > MAX_BYTES){ showSnackLocal('Folder too large (>500MB): '+name); continue; }
             // Build zip
 
