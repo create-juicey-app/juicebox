@@ -261,7 +261,8 @@
 
     setupUploadEvents();
     loadExisting();
-    document.addEventListener('paste', e=>{ if(e.clipboardData && e.clipboardData.files.length) addBatch(e.clipboardData.files); });
+    // Removed generic paste listener to avoid duplicate uploads; dedicated paste handler later re-dispatches change.
+    // document.addEventListener('paste', e=>{ if(e.clipboardData && e.clipboardData.files.length) addBatch(e.clipboardData.files); });
     refreshOwned(); setInterval(refreshOwned,15000); window.addEventListener('focus', refreshOwned);
 
     // Animation helper: squish & fade then remove
@@ -511,7 +512,7 @@
       // Show controls only for keyboard navigation (detect last input modality)
       let lastPointer = false;
       window.addEventListener('pointerdown',()=>{ lastPointer=true; });
-      window.addEventListener('keydown',e=>{ if(e.key !== 'Tab') return; lastPointer=false; });
+      window.addEventListener('keydown', e=>{ if(e.key !== 'Tab') return; lastPointer=false; });
       document.addEventListener('focusin',e=>{
         const wrap = e.target && e.target.closest && e.target.closest('.range-wrapper');
         if(wrap){ if(lastPointer){ wrap.classList.remove('keyboard-focus'); } else { wrap.classList.add('keyboard-focus'); } }
@@ -655,3 +656,117 @@
         window.addEventListener('drop', ()=> dz.classList.remove('drag'), true);
       }
     })();
+
+    // Clipboard paste support (Ctrl+V): paste images/files directly
+  (function(){
+    const fi = fileInput; const dz = dropZone;
+    if(!fi) return;
+    window.addEventListener('paste', e => {
+      const cd = e.clipboardData; if(!cd) return;
+      const files = cd.files; const items = cd.items;
+      const dt = new DataTransfer();
+      let added = 0;
+      if(files && files.length){
+        for(const f of files){ dt.items.add(f); added++; }
+      } else if(items && items.length){
+        for(const it of items){
+          if(it.kind === 'file'){
+            const f = it.getAsFile(); if(f){ dt.items.add(f); added++; }
+          }
+        }
+      }
+      if(added>0){
+        fi.files = dt.files;
+        fi.dispatchEvent(new Event('change', {bubbles:true}));
+        if(dz){ dz.classList.add('pasted'); setTimeout(()=>dz.classList.remove('pasted'), 1200); }
+      }
+    });
+  })();
+// Add 413 fallback + chunked upload support
+(function(){
+  if(typeof uploadOne === 'function'){
+    const _origUploadOne = uploadOne;
+    uploadOne = function(f,batch){
+      return new Promise(resolve=>{
+        _origUploadOne(f,batch).then(()=>{
+          // If already succeeded / failed / canceled, stop.
+          if(f.done || f.error || f.canceled) return resolve();
+          // Detect 413 from classic upload attempt
+            if(f.xhr && f.xhr.status === 413){
+              const hdr = f.xhr.getResponseHeader && f.xhr.getResponseHeader('X-File-Too-Large');
+              if(hdr === '1'){ // actual file too large for server policy
+                if(f.container) f.container.classList.add('error');
+                if(window.showSnack) window.showSnack('File exceeds server limit');
+                return resolve();
+              }
+              // Fallback: chunked upload
+              if(window.showSnack) window.showSnack('Retrying large file with chunked upload...');
+              chunkedUpload(f,batch).then(()=> resolve());
+              return;            
+            }
+          resolve();
+        });
+      });
+    };
+  }
+  function extractName(rel){
+    if(!rel) return rel;
+    const idx = rel.indexOf('/f/');
+    if(idx !== -1){ return rel.substring(idx+3).replace(/^\//,''); }
+    return rel.replace(/^f\//,'');
+  }
+  function finalizeSuccess(f,batch, ttlVal){
+    if(f.barSpan){
+      f.barSpan.style.width='100%';
+      requestAnimationFrame(()=>{ f.barSpan.classList.add('complete'); setTimeout(()=>{ if(f.bar && f.barSpan.classList.contains('complete')) f.bar.classList.add('divider'); },1000); });
+    }
+    const ttlSeconds = ttlCodeSeconds(ttlVal);
+    const exp = Math.floor(Date.now()/1000)+ttlSeconds;
+    ownedMeta.set(f.remoteName, {expires: exp, total: ttlSeconds});
+    f.done = true; updateDeleteButton(f);
+    if(f.remoteName){
+      const input = makeLinkInput('f/'+f.remoteName, !batch.files.some(x=>!x.done));
+      if(batch.files.length>1){ if(!batch.linksBox){ batch.linksBox=document.createElement('div'); batch.linksBox.className='links'; f.container.appendChild(batch.linksBox); } batch.linksBox.appendChild(input); }
+      else { const links=document.createElement('div'); links.className='links'; links.appendChild(input); f.container.appendChild(links); }
+    }
+  }
+  function chunkedUpload(f,batch){
+    const CHUNK_SIZE = 8*1024*1024; // 8MB
+    const ttlVal = getTTL();
+    const total = f.file.size;
+    const id = (crypto.randomUUID && crypto.randomUUID()) || (Date.now().toString(36)+Math.random().toString(36).slice(2,10));
+    const count = Math.ceil(total/CHUNK_SIZE);
+    let uploaded = 0;
+    function updateBar(){ if(f.barSpan){ const pct = (uploaded/total)*100; f.barSpan.style.width = pct.toFixed(2)+'%'; } }
+    return (async()=>{
+      for(let i=0;i<count;i++){
+        if(f.canceled) return; // stop if user canceled
+        const start=i*CHUNK_SIZE;
+        const end=Math.min(start+CHUNK_SIZE,total);
+        const blob=f.file.slice(start,end);
+        let resp;
+        try {
+          resp = await fetch('/upload/chunk',{
+            method:'POST',
+            headers:{
+              'X-Upload-Id': id,
+              'X-Filename': f.file.name,
+              'X-Chunk-Index': String(i),
+              'X-Chunk-Count': String(count),
+              'X-Total-Size': String(total),
+              'X-Ttl': ttlVal
+            },
+            body: blob
+          });
+        } catch { resp = null; }
+        if(!resp || !resp.ok){ if(f.container) f.container.classList.add('error'); return; }
+        uploaded = end; updateBar();
+        if(i === count-1){
+          let data=null; try{ data=await resp.json(); }catch{}
+          let rel = data && data.files && data.files[0];
+          if(rel){ f.remoteName = extractName(rel); finalizeSuccess(f,batch, ttlVal); }
+        }
+      }
+    })();
+  }
+})();

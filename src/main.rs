@@ -7,12 +7,11 @@ use axum::{
 };
 use sanitize_filename::sanitize;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
-use tokio::fs;
+use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use axum::extract::ConnectInfo;
 use std::net::SocketAddr as ClientAddr;
 use serde::{Serialize, Deserialize};
-use serde_json;
 use rand::{Rng, rng};
 use std::collections::HashMap;
 use tokio::sync::{RwLock, Semaphore};
@@ -500,6 +499,7 @@ async fn main() -> anyhow::Result<()> {
     let base_router = Router::new()
         .route("/", get(root_handler))
         .route("/upload", post(upload_handler))
+        .route("/upload/chunk", post(chunk_upload_handler))
         .route("/mine", get(list_handler))
         .route("/d/{file}", delete(delete_handler))
         .route("/f/{file}", get(fetch_file_handler))
@@ -888,4 +888,62 @@ async fn debug_ip_handler(ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: H
     let edge = addr.ip().to_string();
     let body = serde_json::json!({"cf":cf, "xff":xff, "edge":edge});
     (StatusCode::OK, Json(body)).into_response()
+}
+
+// === Chunked upload handler ===
+// New: X-Upload-Id: unique identifier for the upload session (UUID recommended)
+// New: X-Chunk-Index: 0-based index of the chunk (must be sent by client)
+// New: X-Chunk-Count: total number of chunks (must be sent by client)
+// New: X-Total-Size: total size of the file being uploaded (for validation)
+// New: X-Ttl: optional expiration TTL for the uploaded file (e.g. "3d")
+#[derive(Serialize)]
+struct PartialResponse { status: &'static str }
+
+async fn chunk_upload_handler(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    // Headers required: X-Upload-Id, X-Filename, X-Chunk-Index, X-Chunk-Count, X-Total-Size, X-Ttl
+    let client_ip = real_client_ip(&headers, &addr);
+    let upload_id = headers.get("X-Upload-Id").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let filename = headers.get("X-Filename").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let idx: u32 = headers.get("X-Chunk-Index").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok()).unwrap_or(u32::MAX);
+    let count: u32 = headers.get("X-Chunk-Count").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let total_size: u64 = headers.get("X-Total-Size").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let ttl_code = headers.get("X-Ttl").and_then(|v| v.to_str().ok()).unwrap_or("3d");
+
+    if upload_id.is_empty() || filename.is_empty() || count==0 || idx>=count { return json_error(StatusCode::BAD_REQUEST, "bad_chunk_meta", "missing headers"); }
+    if is_forbidden_extension(filename) { return json_error(StatusCode::BAD_REQUEST, "forbidden_type", "file type not allowed"); }
+    if total_size==0 || total_size > MAX_FILE_BYTES { return json_error(StatusCode::PAYLOAD_TOO_LARGE, "file_too_large", "file exceeds limit"); }
+
+    // Create chunk staging directory
+    let staging_dir = state.upload_dir.join(".chunks");
+    if let Err(_) = fs::create_dir_all(&staging_dir).await { return json_error(StatusCode::INTERNAL_SERVER_ERROR, "fs_error", "staging dir"); }
+    let staging_path = staging_dir.join(format!("{}.part", upload_id));
+
+    // Append this chunk
+    let mut file = match OpenOptions::new().create(true).append(true).open(&staging_path).await { Ok(f)=>f, Err(_)=> return json_error(StatusCode::INTERNAL_SERVER_ERROR, "fs_error", "open staging") };
+    if let Err(_) = file.write_all(&body).await { let _=fs::remove_file(&staging_path).await; return json_error(StatusCode::INTERNAL_SERVER_ERROR, "fs_error", "write staging"); }
+
+    // Validate size so far
+    if let Ok(meta) = fs::metadata(&staging_path).await { if meta.len() > total_size || meta.len() > MAX_FILE_BYTES { let _=fs::remove_file(&staging_path).await; return json_error(StatusCode::PAYLOAD_TOO_LARGE, "file_too_large", "file exceeds limit"); } }
+
+    if idx < count - 1 { // not final
+        return (StatusCode::OK, Json(PartialResponse{ status: "partial"})).into_response();
+    }
+
+    // Final chunk received: move to permanent storage name
+    let storage_name = make_storage_name(Some(filename));
+    let final_path = state.upload_dir.join(&storage_name);
+    if let Err(_) = fs::rename(&staging_path, &final_path).await { let _=fs::remove_file(&staging_path).await; return json_error(StatusCode::INTERNAL_SERVER_ERROR, "fs_error", "rename final"); }
+
+    // Record metadata
+    let expires = now_secs() + ttl_to_duration(ttl_code).as_secs();
+    { let mut owners = state.owners.write().await; owners.insert(storage_name.clone(), FileMeta { owner: client_ip, expires }); }
+    persist_owners(&state).await;
+
+    let out = qualify_path(&state, &format!("f/{}", storage_name));
+    Json(UploadResponse { files: vec![out] }).into_response()
 }
