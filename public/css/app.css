@@ -1,3 +1,8 @@
+/* basic placeholder css */
+:root { --accent:#ff8a00; --bg:#0f141b; --fg:#e8edf2; font-family: system-ui, sans-serif; }
+body { background:var(--bg); color:var(--fg); margin:0; font:14px/1.4 system-ui, sans-serif; }
+a { color: var(--accent); }
+
 :root { --bg:#0d1218; --panel:#1d2733; --panel-border:#2f3b4a; --accent:#ff9800; --accent-rgb:255 152 0; --text:#f2f6fb; --text-subtle:#b5c0cc; --text-muted:#9aa7b5; --danger:#e53935; --ok:#4caf50; --radius:14px; font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif; --e-out:cubic-bezier(.16,.8,.3,1); --e-in:cubic-bezier(.5,.05,.2,.99); }
     * { box-sizing:border-box; }
     body { margin:0; background:var(--bg); color:var(--text); min-height:100dvh; display:flex; flex-direction:column; }
@@ -276,3 +281,9 @@
     ul#fileList li.group-batch .file-entry .file-row { margin:0; }
     ul#fileList li.group-batch .file-entry .bar { margin-top:2px; }
     @media (max-width:640px){ ul#fileList li.group-batch { padding:0.9rem .85rem 1rem; } ul#fileList li.group-batch .file-entry { padding:.65rem .7rem .7rem; } }
+
+    ul#fileList li.group-batch.group-empty-start { position:relative; }
+    ul#fileList li.group-batch.group-empty-fade { transition:opacity .4s var(--e-out); opacity:0; }
+    ul#fileList li.group-batch .group-empty-msg { font-size:.6rem; letter-spacing:.4px; opacity:.75; padding:.4rem .25rem; text-align:center; }
+
+    .removal-clone { box-shadow:0 4px 22px -10px rgba(0,0,0,.7); border-radius:11px; overflow:hidden; }

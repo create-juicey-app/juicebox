@@ -2,7 +2,6 @@ use std::{collections::HashMap, sync::Arc, task::{Context, Poll}, future::Future
 use tokio::sync::RwLock;
 use axum::{http::Request, body::Body, response::Response};
 use tower::{Layer, Service};
-use hyper::Request as HyperRequest; // alias clarity
 use crate::util::{extract_client_ip, json_error};
 use axum::http::StatusCode;
 use std::net::SocketAddr as ClientAddr;
@@ -17,7 +16,7 @@ impl RateLimiterInner { pub fn new(capacity: u32, refill_per_second: u32) -> Sel
 }
 
 #[derive(Clone)] pub struct RateLimitLayer { limiter: RateLimiterInner }
-impl RateLimitLayer { pub fn new(capacity: u32, refill_per_second: u32) -> Self { Self { limiter: RateLimiterInner::new(capacity, refill_per_second) } } pub fn inner(&self) -> RateLimiterInner { self.limiter.clone() } }
+impl RateLimitLayer { pub fn new(capacity: u32, refill_per_second: u32) -> Self { Self { limiter: RateLimiterInner::new(capacity, refill_per_second) } } }
 impl<S> Layer<S> for RateLimitLayer { type Service = RateLimitService<S>; fn layer(&self, inner: S) -> Self::Service { RateLimitService { inner, limiter: self.limiter.clone() } } }
 
 #[derive(Clone)] pub struct RateLimitService<S> { inner: S, limiter: RateLimiterInner }
@@ -29,6 +28,9 @@ where S: Service<Request<Body>, Response = Response> + Clone + Send + 'static,
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> { self.inner.poll_ready(cx) }
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let limiter = self.limiter.clone(); let mut inner = self.inner.clone();
+        let path = req.uri().path().to_string();
+        // Bypass rate limiting for core static assets (css/js) so ban page renders correctly
+        if path.starts_with("/css/") || path.starts_with("/js/") { return Box::pin(async move { inner.call(req).await }); }
         let edge_ip = req.extensions().get::<ConnectInfo<ClientAddr>>().map(|c| c.0.ip());
         let header_ip = { let h = req.headers(); extract_client_ip(h, edge_ip) };
         Box::pin(async move { if !limiter.check(&header_ip).await { return Ok(json_error(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "slow down")); } inner.call(req).await })

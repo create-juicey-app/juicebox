@@ -1,15 +1,11 @@
-mod util;
-mod state;
-mod rate_limit;
-mod handlers;
-
 use std::{collections::HashMap, path::PathBuf, sync::Arc, net::SocketAddr, time::{Duration, SystemTime}};
 use tokio::fs; use tokio::sync::{RwLock, Semaphore};
 use axum::{Router, middleware};
-use crate::state::{AppState, FileMeta, ReportRecord, cleanup_expired};
-use crate::util::{ttl_to_duration, now_secs, PROD_HOST, UPLOAD_CONCURRENCY};
-use crate::handlers::{build_router, add_security_headers, enforce_host};
-use crate::rate_limit::build_rate_limiter;
+use juicebox::state::{AppState, FileMeta, ReportRecord, cleanup_expired};
+use juicebox::util::{ttl_to_duration, now_secs, PROD_HOST, UPLOAD_CONCURRENCY};
+use juicebox::handlers::{build_router, add_security_headers, enforce_host};
+use juicebox::handlers::ban_gate;
+use juicebox::rate_limit::build_rate_limiter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -20,10 +16,16 @@ async fn main() -> anyhow::Result<()> {
     let data_dir = Arc::new(PathBuf::from("./data"));
     let metadata_path = Arc::new(data_dir.join("file_owners.json"));
     let reports_path = Arc::new(data_dir.join("reports.json"));
+    let admin_sessions_path = Arc::new(data_dir.join("admin_sessions.json"));
+    let admin_key_path = Arc::new(data_dir.join("admin_key.json"));
+    let bans_path = Arc::new(data_dir.join("ip_bans.json"));
 
+    // try create data dir earlier (already done above)
     fs::create_dir_all(&*static_dir).await?;
     fs::create_dir_all(&*upload_dir).await?;
     fs::create_dir_all(&*data_dir).await?;
+    // ensure bans file presence
+    let _ = fs::OpenOptions::new().create(true).append(true).open(&*bans_path).await;
 
     let owners_map: HashMap<String, FileMeta> = match fs::read(&*metadata_path).await {
         Ok(data) => {
@@ -38,6 +40,8 @@ async fn main() -> anyhow::Result<()> {
         Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
         Err(_) => Vec::new(),
     };
+    let admin_sessions_map: HashMap<String,u64> = match fs::read(&*admin_sessions_path).await { Ok(bytes)=>serde_json::from_slice(&bytes).unwrap_or_default(), Err(_)=>HashMap::new() };
+    let bans_vec: Vec<juicebox::state::IpBan> = match fs::read(&*bans_path).await { Ok(bytes)=>serde_json::from_slice(&bytes).unwrap_or_default(), Err(_)=>Vec::new() };
 
     let initial_mtime = fs::metadata(&*metadata_path).await
         .ok()
@@ -54,7 +58,20 @@ async fn main() -> anyhow::Result<()> {
         last_meta_mtime: Arc::new(RwLock::new(initial_mtime)),
         reports_path,
         reports: Arc::new(RwLock::new(reports_vec)),
+        admin_sessions_path,
+        admin_sessions: Arc::new(RwLock::new(admin_sessions_map)),
+        // new field placeholders filled later
+        admin_key_path: admin_key_path.clone(),
+        admin_key: Arc::new(RwLock::new(String::new())),
+        bans_path: bans_path.clone(),
+        bans: Arc::new(RwLock::new(bans_vec)),
     };
+
+    // Load or create admin key after state so helper can use now_secs etc
+    let key_file = state.load_or_create_admin_key(&admin_key_path).await?;
+    {
+        let mut k = state.admin_key.write().await; *k = key_file.key.clone();
+    }
 
     // periodic cleanup task
     let cleanup_state = state.clone();
@@ -63,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
         loop {
             interval.tick().await;
             cleanup_expired(&cleanup_state).await;
+            cleanup_state.cleanup_admin_sessions().await;
         }
     });
 
@@ -70,12 +88,13 @@ async fn main() -> anyhow::Result<()> {
     let router = build_router(state.clone());
     let mut app: Router = router
         .layer(middleware::from_fn(add_security_headers))
+        .layer(middleware::from_fn_with_state(state.clone(), ban_gate))
         .layer(rate_layer)
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 512));
     if state.production { app = app.layer(middleware::from_fn(enforce_host)); }
 
     let addr: SocketAddr = ([0,0,0,0], 1200).into();
-    println!("listening on {addr} (prod host: {})", PROD_HOST);
+    println!("listening on {addr} (prod host: {}), admin key loaded (expires {})", PROD_HOST, key_file.expires);
     axum_server::bind(addr)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await?;

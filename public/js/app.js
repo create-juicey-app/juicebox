@@ -42,11 +42,16 @@
 
     // Added: generic snackbar helper alias expected by later code (now specialized for errors and shake)
     function showSnack(msg){
-      if(!snackbar) return;
-      snackbar.textContent = msg;
-      snackbar.classList.add('show','error');
+      let sb = document.getElementById('snackbar');
+      if(!sb){
+        sb = document.createElement('div');
+        sb.id='snackbar';
+        document.body.appendChild(sb);
+      }
+      sb.textContent = msg;
+      sb.classList.add('show','error');
       clearTimeout(showSnack._t);
-      showSnack._t = setTimeout(()=> snackbar.classList.remove('show','error'), 5000);
+      showSnack._t = setTimeout(()=> sb.classList.remove('show','error'), 5000);
       if(dropZone){ dropZone.classList.add('shake'); dropZone.addEventListener('animationend',()=> dropZone.classList.remove('shake'), {once:true}); }
       if(window._announce) window._announce(msg);
     }
@@ -61,9 +66,7 @@
       const headName = batch.groupLi.querySelector('.group-head .name');
       const remaining = batch.files.filter(f=> !f.removed).length;
       if(remaining <= 0){
-        if(!batch.groupLi.classList.contains('removing')){
-          animateRemove(batch.groupLi, ()=>{ batches = batches.filter(b=> b!==batch); });
-        }
+        markGroupEmpty(batch);
         return;
       }
       if(headName){ headName.textContent = remaining + ' file' + (remaining===1?'':'s'); }
@@ -134,10 +137,32 @@
 
     function updateDeleteButton(f){ if(!f.deleteBtn) return; if(f.deleting){ f.deleteBtn.disabled=true; f.deleteBtn.textContent='…'; f.deleteBtn.title='Deleting...'; f.deleteBtn.setAttribute('aria-label','Deleting file'); return; } if(!f.remoteName){ f.deleteBtn.textContent='x'; f.deleteBtn.disabled=false; f.deleteBtn.title='Remove (not uploaded)'; f.deleteBtn.setAttribute('aria-label','Remove file from queue'); } else { f.deleteBtn.textContent='❌'; f.deleteBtn.disabled=false; f.deleteBtn.title='Delete from server'; f.deleteBtn.setAttribute('aria-label','Delete file from server'); } }
 
+    // NEW: graceful empty-group removal (shows placeholder then fades)
+    function markGroupEmpty(batch){
+      if(!batch || !batch.groupLi || batch._emptying) return;
+      batch._emptying = true;
+      const li = batch.groupLi;
+      // Replace inner file list with an empty message (keep height for quick fade)
+      const filesWrap = li.querySelector('.group-files');
+      if(filesWrap){ filesWrap.innerHTML = '<div class="group-empty-msg" aria-live="polite">All files removed</div>'; }
+      li.classList.add('group-empty-start');
+      requestAnimationFrame(()=>{
+        li.classList.add('group-empty-fade');
+        li.addEventListener('transitionend', ()=>{
+          animateRemove(li, ()=>{ batches = batches.filter(b=> b!==batch); });
+        }, {once:true});
+      });
+    }
+
     // NEW helper: remove an entry from a grouped batch & clean up card if empty
     function removeGroupedEntry(batch, f){
-      f.removed = true; // mark first so upload loop skips
-      const finalize = ()=>{ batch.files = batch.files.filter(x=> !x.removed); if(!batch.files.length && batch.groupLi){ animateRemove(batch.groupLi, ()=>{ batches = batches.filter(b=> b!==batch); }); } else { updateGroupHeader(batch); } };
+      f.removed = true;
+      const finalize = ()=>{
+        batch.files = batch.files.filter(x=> !x.removed);
+        if(!batch.files.length){
+          markGroupEmpty(batch);
+        } else { updateGroupHeader(batch); }
+      };
       if(f.container){ f.container.classList.add('removing'); animateRemove(f.container, finalize); }
       else finalize();
     }
@@ -368,9 +393,65 @@
     // document.addEventListener('paste', e=>{ if(e.clipboardData && e.clipboardData.files.length) addBatch(e.clipboardData.files); });
     refreshOwned(); setInterval(refreshOwned,15000); window.addEventListener('focus', refreshOwned);
 
-    // Animation helper: squish & fade then remove
+    // Animation helper: squish & fade then remove (updated for smooth sibling reposition)
     function animateRemove(el, cb){
-      if(!el) return cb&&cb();
+      if(!el) { cb&&cb(); return; }
+      const parent = el.parentElement;
+      const enableFLIP = parent && (parent.id === 'fileList' || parent.classList.contains('owned-grid') || parent.classList.contains('group-files') || parent.closest && (parent.closest('#fileList') || parent.closest('.owned-grid')));
+      if(enableFLIP){
+        // Capture initial sibling positions (excluding the element being removed)
+        const siblings = Array.from(parent.children).filter(c=> c!==el);
+        const first = siblings.map(ch => ({ el: ch, rect: ch.getBoundingClientRect() }));
+        const rect = el.getBoundingClientRect();
+        // Clone overlay to animate the removed element out of flow
+        const clone = el.cloneNode(true);
+        clone.classList.add('removal-clone');
+        Object.assign(clone.style, {
+          position:'fixed',
+          top: rect.top + 'px',
+          left: rect.left + 'px',
+          width: rect.width + 'px',
+          height: rect.height + 'px',
+          margin: 0,
+          boxSizing: 'border-box',
+          pointerEvents: 'none',
+          zIndex: 999,
+          transition: 'transform .45s var(--e-out), opacity .45s var(--e-out)'
+        });
+        document.body.appendChild(clone);
+        // Remove original immediately (no jump thanks to FLIP below)
+        try { el.remove(); } catch {}
+        // Force reflow before measuring new positions
+        // eslint-disable-next-line no-unused-expressions
+        parent.offsetHeight;
+        const last = siblings.map(ch => ({ el: ch, rect: ch.getBoundingClientRect() }));
+        // Apply FLIP transforms
+        last.forEach(item => {
+          const firstMatch = first.find(f=> f.el === item.el);
+          if(!firstMatch) return;
+            const dx = firstMatch.rect.left - item.rect.left;
+            const dy = firstMatch.rect.top - item.rect.top;
+          if(dx || dy){
+            item.el.style.transition = 'none';
+            item.el.style.transform = `translate(${dx}px,${dy}px)`;
+            // Force style
+            item.el.getBoundingClientRect();
+            requestAnimationFrame(()=>{
+              item.el.style.transition = 'transform .45s var(--e-out)';
+              item.el.style.transform = '';
+              item.el.addEventListener('transitionend', ()=>{ item.el.style.transition=''; }, {once:true});
+            });
+          }
+        });
+        // Animate the clone fading/shrinking out
+        requestAnimationFrame(()=>{
+          clone.style.opacity = '0';
+          clone.style.transform = 'scale(.92)';
+          clone.addEventListener('transitionend', ()=>{ try{ clone.remove(); }catch{} cb&&cb(); }, {once:true});
+        });
+        return;
+      }
+      // Fallback (original height-collapse animation)
       const rect = el.getBoundingClientRect();
       const cs = getComputedStyle(el);
       el.style.setProperty('--orig-h', rect.height + 'px');
@@ -882,4 +963,94 @@
       }
     })();
   }
+})();
+(function enforceActiveLimit(){
+  const MAX_ACTIVE = 5;
+  const dz = document.getElementById('dropZone');
+  if(dz && !document.getElementById('activeLimitNote')){
+    const note=document.createElement('div');
+    note.id='activeLimitNote';
+    note.className='muted';
+    note.style.fontSize='.57rem';
+    note.style.letterSpacing='.4px';
+    note.textContent='Limit: max 5 active files per IP (delete one to free a slot).';
+    dz.insertAdjacentElement('afterend', note);
+  }
+  const origUploadOne = uploadOne;
+  uploadOne = function(f,batch){
+    return origUploadOne(f,batch).then(()=>{
+      if(f && f.xhr && f.xhr.response && typeof f.xhr.response==='object'){
+        const r=f.xhr.response; if(r && typeof r.remaining==='number') window.__ACTIVE_SLOTS_REMAINING = r.remaining;
+      }
+    });
+  };
+  const origAddBatch = addBatch;
+  addBatch = function(fileList){
+    const filesArr = Array.from(fileList);
+    let inFlight=0; batches.forEach(b=> b.files.forEach(f=>{ if(!f.remoteName && !f.removed) inFlight++; }));
+    const totalOwned = (window.ownedCache?window.ownedCache.size:0);
+    const activeProjected = totalOwned + inFlight;
+    const slotsFromProjection = MAX_ACTIVE - activeProjected;
+    const knownRemaining = typeof window.__ACTIVE_SLOTS_REMAINING==='number' ? window.__ACTIVE_SLOTS_REMAINING : null;
+    const available = knownRemaining!==null ? Math.min(knownRemaining, slotsFromProjection) : slotsFromProjection;
+    function shake(msg){ showSnack(msg); if(dz){ dz.classList.add('shake'); dz.addEventListener('animationend',()=> dz.classList.remove('shake'), {once:true}); } }
+    if(available <= 0){ shake('Limit 5: no free slots. Delete a file first.'); return; }
+    if(filesArr.length > available){
+      if(filesArr.length > 1){ shake('Group needs '+filesArr.length+' slots; only '+available+' free. Delete files to upload this group.'); }
+      else { shake('Need 1 free slot; none available.'); }
+      return; // atomic: reject entire selection
+    }
+    return origAddBatch(filesArr);
+  };
+})();
+(function patchUploadResponseHandling(){
+  // Enhance existing xhr.onload inside uploadOne via monkey patch if not already handled
+  if(typeof uploadOne === 'function'){
+    const orig = uploadOne;
+    uploadOne = function(f,batch){
+      return orig(f,batch).then(()=>{
+        if(f && f.xhr && f.xhr.response){
+          const resp=f.xhr.response;
+            if(resp && resp.truncated){ showSnack('Some files skipped: active file cap (5)'); }
+            if(typeof resp.remaining==='number'){ window.__ACTIVE_SLOTS_REMAINING = resp.remaining; }
+        }
+      });
+    };
+  }
+})();
+(function activeSlotsAfterDelete(){
+  const MAX_ACTIVE = 5;
+  function recompute(){
+    try {
+      const owned = (window.ownedCache && window.ownedCache.size) ? window.ownedCache.size : 0;
+      window.__ACTIVE_SLOTS_REMAINING = Math.max(0, MAX_ACTIVE - owned);
+    } catch {}
+  }
+  window.recomputeActiveSlots = recompute;
+  if(!window.__fetchPatchedForSlots){
+    window.__fetchPatchedForSlots = true;
+    const origFetch = window.fetch.bind(window);
+    window.fetch = function(input, init){
+      const isDel = typeof input === 'string' && input.startsWith('/d/');
+      const m = (init && init.method) || 'GET';
+      if(isDel && m === 'DELETE'){
+        const fname = decodeURIComponent(input.substring(3));
+        return origFetch(input, init).then(r=>{
+          if(r.ok){
+            if(window.ownedCache && window.ownedCache.delete(fname)){}
+            recompute();
+            // also update UI note if present
+            const note=document.getElementById('activeLimitNote');
+            if(note && typeof window.__ACTIVE_SLOTS_REMAINING==='number'){
+              note.textContent = 'Limit: max 5 active files per IP (slots left '+window.__ACTIVE_SLOTS_REMAINING+').';
+            }
+          }
+          return r;
+        });
+      }
+      return origFetch(input, init);
+    };
+  }
+  // Initial recompute after owned list load cycle
+  setTimeout(recompute, 1500);
 })();

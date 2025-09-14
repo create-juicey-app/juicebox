@@ -1,6 +1,6 @@
 use axum::{http::{StatusCode, HeaderMap}, response::{IntoResponse, Response}, Json};
 use serde::{Serialize};
-use std::{path::PathBuf, time::{SystemTime, UNIX_EPOCH, Duration}, net::IpAddr};
+use std::{time::{SystemTime, UNIX_EPOCH, Duration}, net::IpAddr};
 use sanitize_filename::sanitize;
 use rand::{Rng, rng};
 use crate::state::AppState;
@@ -77,3 +77,22 @@ pub fn extract_client_ip(headers: &HeaderMap, fallback: Option<IpAddr>) -> Strin
 }
 
 pub fn real_client_ip(headers: &HeaderMap, fallback: &std::net::SocketAddr) -> String { extract_client_ip(headers, Some(fallback.ip())) }
+
+// new: max simultaneous active files per IP
+pub const MAX_ACTIVE_FILES_PER_IP: usize = 5;
+
+// admin session ttl (seconds)
+pub const ADMIN_SESSION_TTL: u64 = 24 * 3600;
+
+// admin key ttl (seconds) - duration before rotating the underlying master key used at /auth
+pub const ADMIN_KEY_TTL: u64 = 30 * 24 * 3600; // 30 days
+
+pub fn get_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    let cookie_header = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    for part in cookie_header.split(';') {
+        let mut kv = part.trim().splitn(2, '=');
+        let k = kv.next()?.trim();
+        if k == name { return kv.next().map(|v| v.trim().to_string()); }
+    }
+    None
+}
