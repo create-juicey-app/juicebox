@@ -11,7 +11,8 @@
 <body>
   <div class="wrap">
     <h1>Ban Management</h1>
-    <form method="post" action="/ban" class="inline">
+    <!-- Updated action to /admin/ban to match server routes -->
+    <form method="post" action="/admin/ban" class="inline">
       <input type="text" name="ip" placeholder="IP address" required aria-label="IP address" />
       <input type="text" name="reason" placeholder="Reason (optional)" aria-label="Reason" />
       <button type="submit">Add Ban</button>
