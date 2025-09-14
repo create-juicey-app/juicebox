@@ -973,7 +973,6 @@
     note.className='muted';
     note.style.fontSize='.57rem';
     note.style.letterSpacing='.4px';
-    note.textContent='Limit: max 5 active files per IP (delete one to free a slot).';
     dz.insertAdjacentElement('afterend', note);
   }
   const origUploadOne = uploadOne;
