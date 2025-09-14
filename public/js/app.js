@@ -245,7 +245,9 @@
           if(rel){ f.remoteName = rel.startsWith('f/')? rel.slice(2): rel; }
           const ttlSeconds = ttlCodeSeconds(ttlVal);
           const exp = Math.floor(Date.now()/1000) + ttlSeconds;
-          ownedMeta.set(f.remoteName, {expires: exp, total: ttlSeconds});
+          ownedMeta.set(f.remoteName, {expires: exp, total: ttlSeconds, original: f.file && f.file.name ? f.file.name : ''});
+          // Explicitly add to owned list (in case makeLinkInput side-effect missed)
+          if(f.remoteName) { try { addOwned(f.remoteName); } catch(_){} }
           f.done=true; updateDeleteButton(f);
           if(f.remoteName){
             const input = makeLinkInput('f/'+f.remoteName, !batch.files.some(x=>!x.done));
@@ -272,10 +274,12 @@
 
     function autoUpload(){ uploadSequential(); }
 
-    async function loadExisting(){ try { const r=await fetch('/mine'); if(!r.ok) return; const data=await r.json(); if(data && Array.isArray(data.files)){ data.files.forEach(f=> addOwned(f.replace(/^f\//,''))); if(Array.isArray(data.metas)){ data.metas.forEach(m=>{ const name=m.file.replace(/^f\//,''); ownedMeta.set(name, {expires: m.expires}); }); } } } catch {} }
+    async function loadExisting(){ try { const r=await fetch('/mine'); if(!r.ok) return; const data=await r.json(); if(data && Array.isArray(data.files)){ data.files.forEach(f=> addOwned(f.replace(/^f\//,''))); if(Array.isArray(data.metas)){ data.metas.forEach(m=>{ const name=m.file.replace(/^f\//,''); ownedMeta.set(name, {expires: m.expires, original: (m.original||'')}); }); } } } catch {} }
     let ownedInitialRender = false;
     function renderOwned(names){
       if(!ownedList || !ownedPanel) return;
+      // helper to escape html for original filenames
+      function escapeHtml(s){ return (s||'').replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
       const want = new Set(names);
       // Existing chips map
       const existing = new Map();
@@ -302,14 +306,17 @@
         const remain = exp - nowSec;
         function fmtRemain(sec){ if(exp<0) return '...'; if(sec<=0) return 'expired'; const units=[['d',86400],['h',3600],['m',60],['s',1]]; let rem=sec; let out=[]; for(const [u,v] of units){ if(out.length>=2) break; if(rem>=v){ const val=Math.floor(rem/v); out.push(val+u); rem%=v; } } return out.length?out.join(' '):'secs'; }
         if(!chip){
+          console.log(meta)
+          console.log(meta.original)
           chip=document.createElement('div');
           chip.className='owned-chip';
           chip.dataset.name=n;
-            if(exp>=0) chip.dataset.exp=exp;
-            if(total) chip.dataset.total=total;
-          // Only animate on additions after initial render
+          if(exp>=0) chip.dataset.exp=exp;
+          if(total) chip.dataset.total=total;
+          const displayName = (meta && meta.original && meta.original.trim()) ? meta.original.trim() : n;
+          const titleFull = displayName===n ? n : displayName+" ("+n+")";
           if(ownedInitialRender) { chip.classList.add('adding'); requestAnimationFrame(()=> chip.classList.add('in')); }
-          chip.innerHTML=`<div class="top"><div class="name" title="${n}">${n}</div><div class="actions"></div></div><div class="ttl" style="font-size:.5rem;opacity:.55;letter-spacing:.4px;">${fmtRemain(remain)}</div>`;
+          chip.innerHTML=`<div class="top"><div class="name" title="${escapeHtml(titleFull)}">${escapeHtml(displayName)}</div><div class="actions"></div></div><div class="ttl" style="font-size:.5rem;opacity:.55;letter-spacing:.4px;">${fmtRemain(remain)}</div>`;
           const actions=chip.querySelector('.actions');
           const copyBtn=document.createElement('button'); copyBtn.className='small'; copyBtn.textContent='📋'; copyBtn.setAttribute('title','Copy direct link'); copyBtn.setAttribute('aria-label','Copy file link to clipboard'); copyBtn.addEventListener('click',()=>{ copyToClipboard(location.origin+'/f/'+n).then(()=>flashCopied()); }); actions.appendChild(copyBtn);
           const delBtn=document.createElement('button'); delBtn.className='small'; delBtn.textContent='❌'; delBtn.setAttribute('title','Delete file from server'); delBtn.setAttribute('aria-label','Delete file from server'); delBtn.addEventListener('click',()=>{ fetch('/d/'+encodeURIComponent(n), {method:'DELETE'}).then(r=>{ if(r.ok){ ownedCache.delete(n); ownedMeta.delete(n); removeFromUploads(n); renderOwned([...ownedCache]); } }); }); actions.appendChild(delBtn);
@@ -326,6 +333,11 @@
         }
         if(total && remain>0 && remain/total <= 0.01){ chip.classList.add('expiring'); } else { chip.classList.remove('expiring'); }
       });
+      // New: set UL title to list of original (or fallback) filenames
+      try {
+        const titleList = names.map(n=>{ const meta=ownedMeta.get(n); return (meta && meta.original && meta.original.trim()) ? meta.original.trim() : n; });
+        if(titleList.length) ownedList.title = 'Your files: '+ titleList.join(', '); else ownedList.title = 'List of files you have uploaded';
+      } catch {}
       ownedInitialRender = true;
     }
     function hideOwnedPanel(){
@@ -350,7 +362,7 @@
         }
       }
     }
-    async function refreshOwned(){ try { const r=await fetch('/mine',{cache:'no-store'}); if(!r.ok) return; const data=await r.json(); if(data && Array.isArray(data.files)){ const set=new Set(data.files.map(f=>f.replace(/^f\//,''))); ownedCache=set; if(Array.isArray(data.metas)){ ownedMeta.clear(); data.metas.forEach(m=> ownedMeta.set(m.file.replace(/^f\//,''), {expires: m.expires})); } renderOwned([...ownedCache]); } } catch{} }
+    async function refreshOwned(){ try { const r=await fetch('/mine',{cache:'no-store'}); if(!r.ok) return; const data=await r.json(); if(data && Array.isArray(data.files)){ const set=new Set(data.files.map(f=>f.replace(/^f\//,''))); ownedCache=set; if(Array.isArray(data.metas)){ ownedMeta.clear(); data.metas.forEach(m=> ownedMeta.set(m.file.replace(/^f\//,''), {expires: m.expires, original: (m.original||'')})); } renderOwned([...ownedCache]); } } catch{} }
     function addOwned(remoteName){ if(!remoteName) return; if(!ownedCache.has(remoteName)){ ownedCache.add(remoteName); renderOwned([...ownedCache]); } }
 
     // New helper: remove a file (by remoteName) from current upload batches & UI

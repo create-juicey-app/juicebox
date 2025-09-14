@@ -12,7 +12,7 @@ use tower_http::services::ServeDir;
 // Response structs
 #[derive(Serialize, Deserialize)] pub struct UploadResponse { pub files: Vec<String>, pub truncated: bool, pub remaining: usize }
 #[derive(Serialize)] pub struct ListResponse { pub files: Vec<String>, pub metas: Vec<FileMetaEntry>, pub reconcile: Option<ReconcileReport> }
-#[derive(Serialize)] pub struct FileMetaEntry { pub file: String, pub expires: u64 }
+#[derive(Serialize)] pub struct FileMetaEntry { pub file: String, pub expires: u64, #[serde(skip_serializing_if="String::is_empty")] pub original: String }
 
 #[derive(Deserialize)] pub struct ReportForm { pub file: String, pub reason: String, pub details: Option<String> }
 #[derive(Deserialize)] pub struct SimpleQuery { pub m: Option<String> }
@@ -80,7 +80,7 @@ pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): Co
         }
         let path = state.upload_dir.join(&storage_name);
         if fs::write(&path, data).await.is_ok() {
-            let meta = FileMeta { owner: ip.clone(), expires };
+            let meta = FileMeta { owner: ip.clone(), expires, original: original_name.clone().unwrap_or_default() };
             state.owners.write().await.insert(storage_name.clone(), meta);
             saved_files.push(storage_name);
         }
@@ -98,7 +98,14 @@ pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): Co
 #[axum::debug_handler]
 pub async fn list_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap) -> Response {
     if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
-    cleanup_expired(&state).await; let client_ip=real_client_ip(&headers, &addr); let reconcile_report=verify_user_entries_with_report(&state, &client_ip).await; cleanup_expired(&state).await; crate::state::check_storage_integrity(&state).await; let owners=state.owners.read().await; let mut files: Vec<(String,u64)>=owners.iter().filter_map(|(f,m)| if m.owner==client_ip { Some((f.clone(), m.expires)) } else { None }).collect(); files.sort_by(|a,b| a.0.cmp(&b.0)); let only_names: Vec<String>=files.iter().map(|(n,_)| qualify_path(&state, &format!("f/{}", n))).collect(); let metas: Vec<FileMetaEntry>=files.into_iter().map(|(n,e)| FileMetaEntry{ file: qualify_path(&state, &format!("f/{}", n)), expires: e }).collect(); let body=Json(ListResponse{ files: only_names, metas, reconcile: reconcile_report }); let mut resp=body.into_response(); resp.headers_mut().insert(CACHE_CONTROL, "no-store".parse().unwrap()); resp }
+    cleanup_expired(&state).await; let client_ip=real_client_ip(&headers, &addr); let reconcile_report=verify_user_entries_with_report(&state, &client_ip).await; cleanup_expired(&state).await; crate::state::check_storage_integrity(&state).await;
+    let owners=state.owners.read().await;
+    let mut files: Vec<(String,u64,String)>=owners.iter().filter_map(|(f,m)| if m.owner==client_ip { Some((f.clone(), m.expires, m.original.clone())) } else { None }).collect();
+    files.sort_by(|a,b| a.0.cmp(&b.0));
+    let only_names: Vec<String>=files.iter().map(|(n,_,_)| qualify_path(&state, &format!("f/{}", n))).collect();
+    let metas: Vec<FileMetaEntry>=files.into_iter().map(|(n,e,o)| FileMetaEntry{ file: qualify_path(&state, &format!("f/{}", n)), expires: e, original: o }).collect();
+    let body=Json(ListResponse{ files: only_names, metas, reconcile: reconcile_report });
+    let mut resp=body.into_response(); resp.headers_mut().insert(CACHE_CONTROL, "no-store".parse().unwrap()); resp }
 
 #[axum::debug_handler]
 pub async fn fetch_file_handler(State(state): State<AppState>, Path(file): Path<String>) -> Response {
@@ -176,7 +183,8 @@ pub async fn simple_list_handler(State(state): State<AppState>, ConnectInfo(addr
         if meta.owner == ip {
             let rem = if meta.expires > now { meta.expires - now } else { 0 };
             let ttl_disp = if rem >= 86400 { format!("{}d", rem/86400) } else if rem >= 3600 { format!("{}h", rem/3600) } else if rem >= 60 { format!("{}m", rem/60) } else { format!("{}s", rem) };
-            rows.push_str(&format!("<tr><td><a href=\"/f/{f}\" rel=noopener>{f}</a></td><td>{ttl}</td><td><form method=post action=/simple_delete style=\"margin:0\"><input type=hidden name=f value=\"{f}\" /><button type=submit>Delete</button></form></td></tr>", f=file, ttl=ttl_disp));
+            let display = if meta.original.trim().is_empty() { file } else { &meta.original };
+            rows.push_str(&format!("<tr><td><a href=\"/f/{stored}\" rel=noopener title=\"{stored}\">{disp}</a></td><td>{ttl}</td><td><form method=post action=/simple_delete style=\"margin:0\"><input type=hidden name=f value=\"{stored}\" /><button type=submit>Delete</button></form></td></tr>", stored=file, disp=htmlescape::encode_minimal(display), ttl=ttl_disp));
         }
     }
     let message_html = if let Some(m)=query.m { if !m.is_empty() { format!("<p style=\"color:#ff9800;font-size:.7rem;\">{}</p>", htmlescape::encode_minimal(&m)) } else { String::new() } } else { String::new() };
@@ -188,8 +196,7 @@ pub async fn simple_list_handler(State(state): State<AppState>, ConnectInfo(addr
             ([(axum::http::header::CONTENT_TYPE, "text/html")], body).into_response()
         },
         Err(_) => {
-            // fallback minimal
-            let body = format!("<html><body><h1>Your Files</h1>{}<ul>{}</ul><form method=post action=/simple_delete><input name=f><button type=submit>Delete</button></form></body></html>", message_html, owners.iter().filter(|(_,m)| m.owner==ip).map(|(f,_)| format!("<li>{}</li>", f)).collect::<String>());
+            let body = format!("<html><body><h1>Your Files</h1>{}<ul>{}</ul><form method=post action=/simple_delete><input name=f><button type=submit>Delete</button></form></body></html>", message_html, owners.iter().filter(|(_,m)| m.owner==ip).map(|(f,m)| format!("<li>{}</li>", if m.original.trim().is_empty(){ f } else { &m.original })).collect::<String>());
             ([(axum::http::header::CONTENT_TYPE, "text/html")], body).into_response()
         }
     }
@@ -281,7 +288,7 @@ pub async fn auth_post_handler(State(state): State<AppState>, _headers: HeaderMa
     let current_key = { state.admin_key.read().await.clone() };
     if current_key.is_empty() { return json_error(StatusCode::INTERNAL_SERVER_ERROR, "no_key", "admin key unavailable"); }
     if subtle_equals(submitted.as_bytes(), current_key.as_bytes()) {
-        let token = crate::util::random_name(32);
+        let token = crate::util::new_id();
         state.create_admin_session(token.clone()).await;
         state.persist_admin_sessions().await;
         let cookie = format!("adm={}; Path=/; HttpOnly; Max-Age={}; SameSite=Strict", token, ADMIN_SESSION_TTL);

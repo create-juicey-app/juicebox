@@ -2,11 +2,11 @@ use axum::{http::{StatusCode, HeaderMap}, response::{IntoResponse, Response}, Js
 use serde::{Serialize};
 use std::{time::{SystemTime, UNIX_EPOCH, Duration}, net::IpAddr};
 use sanitize_filename::sanitize;
-use rand::{Rng, rng};
+// removed rand; using cuid now
 use crate::state::AppState;
 
 // Public constants
-pub const RANDOM_NAME_LEN: usize = 18;
+// RANDOM_NAME_LEN removed (no longer needed with CUID)
 pub const UPLOAD_CONCURRENCY: usize = 8;
 pub const MAX_FILE_BYTES: u64 = 500 * 1024 * 1024; // 500MB
 pub const PROD_HOST: &str = "box.juicey.dev";
@@ -21,14 +21,8 @@ pub fn json_error(status: StatusCode, code: &'static str, message: &'static str)
     (status, body).into_response()
 }
 
-pub fn random_name(len: usize) -> String {
-    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let mut rng = rng();
-    (0..len).map(|_| {
-        let idx = rng.random_range(0..CHARSET.len());
-        CHARSET[idx] as char
-    }).collect()
-}
+// New ID generator using CUID v2 (fast, shorter) fallback to v1 on error
+pub fn new_id() -> String { cuid::cuid2() }
 
 pub fn is_forbidden_extension(name: &str) -> bool {
     if let Some(dot) = name.rfind('.') { if dot > 0 { let ext = &name[dot+1..].to_ascii_lowercase(); return FORBIDDEN_EXTENSIONS.contains(&ext.as_str()); } }
@@ -38,9 +32,9 @@ pub fn is_forbidden_extension(name: &str) -> bool {
 pub fn make_storage_name(original: Option<&str>) -> String {
     if let Some(orig) = original {
         let sanitized = sanitize(orig);
-        if let Some(dot) = sanitized.rfind('.') { if dot > 0 { let ext = &sanitized[dot+1..]; if !ext.is_empty() && ext.len() <= 12 && ext.chars().all(|c| c.is_ascii_alphanumeric()) { return format!("{}.{}", random_name(RANDOM_NAME_LEN), ext); } } }
+        if let Some(dot) = sanitized.rfind('.') { if dot > 0 { let ext = &sanitized[dot+1..]; if !ext.is_empty() && ext.len() <= 12 && ext.chars().all(|c| c.is_ascii_alphanumeric()) { return format!("{}.{ext}", new_id()); } } }
     }
-    random_name(RANDOM_NAME_LEN)
+    new_id()
 }
 
 pub fn ttl_to_duration(code: &str) -> Duration {
