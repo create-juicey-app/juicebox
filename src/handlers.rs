@@ -20,6 +20,8 @@ use tower_http::services::ServeDir;
 #[derive(Deserialize)] pub struct AdminAuthForm { pub key: String }
 #[derive(Deserialize)] pub struct BanForm { pub ip: String, pub reason: Option<String> }
 #[derive(Deserialize)] pub struct UnbanForm { pub ip: String }
+#[derive(Deserialize)] pub struct AdminFileDeleteForm { pub file: String }
+#[derive(Deserialize)] pub struct AdminReportDeleteForm { pub idx: usize }
 
 // Upload handler
 #[axum::debug_handler]
@@ -320,6 +322,62 @@ pub async fn ban_gate(State(state): State<AppState>, ConnectInfo(addr): ConnectI
     (StatusCode::FORBIDDEN, [(axum::http::header::CONTENT_TYPE, "text/html")], fallback).into_response()
 }
 
+pub async fn admin_files_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Some(tok)=get_cookie(&headers, "adm") { if !state.is_admin(&tok).await { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); }
+    // Build table rows (file, owner, expires human, size)
+    let owners = state.owners.read().await.clone();
+    let mut rows = String::new();
+    let now = now_secs();
+    for (file, meta) in owners.iter() {
+        let path = state.upload_dir.join(file);
+        let size = match fs::metadata(&path).await { Ok(md)=> md.len(), Err(_)=>0 };
+        let remain = if meta.expires>now { meta.expires - now } else { 0 };
+        let human = if remain >= 86400 { format!("{}d", remain/86400) } else if remain >= 3600 { format!("{}h", remain/3600) } else if remain >= 60 { format!("{}m", remain/60) } else { format!("{}s", remain) };
+        rows.push_str(&format!("<tr><td><a href=\"/f/{f}\" target=_blank rel=noopener>{f}</a></td><td>{o}</td><td data-exp=\"{exp}\">{human}</td><td>{size}</td><td><form method=post action=/admin/files style=margin:0><input type=hidden name=file value=\"{f}\"><button type=submit class=del data-file=\"{f}\">Delete</button></form></td></tr>", f=file, o=&meta.owner, exp=meta.expires, human=human, size=size));
+    }
+    let tpl_path = state.static_dir.join("admin_files.html");
+    match fs::read(&tpl_path).await { Ok(bytes)=> { let mut body=String::from_utf8_lossy(&bytes).into_owned(); body = body.replace("{{FILE_ROWS}}", &rows); (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], body).into_response() }, Err(_)=> json_error(StatusCode::NOT_FOUND, "missing_template", "admin files template missing") }
+}
+
+#[axum::debug_handler]
+pub async fn admin_file_delete_handler(State(state): State<AppState>, headers: HeaderMap, Form(frm): Form<AdminFileDeleteForm>) -> Response {
+    if let Some(tok)=get_cookie(&headers, "adm") { if !state.is_admin(&tok).await { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); }
+    let file = frm.file.trim();
+    if file.is_empty() || file.contains('/') || file.contains('\\') { return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file"); }
+    {
+        let mut owners = state.owners.write().await;
+        owners.remove(file);
+    }
+    let _ = fs::remove_file(state.upload_dir.join(file)).await;
+    state.persist_owners().await;
+    let hv = HeaderValue::from_static("/admin/files");
+    (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
+}
+
+pub async fn admin_reports_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Some(tok)=get_cookie(&headers, "adm") { if !state.is_admin(&tok).await { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); }
+    let reports = state.reports.read().await.clone();
+    let mut rows = String::new();
+    for (idx, r) in reports.iter().enumerate() {
+        rows.push_str(&format!("<tr><td><a href=\"/{file}\" target=_blank rel=noopener>{file}</a></td><td>{reason}</td><td>{details}</td><td>{ip}</td><td>{time}</td><td><form method=post action=/admin/reports style=margin:0><input type=hidden name=idx value=\"{idx}\"><button type=submit class=del data-idx=\"{idx}\">Remove</button></form></td></tr>", file=htmlescape::encode_minimal(&r.file), reason=htmlescape::encode_minimal(&r.reason), details=htmlescape::encode_minimal(&r.details), ip=htmlescape::encode_minimal(&r.ip), time=r.time, idx=idx));
+    }
+    let tpl_path = state.static_dir.join("admin_reports.html");
+    match fs::read(&tpl_path).await { Ok(bytes)=> { let mut body=String::from_utf8_lossy(&bytes).into_owned(); body=body.replace("{{REPORT_ROWS}}", &rows); (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], body).into_response() }, Err(_)=> json_error(StatusCode::NOT_FOUND, "missing_template", "admin reports template missing") }
+}
+
+#[axum::debug_handler]
+pub async fn admin_report_delete_handler(State(state): State<AppState>, headers: HeaderMap, Form(frm): Form<AdminReportDeleteForm>) -> Response {
+    if let Some(tok)=get_cookie(&headers, "adm") { if !state.is_admin(&tok).await { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); }
+    let idx = frm.idx;
+    {
+        let mut reports = state.reports.write().await;
+        if idx < reports.len() { reports.remove(idx); }
+    }
+    state.persist_reports().await;
+    let hv = HeaderValue::from_static("/admin/reports");
+    (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
+}
+
 pub fn build_router(state: AppState) -> Router {
     let static_root = state.static_dir.clone();
     let css_service = ServeDir::new(static_root.join("css"));
@@ -331,7 +389,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/f/{file}", get(fetch_file_handler).delete(delete_handler))
         .route("/d/{file}", delete(delete_handler))
         .route("/report", get(report_page_handler).post(report_handler))
-        .route("/ban", get(ban_page_handler).post(ban_post_handler))
         .route("/unban", post(unban_post_handler))
         .route("/healthz", get(|| async { "ok" }))
         .route("/simple", get(simple_list_handler))
@@ -339,6 +396,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth", get(auth_get_handler).post(auth_post_handler))
         .route("/isadmin", get(is_admin_handler))
         .route("/debug-ip", get(debug_ip_handler))
+        .route("/admin/ban", get(ban_page_handler).post(ban_post_handler))
+        .route("/admin/files", get(admin_files_handler).post(admin_file_delete_handler))
+        .route("/admin/reports", get(admin_reports_handler).post(admin_report_delete_handler))
         .nest_service("/css", css_service.clone())
         .nest_service("/js", js_service.clone())
         .route("/", get(root_handler))
