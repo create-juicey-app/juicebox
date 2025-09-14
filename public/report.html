@@ -45,7 +45,6 @@
       <section>
         <form class="report-form" method="post" action="/report" autocomplete="off" novalidate id="reportForm">
           <div class="status-area">
-            <div id="jsNotice" class="note" data-hidden="true">Submitting via enhanced mode.</div>
             <div id="formMsg" class="report-msg" data-hidden="true" role="status" aria-live="polite"></div>
           </div>
           <fieldset class="pair">
@@ -75,7 +74,11 @@
       </section>
     </div>
   </main>
-  <footer>juicebox // report interface</footer>
+  <footer>juicebox // report
+    <nav aria-label="Site links" style="display:block;margin-top:.55rem;font-size:.58rem;opacity:.65;letter-spacing:.35px">
+      <a href="/">Home</a> • <a href="/faq">FAQ</a> • <a href="/terms">Terms</a> • <a href="https://buymeacoffee.com/juiceydev" target="_blank" rel="noopener">Donate</a>
+    </nav>
+  </footer>
 <script>
 (function(){
   const form = document.getElementById('reportForm');
