@@ -858,21 +858,29 @@
   (function(){
     const fi = fileInput; const dz = dropZone;
     if(!fi) return;
+    // Updated handler: some browsers expose ONLY first file via clipboardData.files
+    // while the rest remain in clipboardData.items. Previous logic used else-if
+    // causing additional files to be ignored. We now process BOTH collections
+    // and de-duplicate by object identity / name+size fallback.
     window.addEventListener('paste', e => {
       const cd = e.clipboardData; if(!cd) return;
-      const files = cd.files; const items = cd.items;
       const dt = new DataTransfer();
-      let added = 0;
-      if(files && files.length){
-        for(const f of files){ dt.items.add(f); added++; }
-      } else if(items && items.length){
-        for(const it of items){
+      const seen = new Set(); // key format: name::size::type (best effort)
+      function addFile(f){
+        if(!f) return; const key = (f.name||'')+'::'+f.size+'::'+(f.type||'');
+        if(seen.has(key)) return; seen.add(key); dt.items.add(f);
+      }
+      if(cd.files && cd.files.length){
+        for(const f of cd.files){ addFile(f); }
+      }
+      if(cd.items && cd.items.length){
+        for(const it of cd.items){
           if(it.kind === 'file'){
-            const f = it.getAsFile(); if(f){ dt.items.add(f); added++; }
+            try { const f = it.getAsFile(); addFile(f); } catch {}
           }
         }
       }
-      if(added>0){
+      if(dt.items.length > 0){
         fi.files = dt.files;
         fi.dispatchEvent(new Event('change', {bubbles:true}));
         if(dz){ dz.classList.add('pasted'); setTimeout(()=>dz.classList.remove('pasted'), 1200); }
