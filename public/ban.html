@@ -1,0 +1,29 @@
+<!-- filepath: /home/juiceydev/juicebox/public/ban.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Ban Management</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="stylesheet" href="/css/app.css" />
+<style>body{font:14px/1.4 system-ui,sans-serif;padding:1.25rem;background:#0f141b;color:#e8edf2} table{border-collapse:collapse;width:100%;font-size:.75rem} th,td{border:1px solid #2b3746;padding:.45rem .55rem;text-align:left} th{background:#18222d;text-transform:uppercase;letter-spacing:.6px;font-size:.65rem} h1{margin:0 0 1rem;font-size:1.35rem} form.inline{display:flex;gap:.5rem;flex-wrap:wrap;margin:1.1rem 0 1.4rem} input,button{font:inherit} input[type=text]{background:#121b24;border:1px solid #2b394a;color:#e8edf2;padding:.45rem .55rem;border-radius:6px;font-size:.72rem;min-width:220px} textarea{background:#121b24;border:1px solid #2b394a;color:#e8edf2;padding:.5rem .6rem;border-radius:6px;font-size:.7rem;min-width:260px;min-height:60px} button{background:#ff9800;color:#111;border:0;padding:.55rem .9rem;font-size:.7rem;font-weight:600;letter-spacing:.5px;border-radius:7px;cursor:pointer;box-shadow:0 4px 14px -8px rgba(0,0,0,.6);} button:hover{filter:brightness(1.1)} .wrap{max-width:960px;margin:0 auto} caption{caption-side:bottom;padding:.6rem .3rem;font-size:.6rem;opacity:.65;text-align:left} .note{font-size:.6rem;opacity:.65;margin-top:1.1rem;line-height:1.5} .reason{max-width:360px;}</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Ban Management</h1>
+    <form method="post" action="/ban" class="inline">
+      <input type="text" name="ip" placeholder="IP address" required aria-label="IP address" />
+      <input type="text" name="reason" placeholder="Reason (optional)" aria-label="Reason" />
+      <button type="submit">Add Ban</button>
+    </form>
+    <table role="table" aria-label="Existing bans">
+      <thead><tr><th>IP</th><th>Reason</th><th>Time</th></tr></thead>
+      <tbody>
+        {{ROWS}}
+      </tbody>
+      <caption>Entries are appended only; restart + manual file edit to remove for now.</caption>
+    </table>
+    <p class="note">This interface requires an active admin session. Reasons are HTML-escaped. Timestamps are raw epoch seconds.</p>
+  </div>
+</body>
+</html>
