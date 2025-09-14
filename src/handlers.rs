@@ -244,7 +244,12 @@ pub async fn ban_page_handler(State(state): State<AppState>, headers: HeaderMap)
     // admin gate
     if let Some(tok)=get_cookie(&headers, "adm") { if state.is_admin(&tok).await { } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); }
     let bans = state.bans.read().await.clone();
-    let rows: String = bans.iter().map(|b| format!("<tr><td>{}</td><td>{}</td><td>{}</td></tr>", b.ip, htmlescape::encode_minimal(&b.reason), b.time)).collect();
+    // Updated: include action (unban) column
+    let rows: String = bans.iter().map(|b| {
+        let ip_enc = htmlescape::encode_minimal(&b.ip);
+        let reason_enc = htmlescape::encode_minimal(&b.reason);
+        format!("<tr><td>{}</td><td>{}</td><td>{}</td><td><form method=post action=/unban style=margin:0><input type=hidden name=ip value=\"{}\"><button type=submit class=del aria-label=\"Unban {}\">Unban</button></form></td></tr>", ip_enc, reason_enc, b.time, ip_enc, ip_enc)
+    }).collect();
     let path = state.static_dir.join("ban.html");
     match fs::read(&path).await {
         Ok(bytes) => {
@@ -257,7 +262,7 @@ pub async fn ban_page_handler(State(state): State<AppState>, headers: HeaderMap)
 }
 
 #[axum::debug_handler]
-pub async fn ban_post_handler(State(state): State<AppState>, headers: HeaderMap, Form(frm): Form<BanForm>) -> Response { if let Some(tok)=get_cookie(&headers, "adm") { if !state.is_admin(&tok).await { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } let ip = frm.ip.trim(); if ip.is_empty() { return json_error(StatusCode::BAD_REQUEST, "missing", "missing ip"); } state.add_ban(ip.to_string(), frm.reason.unwrap_or_default()).await; state.persist_bans().await; (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, HeaderValue::from_static("/ban"))]).into_response() }
+pub async fn ban_post_handler(State(state): State<AppState>, headers: HeaderMap, Form(frm): Form<BanForm>) -> Response { if let Some(tok)=get_cookie(&headers, "adm") { if !state.is_admin(&tok).await { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } let ip = frm.ip.trim(); if ip.is_empty() { return json_error(StatusCode::BAD_REQUEST, "missing", "missing ip"); } state.add_ban(ip.to_string(), frm.reason.unwrap_or_default()).await; state.persist_bans().await; (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, HeaderValue::from_static("/admin/ban"))]).into_response() }
 
 #[axum::debug_handler]
 pub async fn unban_post_handler(State(state): State<AppState>, headers: HeaderMap, Form(frm): Form<UnbanForm>) -> Response {
@@ -265,7 +270,7 @@ pub async fn unban_post_handler(State(state): State<AppState>, headers: HeaderMa
     let ip = frm.ip.trim();
     if ip.is_empty() { return json_error(StatusCode::BAD_REQUEST, "missing", "missing ip"); }
     state.remove_ban(ip).await; state.persist_bans().await;
-    (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, HeaderValue::from_static("/ban"))]).into_response()
+    (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, HeaderValue::from_static("/admin/ban"))]).into_response()
 }
 
 pub async fn auth_get_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
