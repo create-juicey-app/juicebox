@@ -1,7 +1,7 @@
-use axum::{extract::{State, Multipart, Path, ConnectInfo, Query, Form}, http::{StatusCode, HeaderMap, header::{CACHE_CONTROL}, HeaderValue}, response::{IntoResponse, Response}, routing::{get, post, delete}, Json, Router, middleware::{Next}};
+use axum::{extract::{State, Multipart, Path, ConnectInfo, Query, Form}, http::{StatusCode, HeaderMap, header::{CACHE_CONTROL, EXPIRES}, HeaderValue}, response::{IntoResponse, Response}, routing::{get, post, delete}, Json, Router, middleware::{Next}};
 use axum::http::Request;
 use axum::body::Body;
-use std::{net::SocketAddr as ClientAddr};
+use std::{net::SocketAddr as ClientAddr, time::{SystemTime, Duration}};
 use tokio::fs;
 use serde::{Serialize, Deserialize};
 use crate::util::{json_error, real_client_ip, is_forbidden_extension, make_storage_name, now_secs, ttl_to_duration, qualify_path, MAX_FILE_BYTES, PROD_HOST, get_cookie, ADMIN_SESSION_TTL};
@@ -128,26 +128,28 @@ pub async fn list_handler(State(state): State<AppState>, ConnectInfo(addr): Conn
 
 #[axum::debug_handler]
 pub async fn fetch_file_handler(State(state): State<AppState>, Path(file): Path<String>) -> Response {
-    if file.contains('/') {
-        return (StatusCode::BAD_REQUEST, "bad file").into_response();
-    }
+    if file.contains('/') { return (StatusCode::BAD_REQUEST, "bad file").into_response(); }
     cleanup_expired(&state).await;
-    let expired = {
+    let now = now_secs();
+    let (exists, expired, meta_expires) = {
         let owners = state.owners.read().await;
-        owners.get(&file).map(|m| m.expires <= now_secs()).unwrap_or(true)
+        if let Some(m) = owners.get(&file) { (true, m.expires <= now, m.expires) } else { (false, true, 0) }
     };
-    if expired {
-        return (StatusCode::NOT_FOUND, "not found").into_response();
-    }
+    if !exists || expired { return (StatusCode::NOT_FOUND, "not found").into_response(); }
     let file_path = state.upload_dir.join(&file);
-    if !file_path.exists() {
-        return (StatusCode::NOT_FOUND, "not found").into_response();
-    }
+    if !file_path.exists() { return (StatusCode::NOT_FOUND, "not found").into_response(); }
     match fs::read(&file_path).await {
         Ok(bytes) => {
             let mime = mime_guess::from_path(&file_path).first_or_octet_stream();
             let mut headers = HeaderMap::new();
             headers.insert(axum::http::header::CONTENT_TYPE, mime.as_ref().parse().unwrap());
+            // derive remaining TTL for caching
+            if meta_expires > now {
+                let remaining = meta_expires - now;
+                headers.insert(CACHE_CONTROL, HeaderValue::from_str(&format!("public, max-age={}", remaining)).unwrap());
+                let exp_time = SystemTime::UNIX_EPOCH + Duration::from_secs(meta_expires);
+                headers.insert(EXPIRES, HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap());
+            }
             (headers, bytes).into_response()
         },
         Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "fs_error", "cant read file")
@@ -225,12 +227,25 @@ pub async fn file_handler(State(state): State<AppState>, Path(path): Path<String
         if !rel.is_empty() && !rel.contains('.') {
             let alt = state.static_dir.join(format!("{}.html", rel));
             if alt.exists() { candidate = alt; } else { return (StatusCode::NOT_FOUND, "not found").into_response(); }
-        } else {
-            return (StatusCode::NOT_FOUND, "not found").into_response();
-        }
+        } else { return (StatusCode::NOT_FOUND, "not found").into_response(); }
     }
     match fs::read(&candidate).await {
-        Ok(bytes) => { let mime = mime_guess::from_path(&candidate).first_or_octet_stream(); ([(axum::http::header::CONTENT_TYPE, mime.as_ref())], bytes).into_response() },
+        Ok(bytes) => {
+            let mime = mime_guess::from_path(&candidate).first_or_octet_stream();
+            let mut headers = HeaderMap::new();
+            headers.insert(axum::http::header::CONTENT_TYPE, mime.as_ref().parse().unwrap());
+            // apply cache policy based on extension
+            if let Some(ext) = candidate.extension().and_then(|e| e.to_str()) {
+                let cacheable = matches!(ext.to_ascii_lowercase().as_str(), "css"|"js"|"webp"|"png"|"jpg"|"jpeg"|"gif"|"svg"|"ico"|"woff"|"woff2");
+                if cacheable {
+                    let max_age = 86400; // 1 day
+                    headers.insert(CACHE_CONTROL, HeaderValue::from_str(&format!("public, max-age={max_age}")).unwrap());
+                    let exp_time = SystemTime::now() + Duration::from_secs(max_age);
+                    headers.insert(EXPIRES, HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap());
+                }
+            }
+            (headers, bytes).into_response()
+        },
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "cant read file").into_response()
     }
 }
@@ -451,6 +466,20 @@ pub async fn admin_report_delete_handler(State(state): State<AppState>, headers:
     state.persist_reports().await;
     let hv = HeaderValue::from_static("/admin/reports");
     (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
+}
+
+// Add cache middleware for static asset dirs (css/js)
+pub async fn add_cache_headers(req: axum::http::Request<Body>, next: Next) -> Response {
+    let path = req.uri().path().to_string();
+    let mut resp = next.run(req).await;
+    if (path.starts_with("/css/") || path.starts_with("/js/")) && !path.contains("../") {
+        let headers = resp.headers_mut();
+        let max_age = 86400; // 1 day (filenames not fingerprinted)
+        headers.insert(CACHE_CONTROL, HeaderValue::from_str(&format!("public, max-age={max_age}")).unwrap());
+        let exp_time = SystemTime::now() + Duration::from_secs(max_age as u64);
+        headers.insert(EXPIRES, HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap());
+    }
+    resp
 }
 
 pub fn build_router(state: AppState) -> Router {

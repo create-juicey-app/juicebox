@@ -3,7 +3,7 @@ use tokio::fs; use tokio::sync::{RwLock, Semaphore};
 use axum::{Router, middleware};
 use juicebox::state::{AppState, FileMeta, ReportRecord, cleanup_expired};
 use juicebox::util::{ttl_to_duration, now_secs, PROD_HOST, UPLOAD_CONCURRENCY};
-use juicebox::handlers::{build_router, add_security_headers, enforce_host};
+use juicebox::handlers::{build_router, add_security_headers, enforce_host, add_cache_headers};
 use juicebox::handlers::ban_gate;
 use juicebox::rate_limit::build_rate_limiter;
 
@@ -205,6 +205,7 @@ async fn main() -> anyhow::Result<()> {
     let rate_layer = build_rate_limiter();
     let router = build_router(state.clone());
     let mut app: Router = router
+        .layer(middleware::from_fn(add_cache_headers))
         .layer(middleware::from_fn(add_security_headers))
         .layer(middleware::from_fn_with_state(state.clone(), ban_gate))
         .layer(rate_layer)
