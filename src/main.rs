@@ -9,6 +9,8 @@ use juicebox::rate_limit::build_rate_limiter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // load env (non-fatal)
+    let _ = dotenvy::dotenv();
     let production = std::env::var("APP_ENV").map(|v| v.eq_ignore_ascii_case("production")).unwrap_or(false);
 
     let static_dir = Arc::new(PathBuf::from("./public"));
@@ -48,7 +50,13 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|m| m.modified().ok())
         .unwrap_or(SystemTime::UNIX_EPOCH);
 
-    let state = AppState {
+    // gather email config early
+    let mailgun_api_key = std::env::var("MAILGUN_API_KEY").ok();
+    let mailgun_domain = std::env::var("MAILGUN_DOMAIN").ok();
+    let report_email_to = std::env::var("REPORT_EMAIL_TO").ok();
+    let report_email_from = std::env::var("REPORT_EMAIL_FROM").ok();
+
+    let mut state = AppState {
         upload_dir,
         static_dir,
         metadata_path,
@@ -60,11 +68,15 @@ async fn main() -> anyhow::Result<()> {
         reports: Arc::new(RwLock::new(reports_vec)),
         admin_sessions_path,
         admin_sessions: Arc::new(RwLock::new(admin_sessions_map)),
-        // new field placeholders filled later
         admin_key_path: admin_key_path.clone(),
         admin_key: Arc::new(RwLock::new(String::new())),
         bans_path: bans_path.clone(),
         bans: Arc::new(RwLock::new(bans_vec)),
+        mailgun_api_key,
+        mailgun_domain,
+        report_email_to,
+        report_email_from,
+        email_tx: None,
     };
 
     // Load or create admin key after state so helper can use now_secs etc
@@ -83,6 +95,84 @@ async fn main() -> anyhow::Result<()> {
             cleanup_state.cleanup_admin_sessions().await;
         }
     });
+
+    // setup email worker if config present
+    if state.mailgun_api_key.is_some() && state.mailgun_domain.is_some() && state.report_email_to.is_some() && state.report_email_from.is_some() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<juicebox::handlers::ReportRecordEmail>(100);
+        state.email_tx = Some(tx);
+        let api_key = state.mailgun_api_key.clone().unwrap();
+        let domain = state.mailgun_domain.clone().unwrap();
+        let to_addr = state.report_email_to.clone().unwrap();
+        let from_addr = state.report_email_from.clone().unwrap();
+        println!("mail: enabled (domain={domain}, to={to_addr})");
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            while let Some(ev) = rx.recv().await {
+                let subj = format!("[JuiceBox] Report: {} ({})", ev.file, ev.reason);
+                let expires_human = if ev.expires>0 { format!("{}s", ev.expires.saturating_sub(ev.time)) } else { "n/a".into() };
+                let mut html = String::new();
+                html.push_str("<html><body style=\"font-family:system-ui,Arial,sans-serif;background:#0f141b;color:#e8edf2;padding:16px;\">");
+                html.push_str("<div style=\"background:#18222d;border:1px solid #2b3746;border-radius:12px;padding:18px 20px;max-width:640px;margin:auto;\">");
+                html.push_str(&format!("<h2 style=\"margin:0 0 12px;font-size:18px;\">New Content Report</h2>"));
+                html.push_str("<table style=\"width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px;\">");
+                let row = |k:&str,v:&str| format!("<tr><td style=\"padding:4px 6px;border:1px solid #273341;background:#121b24;font-weight:600;\">{}</td><td style=\"padding:4px 6px;border:1px solid #273341;\">{}</td></tr>", k, htmlescape::encode_minimal(v));
+                html.push_str(&row("File ID", &ev.file));
+                html.push_str(&row("Reason", &ev.reason));
+                html.push_str(&row("Reporter IP", &ev.ip));
+                html.push_str(&row("Owner IP", &ev.owner_ip));
+                html.push_str(&row("Original Name", &ev.original_name));
+                html.push_str(&row("Size (bytes)", &ev.size.to_string()));
+                html.push_str(&row("Report Time", &format!("{} ({})", ev.time, ev.iso_time)));
+                html.push_str(&row("Expires At (epoch)", &ev.expires.to_string()));
+                html.push_str(&row("Remaining TTL (approx)", &expires_human));
+                html.push_str(&row("Reports for File", &ev.total_reports_for_file.to_string()));
+                html.push_str(&row("Total Reports (all)", &ev.total_reports.to_string()));
+                html.push_str("</table>");
+                if !ev.details.is_empty() {
+                    html.push_str("<div style=\"margin:10px 0 14px;font-size:12px;line-height:1.4;\"><strong style=\"display:block;margin-bottom:4px;\">Details</strong><pre style=\"white-space:pre-wrap;background:#121b24;border:1px solid #273341;padding:8px 10px;border-radius:8px;font:12px/1.4 ui-monospace,monospace;\">");
+                    html.push_str(&htmlescape::encode_minimal(&ev.details));
+                    html.push_str("</pre></div>");
+                }
+                let file_link = format!("https://{}/f/{}", PROD_HOST, ev.file);
+                let admin_files = format!("https://{}/admin/files", PROD_HOST);
+                let admin_reports = format!("https://{}/admin/reports", PROD_HOST);
+                let ban_link = if !ev.owner_ip.is_empty() { format!("https://{}/admin/ban?ip={}", PROD_HOST, ev.owner_ip) } else { String::new() };
+                html.push_str("<div style=\"display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;\">");
+                html.push_str(&format!("<a href=\"{}\" style=\"background:#ff9800;color:#111;padding:8px 12px;border-radius:8px;font-size:12px;text-decoration:none;font-weight:600;\">Open File</a>", file_link));
+                html.push_str(&format!("<a href=\"{}\" style=\"background:#40618a;color:#fff;padding:8px 12px;border-radius:8px;font-size:12px;text-decoration:none;font-weight:600;\">Manage Files</a>", admin_files));
+                html.push_str(&format!("<a href=\"{}\" style=\"background:#3d8f6e;color:#fff;padding:8px 12px;border-radius:8px;font-size:12px;text-decoration:none;font-weight:600;\">View Reports</a>", admin_reports));
+                if !ban_link.is_empty() { html.push_str(&format!("<a href=\"{}\" style=\"background:#ff3d00;color:#fff;padding:8px 12px;border-radius:8px;font-size:12px;text-decoration:none;font-weight:600;\">Ban Owner IP</a>", ban_link)); }
+                html.push_str("</div>");
+                html.push_str("<p style=\"margin-top:16px;font-size:10px;opacity:.55;\">Automated notification. Use admin dashboard to delete report or file. Do not forward externally.</p>");
+                html.push_str("</div></body></html>");
+
+                let text = format!("Report: file={} reason={} reporter_ip={} owner_ip={} size={} details={}", ev.file, ev.reason, ev.ip, ev.owner_ip, ev.size, if ev.details.is_empty(){"(none)"} else {ev.details.as_str()});
+                let form = [
+                    ("from", from_addr.as_str()),
+                    ("to", to_addr.as_str()),
+                    ("subject", subj.as_str()),
+                    ("text", text.as_str()),
+                    ("html", html.as_str())
+                ];
+                let url = format!("https://api.eu.mailgun.net/v3/{}/messages", domain);
+                match client.post(&url)
+                    .basic_auth("api", Some(&api_key))
+                    .form(&form)
+                    .send().await {
+                    Ok(resp) => {
+                        if !resp.status().is_success() {
+                            let status = resp.status();
+                            let body_txt = resp.text().await.unwrap_or_default();
+                            eprintln!("mail: failed status={status} body={body_txt}");
+                        } else { println!("mail: sent report file={} reason={} owner_ip={} reporter_ip={}", ev.file, ev.reason, ev.owner_ip, ev.ip); }
+                    },
+                    Err(e) => eprintln!("mail: error sending: {e}"),
+                }
+            }
+        });
+    } else {
+        println!("mail: disabled (missing env vars)");
+    }
 
     let rate_layer = build_rate_limiter();
     let router = build_router(state.clone());

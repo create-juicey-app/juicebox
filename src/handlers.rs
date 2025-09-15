@@ -8,6 +8,26 @@ use crate::util::{json_error, real_client_ip, is_forbidden_extension, make_stora
 use crate::util::extract_client_ip;
 use crate::state::{AppState, FileMeta, ReportRecord, cleanup_expired, verify_user_entries_with_report, spawn_integrity_check, ReconcileReport};
 use tower_http::services::ServeDir;
+use tokio::sync::mpsc;
+use time::{OffsetDateTime};
+
+// Email event for reports
+#[derive(Clone, Debug)]
+pub struct ReportRecordEmail {
+    pub file: String,
+    pub reason: String,
+    pub details: String,
+    pub ip: String,          // reporter ip
+    pub time: u64,
+    pub iso_time: String,
+    pub owner_ip: String,
+    pub original_name: String,
+    pub expires: u64,
+    pub size: u64,
+    pub report_index: usize,
+    pub total_reports_for_file: usize,
+    pub total_reports: usize,
+}
 
 // Response structs
 #[derive(Serialize, Deserialize)] pub struct UploadResponse { pub files: Vec<String>, pub truncated: bool, pub remaining: usize }
@@ -142,13 +162,43 @@ pub async fn delete_handler(State(state): State<AppState>, ConnectInfo(addr): Co
 pub async fn report_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Form(form): Form<ReportForm>) -> Response {
     if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
     let ip = real_client_ip(&headers, &addr);
-    let record = ReportRecord { file: form.file, reason: form.reason, details: form.details.unwrap_or_default(), ip, time: now_secs() };
-    {
-        // acquire write lock, push, then drop before persisting
+    let now = now_secs();
+    let mut record = ReportRecord { file: form.file.clone(), reason: form.reason.clone(), details: form.details.clone().unwrap_or_default(), ip: ip.clone(), time: now };
+    let (owner_ip, original_name, expires, size) = {
+        let owners = state.owners.read().await;
+        if let Some(meta) = owners.get(&record.file) {
+            let path = state.upload_dir.join(&record.file);
+            let sz = tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0);
+            (meta.owner.clone(), meta.original.clone(), meta.expires, sz)
+        } else { (String::new(), String::new(), 0u64, 0u64) }
+    };
+    let (report_index, total_reports_for_file, total_reports) = {
         let mut reports = state.reports.write().await;
-        reports.push(record);
-    }
+        reports.push(record.clone());
+        let idx = reports.len() - 1;
+        let count_file = reports.iter().filter(|r| r.file == record.file).count();
+        let total = reports.len();
+        (idx, count_file, total)
+    };
     state.persist_reports().await;
+    if let Some(tx) = &state.email_tx {
+        let iso = OffsetDateTime::from_unix_timestamp(now as i64).ok().map(|t| t.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()).unwrap_or_default();
+        let _ = tx.send(ReportRecordEmail {
+            file: record.file.clone(),
+            reason: record.reason.clone(),
+            details: record.details.clone(),
+            ip: record.ip.clone(),
+            time: record.time,
+            iso_time: iso,
+            owner_ip,
+            original_name,
+            expires,
+            size,
+            report_index,
+            total_reports_for_file,
+            total_reports,
+        }).await;
+    }
     (StatusCode::NO_CONTENT, ()).into_response()
 }
 

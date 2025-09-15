@@ -16,6 +16,12 @@ use crate::util::{now_secs, ttl_to_duration, ADMIN_SESSION_TTL, ADMIN_KEY_TTL, n
     pub admin_sessions_path: Arc<PathBuf>, pub admin_sessions: Arc<RwLock<HashMap<String, u64>>>,
     pub admin_key_path: Arc<PathBuf>, pub admin_key: Arc<RwLock<String>>,
     pub bans_path: Arc<PathBuf>, pub bans: Arc<RwLock<Vec<IpBan>>>,
+    // email notification config
+    pub mailgun_api_key: Option<String>,
+    pub mailgun_domain: Option<String>,
+    pub report_email_to: Option<String>,
+    pub report_email_from: Option<String>,
+    pub email_tx: Option<tokio::sync::mpsc::Sender<crate::handlers::ReportRecordEmail>>, // channel to worker
 }
 
 impl AppState {

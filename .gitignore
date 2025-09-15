@@ -2,3 +2,6 @@
 /files/
 /data/
 Cargo.lock
+.env
+.vscode/
+.DS_Store
