@@ -1,5 +1,4 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc, net::SocketAddr, time::{Duration, SystemTime}};
-use std::sync::atomic::AtomicBool;
 use tokio::fs; use tokio::sync::{RwLock, Semaphore};
 use axum::{Router, middleware};
 use juicebox::state::{AppState, FileMeta, ReportRecord, cleanup_expired};
@@ -22,7 +21,6 @@ async fn main() -> anyhow::Result<()> {
     let admin_sessions_path = Arc::new(data_dir.join("admin_sessions.json"));
     let admin_key_path = Arc::new(data_dir.join("admin_key.json"));
     let bans_path = Arc::new(data_dir.join("ip_bans.json"));
-    let chunk_dir = Arc::new(data_dir.join("chunks"));
 
     // try create data dir earlier (already done above)
     fs::create_dir_all(&*static_dir).await?;
@@ -30,7 +28,6 @@ async fn main() -> anyhow::Result<()> {
     fs::create_dir_all(&*data_dir).await?;
     // ensure bans file presence
     let _ = fs::OpenOptions::new().create(true).append(true).open(&*bans_path).await;
-    fs::create_dir_all(&*chunk_dir).await?; // new: chunk dir
 
     let owners_map: HashMap<String, FileMeta> = match fs::read(&*metadata_path).await {
         Ok(data) => {
@@ -75,13 +72,11 @@ async fn main() -> anyhow::Result<()> {
         admin_key: Arc::new(RwLock::new(String::new())),
         bans_path: bans_path.clone(),
         bans: Arc::new(RwLock::new(bans_vec)),
-        chunk_dir: chunk_dir.clone(),
         mailgun_api_key,
         mailgun_domain,
         report_email_to,
         report_email_from,
         email_tx: None,
-        owners_persist_flag: Arc::new(AtomicBool::new(false)),
     };
 
     // Load or create admin key after state so helper can use now_secs etc
@@ -118,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
                 let mut html = String::new();
                 html.push_str("<html><body style=\"font-family:system-ui,Arial,sans-serif;background:#0f141b;color:#e8edf2;padding:16px;\">");
                 html.push_str("<div style=\"background:#18222d;border:1px solid #2b3746;border-radius:12px;padding:18px 20px;max-width:640px;margin:auto;\">");
-                html.push_str("<h2 style=\"margin:0 0 12px;font-size:18px;\">New Content Report</h2>");
+                html.push_str(&format!("<h2 style=\"margin:0 0 12px;font-size:18px;\">New Content Report</h2>"));
                 html.push_str("<table style=\"width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px;\">");
                 let row = |k:&str,v:&str| format!("<tr><td style=\"padding:4px 6px;border:1px solid #273341;background:#121b24;font-weight:600;\">{}</td><td style=\"padding:4px 6px;border:1px solid #273341;\">{}</td></tr>", k, htmlescape::encode_minimal(v));
                 html.push_str(&row("File ID", &ev.file));

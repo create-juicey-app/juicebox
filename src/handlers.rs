@@ -3,10 +3,8 @@ use axum::http::Request;
 use axum::body::Body;
 use std::{net::SocketAddr as ClientAddr, time::{SystemTime, Duration}};
 use tokio::fs;
-use tokio::io::AsyncWriteExt as _; // explicit for file.write_all
-use tokio::io::BufWriter;
 use serde::{Serialize, Deserialize};
-use crate::util::{json_error, real_client_ip, is_forbidden_extension, make_storage_name, now_secs, ttl_to_duration, qualify_path, MAX_FILE_BYTES, PROD_HOST, get_cookie, ADMIN_SESSION_TTL, new_id};
+use crate::util::{json_error, real_client_ip, is_forbidden_extension, make_storage_name, now_secs, ttl_to_duration, qualify_path, MAX_FILE_BYTES, PROD_HOST, get_cookie, ADMIN_SESSION_TTL};
 use crate::util::extract_client_ip;
 use crate::state::{AppState, FileMeta, ReportRecord, cleanup_expired, verify_user_entries_with_report, spawn_integrity_check, ReconcileReport};
 use tower_http::services::ServeDir;
@@ -44,8 +42,8 @@ pub struct ReportRecordEmail {
 #[derive(Deserialize)] pub struct AdminFileDeleteForm { pub file: String }
 #[derive(Deserialize)] pub struct AdminReportDeleteForm { pub idx: usize }
 
-// Upload handler (streaming). debug_handler only in debug builds.
-#[cfg_attr(debug_assertions, axum::debug_handler)]
+// Upload handler
+#[axum::debug_handler]
 pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, mut multipart: Multipart) -> Response {
     if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
     let ip = real_client_ip(&headers, &addr);
@@ -55,59 +53,68 @@ pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): Co
         Err(_) => return json_error(StatusCode::SERVICE_UNAVAILABLE, "busy", "server is busy, try again later"),
     };
 
-    // Streaming debug flag (set STREAM_DEBUG=1)
-    let stream_debug = std::env::var("STREAM_DEBUG").map(|v| matches!(v.as_str(), "1"|"true"|"yes"|"on"|"DEBUG")).unwrap_or(false);
-
     let mut ttl_code = "24h".to_string();
-    // Optimistic ID list (mirrors order of file fields as they appear)
-    let mut optimistic_entries: Vec<(String, Option<String>)> = Vec::new(); // (storage_name, original_name)
-    let mut processed = 0usize; let mut skipped = 0usize;
+    let mut files_to_process = Vec::new();
 
-    while let Ok(Some(mut field)) = multipart.next_field().await {
-        let name = match field.name() { Some(n)=>n, None=>continue };
-        if name == "ttl" { if let Ok(data)=field.bytes().await { if let Ok(s)=std::str::from_utf8(&data) { ttl_code = s.to_string(); if stream_debug { eprintln!("stream: ttl field set to {ttl_code}"); } } } continue; }
-        if !name.starts_with("file") { continue; }
-        let original_name = field.file_name().map(|s| s.to_string());
-        // Pre-generate storage name for optimistic link display on client (client may ignore if not in list)
-        let storage_name = make_storage_name(original_name.as_deref());
-        if stream_debug { eprintln!("stream: start file storage={storage_name} original={:?}", original_name); }
-        optimistic_entries.push((storage_name.clone(), original_name.clone()));
-        // Stream write
-        let path = state.upload_dir.join(&storage_name);
-        let file = match fs::File::create(&path).await { Ok(f)=>f, Err(e)=> { if stream_debug { eprintln!("stream: create_failed file={storage_name} err={e}"); } skipped+=1; continue } };
-        let mut writer = BufWriter::new(file);
-        let mut total: u64 = 0;
-        let mut oversized=false; let mut bad_ext=false;
-        if is_forbidden_extension(&storage_name) { bad_ext=true; }
-        while let Ok(Some(chunk)) = field.chunk().await {
-            total += chunk.len() as u64;
-            if stream_debug { eprintln!("stream: chunk file={storage_name} size={} total={total}", chunk.len()); }
-            if total > MAX_FILE_BYTES { oversized = true; if stream_debug { eprintln!("stream: oversized_detected file={storage_name} limit={MAX_FILE_BYTES} total={total}"); } break; }
-            if bad_ext { continue; }
-            if let Err(e) = writer.write_all(&chunk).await { oversized=true; if stream_debug { eprintln!("stream: write_error file={storage_name} err={e}"); } break; }
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        let name = if let Some(name) = field.name() {
+            name.to_string()
+        } else {
+            continue;
+        };
+
+        if name == "ttl" {
+            if let Ok(data) = field.bytes().await {
+                if let Ok(s) = std::str::from_utf8(&data) {
+                    ttl_code = s.to_string();
+                }
+            }
+            continue;
         }
-        // finalize
-        if oversized || bad_ext { let _=fs::remove_file(&path).await; skipped+=1; if stream_debug { eprintln!("stream: discarded file={storage_name} reason={} size={total}", if oversized {"oversized"} else {"bad_ext"}); } continue; }
-        if writer.flush().await.is_err() { let _=fs::remove_file(&path).await; skipped+=1; if stream_debug { eprintln!("stream: flush_error file={storage_name}"); } continue; }
-        if stream_debug { eprintln!("stream: complete file={storage_name} size={total}"); }
-        // persist metadata in-memory
-        processed += 1;
-        let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
-        state.owners.write().await.insert(storage_name.clone(), FileMeta { owner: ip.clone(), expires, original: original_name.unwrap_or_default() });
+
+        if name.starts_with("file") {
+            let original_name = field.file_name().map(|s| s.to_string());
+            if let Ok(data) = field.bytes().await {
+                if !data.is_empty() {
+                    files_to_process.push((original_name, data));
+                }
+            }
+        }
     }
 
-    // Debounced disk persistence
-    state.schedule_persist_owners();
+    if files_to_process.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "no_files", "no files were uploaded");
+    }
+
+    let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
+    let mut saved_files = Vec::new();
+
+    for (original_name, data) in &files_to_process {
+        if data.len() as u64 > MAX_FILE_BYTES {
+            continue;
+        }
+        let storage_name = make_storage_name(original_name.as_deref());
+        if is_forbidden_extension(&storage_name) {
+            continue;
+        }
+        let path = state.upload_dir.join(&storage_name);
+        if fs::write(&path, data).await.is_ok() {
+            let meta = FileMeta { owner: ip.clone(), expires, original: original_name.clone().unwrap_or_default() };
+            state.owners.write().await.insert(storage_name.clone(), meta);
+            saved_files.push(storage_name);
+        }
+    }
+
+    state.persist_owners().await;
     spawn_integrity_check(state.clone());
-    let truncated = skipped>0;
-    let remaining = skipped;
-    // Return only the successfully processed storage names (processed == optimistic minus skipped)
-    let files: Vec<String> = optimistic_entries.into_iter().take(processed).map(|(n,_)| n).collect();
-    if stream_debug { eprintln!("stream: response processed={processed} skipped={skipped}"); }
-    (StatusCode::OK, Json(UploadResponse { files, truncated, remaining })).into_response()
+
+    let truncated = saved_files.len() < files_to_process.len();
+    let remaining = files_to_process.len() - saved_files.len();
+
+    (StatusCode::OK, Json(UploadResponse { files: saved_files, truncated, remaining })).into_response()
 }
 
-#[cfg_attr(debug_assertions, axum::debug_handler)]
+#[axum::debug_handler]
 pub async fn list_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap) -> Response {
     if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
     cleanup_expired(&state).await; let client_ip=real_client_ip(&headers, &addr); let reconcile_report=verify_user_entries_with_report(&state, &client_ip).await; cleanup_expired(&state).await; crate::state::check_storage_integrity(&state).await;
@@ -119,7 +126,7 @@ pub async fn list_handler(State(state): State<AppState>, ConnectInfo(addr): Conn
     let body=Json(ListResponse{ files: only_names, metas, reconcile: reconcile_report });
     let mut resp=body.into_response(); resp.headers_mut().insert(CACHE_CONTROL, "no-store".parse().unwrap()); resp }
 
-#[cfg_attr(debug_assertions, axum::debug_handler)]
+#[axum::debug_handler]
 pub async fn fetch_file_handler(State(state): State<AppState>, Path(file): Path<String>) -> Response {
     if file.contains('/') { return (StatusCode::BAD_REQUEST, "bad file").into_response(); }
     cleanup_expired(&state).await;
@@ -149,10 +156,10 @@ pub async fn fetch_file_handler(State(state): State<AppState>, Path(file): Path<
     }
 }
 
-#[cfg_attr(debug_assertions, axum::debug_handler)]
-pub async fn delete_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Path(file): Path<String>) -> Response { let ip=real_client_ip(&headers, &addr); if state.is_banned(&ip).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); } if file.contains('/') || file.contains("..") || file.contains('\\') { return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file name"); } cleanup_expired(&state).await; { let owners=state.owners.read().await; match owners.get(&file) { Some(meta) if meta.owner==ip => {}, _=> return (StatusCode::NOT_FOUND, "not found").into_response(), } } { let mut owners=state.owners.write().await; owners.remove(&file); } let path=state.upload_dir.join(&file); let _=fs::remove_file(&path).await; state.schedule_persist_owners(); (StatusCode::NO_CONTENT, ()).into_response() }
+#[axum::debug_handler]
+pub async fn delete_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Path(file): Path<String>) -> Response { let ip=real_client_ip(&headers, &addr); if state.is_banned(&ip).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); } if file.contains('/') || file.contains("..") || file.contains('\\') { return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file name"); } cleanup_expired(&state).await; { let owners=state.owners.read().await; match owners.get(&file) { Some(meta) if meta.owner==ip => {}, _=> return (StatusCode::NOT_FOUND, "not found").into_response(), } } { let mut owners=state.owners.write().await; owners.remove(&file); } let path=state.upload_dir.join(&file); let _=fs::remove_file(&path).await; state.persist_owners().await; (StatusCode::NO_CONTENT, ()).into_response() }
 
-#[cfg_attr(debug_assertions, axum::debug_handler)]
+#[axum::debug_handler]
 pub async fn report_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Form(form): Form<ReportForm>) -> Response {
     if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
     let ip = real_client_ip(&headers, &addr);
@@ -422,7 +429,7 @@ pub async fn auth_post_handler(State(state): State<AppState>, _headers: HeaderMa
     let current_key = { state.admin_key.read().await.clone() };
     if current_key.is_empty() { return json_error(StatusCode::INTERNAL_SERVER_ERROR, "no_key", "admin key unavailable"); }
     if subtle_equals(submitted.as_bytes(), current_key.as_bytes()) {
-        let token = new_id();
+        let token = crate::util::new_id();
         state.create_admin_session(token.clone()).await;
         state.persist_admin_sessions().await;
         let cookie = format!("adm={}; Path=/; HttpOnly; Max-Age={}; SameSite=Strict", token, ADMIN_SESSION_TTL);
@@ -539,7 +546,6 @@ pub fn build_router(state: AppState) -> Router {
     let js_service = ServeDir::new(static_root.join("js"));
     Router::new()
         .route("/upload", post(upload_handler))
-        .route("/upload/chunk", post(upload_chunk_handler))
         .route("/list", get(list_handler))
         .route("/mine", get(list_handler))
         .route("/f/{file}", get(fetch_file_handler).delete(delete_handler))
@@ -561,60 +567,4 @@ pub fn build_router(state: AppState) -> Router {
         .route("/", get(root_handler))
         .route("/{*path}", get(file_handler))
         .with_state(state)
-}
-
-#[cfg_attr(debug_assertions, axum::debug_handler)]
-pub async fn upload_chunk_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
-    // Basic validations & rate limiting by semaphore like normal upload
-    if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
-    let ip = real_client_ip(&headers, &addr);
-    let sem = state.upload_sem.clone();
-    let _permit = match sem.try_acquire_owned() { Ok(p)=>p, Err(_)=> return json_error(StatusCode::SERVICE_UNAVAILABLE, "busy", "server busy") };
-
-    // Required headers
-    let upload_id = headers.get("X-Upload-Id").and_then(|v| v.to_str().ok()).unwrap_or("");
-    let filename = headers.get("X-Filename").and_then(|v| v.to_str().ok()).unwrap_or("");
-    let chunk_index = headers.get("X-Chunk-Index").and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<u32>().ok());
-    let chunk_count = headers.get("X-Chunk-Count").and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<u32>().ok());
-    let total_size = headers.get("X-Total-Size").and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<u64>().ok());
-    let ttl_code = headers.get("X-Ttl").and_then(|v| v.to_str().ok()).unwrap_or("24h");
-    if upload_id.is_empty() || filename.is_empty() || chunk_index.is_none() || chunk_count.is_none() || total_size.is_none() { return json_error(StatusCode::BAD_REQUEST, "missing", "missing headers"); }
-    let (chunk_index, chunk_count, total_size) = (chunk_index.unwrap(), chunk_count.unwrap(), total_size.unwrap());
-    if chunk_index >= chunk_count || chunk_count==0 { return json_error(StatusCode::BAD_REQUEST, "bad_index", "invalid chunk index"); }
-    if total_size > MAX_FILE_BYTES { return json_error(StatusCode::PAYLOAD_TOO_LARGE, "too_large", "file too large"); }
-
-    // directory path for this upload id
-    let up_dir = state.chunk_dir.join(upload_id);
-    if !up_dir.exists() { if let Err(e)=tokio::fs::create_dir_all(&up_dir).await { eprintln!("chunk: mkdir error id={upload_id} err={e}"); return json_error(StatusCode::INTERNAL_SERVER_ERROR, "fs", "fs error"); } }
-
-    // write chunk file
-    let part_path = up_dir.join(format!("{}.part", chunk_index));
-    match tokio::fs::write(&part_path, &body).await { Ok(_)=>{}, Err(e)=> { eprintln!("chunk: write error id={upload_id} idx={chunk_index} err={e}"); return json_error(StatusCode::INTERNAL_SERVER_ERROR, "write", "write error"); } }
-
-    // If last chunk, assemble
-    if chunk_index + 1 == chunk_count {
-        // verify all parts exist
-        for i in 0..chunk_count { if !up_dir.join(format!("{}.part", i)).exists() { return json_error(StatusCode::BAD_REQUEST, "missing_part", "missing chunk"); } }
-        // create final storage name
-        let storage_name = make_storage_name(Some(filename));
-        if is_forbidden_extension(&storage_name) { let _=tokio::fs::remove_dir_all(&up_dir).await; return json_error(StatusCode::BAD_REQUEST, "ext", "forbidden extension"); }
-        let final_path = state.upload_dir.join(&storage_name);
-        let mut out = match tokio::fs::File::create(&final_path).await { Ok(f)=>f, Err(_)=> { return json_error(StatusCode::INTERNAL_SERVER_ERROR, "create", "create error"); } };
-        let mut writer = BufWriter::new(&mut out);
-        let mut written: u64 = 0;
-        for i in 0..chunk_count {
-            let p = up_dir.join(format!("{}.part", i));
-            match tokio::fs::read(&p).await { Ok(bytes)=> { written += bytes.len() as u64; if written> total_size || written > MAX_FILE_BYTES { let _=tokio::fs::remove_file(&final_path).await; let _=tokio::fs::remove_dir_all(&up_dir).await; return json_error(StatusCode::BAD_REQUEST, "size_mismatch", "size mismatch"); } if let Err(e)=writer.write_all(&bytes).await { eprintln!("chunk: assemble write err={e}"); let _=tokio::fs::remove_file(&final_path).await; let _=tokio::fs::remove_dir_all(&up_dir).await; return json_error(StatusCode::INTERNAL_SERVER_ERROR, "assemble_write", "assemble write"); } }, Err(_)=> { let _=tokio::fs::remove_file(&final_path).await; let _=tokio::fs::remove_dir_all(&up_dir).await; return json_error(StatusCode::BAD_REQUEST, "missing_part", "missing chunk"); } }
-        }
-        if writer.flush().await.is_err() { let _=tokio::fs::remove_file(&final_path).await; let _=tokio::fs::remove_dir_all(&up_dir).await; return json_error(StatusCode::INTERNAL_SERVER_ERROR, "flush", "flush error"); }
-        // success: cleanup parts
-        let _=tokio::fs::remove_dir_all(&up_dir).await;
-        let expires = now_secs() + ttl_to_duration(ttl_code).as_secs();
-        state.owners.write().await.insert(storage_name.clone(), FileMeta { owner: ip.clone(), expires, original: filename.to_string() });
-        state.schedule_persist_owners();
-        spawn_integrity_check(state.clone());
-        return (StatusCode::OK, Json(UploadResponse { files: vec![storage_name], truncated:false, remaining:0 })).into_response();
-    }
-    // Not final chunk: 202 Accepted
-    (StatusCode::ACCEPTED, Json(serde_json::json!({"received": chunk_index, "remaining": (chunk_count - chunk_index - 1)}))).into_response()
 }

@@ -1,6 +1,4 @@
 // Rewritten client logic for stable uploads & deletes
-    // Optimistic link support: if server returns fewer files than queued we prune extras.
-    // We'll generate a provisional ID client-side for UX (prefixed 'temp_') if server hasn't returned one yet.
     const dropZone = document.getElementById('dropZone');
     // ensure input exists
     if(!document.getElementById('fileInput')) {
@@ -231,23 +229,9 @@
       fd.append('ttl', ttlVal);
       fd.append('file', f.file, f.file.name);
       const xhr=new XMLHttpRequest(); f.xhr=xhr; xhr.open('POST','/upload'); xhr.responseType='json';
-      // Optimistic: create a provisional link immediately (removed/replaced on success)
-      let optimisticInput=null; let optimisticId=null;
-      try {
-        optimisticId = 'temp_'+Math.random().toString(36).slice(2,10);
-        optimisticInput = makeLinkInput('f/'+optimisticId, false);
-        optimisticInput.classList.add('optimistic');
-        optimisticInput.value = 'Uploading…';
-        if(batch.isGroup){
-          if(f.container){ let linksRow=f.container.querySelector('.links'); if(!linksRow){ linksRow=document.createElement('div'); linksRow.className='links'; f.container.appendChild(linksRow); } linksRow.appendChild(optimisticInput); }
-        } else {
-          if(f.container){ let links=f.container.querySelector('.links'); if(!links){ links=document.createElement('div'); links.className='links'; f.container.appendChild(links); } links.appendChild(optimisticInput); }
-        }
-      } catch {}
       let finished = false;
       xhr.upload.onprogress=(e)=>{ if(e.lengthComputable && f.barSpan){ const pct=(e.loaded / f.file.size)*100; f.barSpan.style.width=pct.toFixed(2)+'%'; } };
       xhr.onabort=()=>{ if(finished) return; finished=true; f.canceled=true; if(f.barSpan){ f.barSpan.style.opacity='.35'; }
-        if(optimisticInput){ optimisticInput.value='Canceled'; optimisticInput.classList.add('error'); }
         resolve(); };
       xhr.onload=()=>{ if(finished) return; if(f.canceled){ finished=true; resolve(); return; } const ok = xhr.status>=200 && xhr.status<300; if(ok){
           if(f.barSpan){ if(!f.barSpan._animated){ f.barSpan._animated=true; }
@@ -262,32 +246,28 @@
           const ttlSeconds = ttlCodeSeconds(ttlVal);
           const exp = Math.floor(Date.now()/1000) + ttlSeconds;
           ownedMeta.set(f.remoteName, {expires: exp, total: ttlSeconds, original: f.file && f.file.name ? f.file.name : ''});
+          // Explicitly add to owned list (in case makeLinkInput side-effect missed)
           if(f.remoteName) { try { addOwned(f.remoteName); } catch(_){} }
           f.done=true; updateDeleteButton(f);
           if(f.remoteName){
-            if(optimisticInput){
-              optimisticInput.classList.remove('optimistic');
-              optimisticInput.value = location.origin+'/f/'+f.remoteName;
-              optimisticInput.title='Upload complete – click to copy';
-              optimisticInput.addEventListener('click',()=>{ optimisticInput.select(); copyToClipboard(optimisticInput.value).then(()=>flashCopied()); });
-            } else {
             const input = makeLinkInput('f/'+f.remoteName, !batch.files.some(x=>!x.done));
             if(batch.isGroup){
+              // Per-file link inside grouped batch entry
               if(f.container){
                 let linksRow = f.container.querySelector('.links');
                 if(!linksRow){ linksRow=document.createElement('div'); linksRow.className='links'; f.container.appendChild(linksRow); }
                 linksRow.appendChild(input);
               }
+              // Assign group expiration dataset once (first completed file) so global countdown logic updates one TTL line
               if(!batch.groupLi.dataset.exp){ batch.groupLi.dataset.exp = exp; batch.groupLi.dataset.total = ttlSeconds; }
             } else {
               const links=document.createElement('div'); links.className='links'; links.appendChild(input); f.container.appendChild(links);
             }
-            }
           }
           finished=true; resolve();
-        } else {{ f.container?.classList.add('error'); if(optimisticInput){ optimisticInput.value='Failed'; optimisticInput.classList.add('error'); } updateDeleteButton(f); } finished=true; resolve(); }
+        } else {{ f.container?.classList.add('error'); updateDeleteButton(f); } finished=true; resolve(); }
       };
-      xhr.onerror=()=>{ if(finished) return; if(!f.canceled){ f.container?.classList.add('error'); if(optimisticInput){ optimisticInput.value='Error'; optimisticInput.classList.add('error'); } updateDeleteButton(f); } finished=true; resolve(); };
+      xhr.onerror=()=>{ if(finished) return; if(!f.canceled){ f.container?.classList.add('error'); updateDeleteButton(f); } finished=true; resolve(); };
       xhr.send(fd);
       updateDeleteButton(f);
     }); }
@@ -1117,49 +1097,4 @@
   }
   // Initial recompute after owned list load cycle
   setTimeout(recompute, 1500);
-})();
-(function addStreamingDebug(){
-  // Enable via localStorage.setItem('STREAM_DEBUG','1')
-  const enabled = (localStorage.getItem('STREAM_DEBUG')||'').match(/^(1|true|yes|on)$/i);
-  if(!enabled) return;
-  console.log('[stream-debug] client streaming debug enabled');
-  // Patch uploadOne to add detailed progress + timing
-  if(typeof uploadOne === 'function'){
-    const orig = uploadOne;
-    uploadOne = function(f,batch){
-      const started = performance.now();
-      return orig(f,batch).then(()=>{
-        const done = performance.now();
-        if(f && f.file){
-          console.log('[stream-debug] file', f.file.name, 'size', f.file.size, 'remote', f.remoteName, 'done', f.done, 'canceled', f.canceled, 'elapsed(ms)', (done-started).toFixed(1));
-        }
-      });
-    };
-  }
-  // Progress tap: observe XHR upload events (existing logic already updates barSpan)
-  const OrigXHR = window.XMLHttpRequest;
-  function Patched(){ const xhr = new OrigXHR(); let _fname='?'; let _size=0; let _lastLogged=0; const _open = xhr.open; xhr.open=function(m,u){ this.__url=u; return _open.apply(this,arguments); };
-    Object.defineProperty(xhr,'_debugInfo',{value:{},writable:true});
-    const _send = xhr.send; xhr.send=function(body){
-      try{ if(body instanceof FormData){ body.forEach((v,k)=>{ if(v && typeof v==='object' && 'name' in v && 'size' in v){ _fname=v.name; _size=v.size; } }); } }catch{}
-      if(xhr.upload){ xhr.upload.addEventListener('progress', e=>{ if(!e.lengthComputable) return; const pct = (e.loaded/_size)*100; const now=performance.now(); if(now-_lastLogged>250){ console.log('[stream-debug] progress', _fname, e.loaded+'/'+_size, pct.toFixed(2)+'%'); _lastLogged=now; } }); }
-      const t0 = performance.now();
-      xhr.addEventListener('loadend', ()=>{ console.log('[stream-debug] loadend', _fname, 'status', xhr.status, 'elapsed(ms)', (performance.now()-t0).toFixed(1)); });
-      return _send.apply(this, arguments);
-    };
-    return xhr; }
-  window.XMLHttpRequest = Patched;
-  // UI overlay for each file item
-  const style = document.createElement('style');
-  style.textContent='._streamDbg{font:400 10px system-ui,monospace;padding:2px 4px;margin-top:2px;background:#111;color:#7dd;border-radius:3px;opacity:.85;letter-spacing:.5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}';
-  document.documentElement.appendChild(style);
-  const mo = new MutationObserver(list=>{
-    list.forEach(m=>{
-      m.addedNodes && m.addedNodes.forEach(n=>{ if(!(n instanceof HTMLElement)) return; if(n.matches && (n.matches('.file-entry')||n.matches('#fileList > li'))){ attach(n); } n.querySelectorAll && n.querySelectorAll('.file-entry, #fileList > li').forEach(el=> attach(el)); });
-    });
-  });
-  function attach(node){ if(node._dbgAttached) return; node._dbgAttached=true; const dbg=document.createElement('div'); dbg.className='_streamDbg'; dbg.textContent='pending'; node.appendChild(dbg); node._dbgEl=dbg; }
-  mo.observe(document.getElementById('fileList')||document.body,{childList:true,subtree:true});
-  // Periodic update (poll f objects on batches)
-  setInterval(()=>{ try{ if(!window.batches) return; for(const batch of window.batches){ for(const f of batch.files){ if(!f || !f.container || !f.container._dbgEl) continue; if(f.done) { f.container._dbgEl.textContent='done size='+ (f.file?f.file.size:0); continue; } if(f.canceled){ f.container._dbgEl.textContent='canceled'; continue; } if(f.xhr && f.xhr.upload){ const bs = f.barSpan && f.barSpan.style.width || ''; f.container._dbgEl.textContent='uploading '+bs; } else { f.container._dbgEl.textContent='queued'; } } } }catch(e){} }, 400);
 })();

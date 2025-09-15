@@ -1,5 +1,4 @@
 use std::{sync::Arc, path::PathBuf, time::SystemTime, collections::HashMap};
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{RwLock, Semaphore};
 use serde::{Serialize, Deserialize};
 use tokio::fs; use tokio::io::AsyncWriteExt;
@@ -17,31 +16,16 @@ use crate::util::{now_secs, ttl_to_duration, ADMIN_SESSION_TTL, ADMIN_KEY_TTL, n
     pub admin_sessions_path: Arc<PathBuf>, pub admin_sessions: Arc<RwLock<HashMap<String, u64>>>,
     pub admin_key_path: Arc<PathBuf>, pub admin_key: Arc<RwLock<String>>,
     pub bans_path: Arc<PathBuf>, pub bans: Arc<RwLock<Vec<IpBan>>>,
-    // directory for assembling chunked uploads
-    pub chunk_dir: Arc<PathBuf>,
     // email notification config
     pub mailgun_api_key: Option<String>,
     pub mailgun_domain: Option<String>,
     pub report_email_to: Option<String>,
     pub report_email_from: Option<String>,
     pub email_tx: Option<tokio::sync::mpsc::Sender<crate::handlers::ReportRecordEmail>>, // channel to worker
-    // Debounce flag for owner metadata persistence (throttle writes)
-    pub owners_persist_flag: Arc<AtomicBool>,
 }
 
 impl AppState {
     pub async fn persist_owners(&self) { let owners=self.owners.read().await; if let Ok(json)=serde_json::to_vec(&*owners) { let tmp=self.metadata_path.with_extension("tmp"); if let Ok(mut f)=fs::File::create(&tmp).await { if f.write_all(&json).await.is_ok() { let _=f.sync_all().await; let _=fs::rename(&tmp,&*self.metadata_path).await; if let Ok(md)=fs::metadata(&*self.metadata_path).await { if let Ok(modified)=md.modified() { let mut lm=self.last_meta_mtime.write().await; *lm=modified; } } } } } }
-    pub fn schedule_persist_owners(&self) {
-        // If flag was previously false, schedule a delayed persist
-        if !self.owners_persist_flag.swap(true, Ordering::SeqCst) {
-            let this = self.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(160)).await; // debounce window
-                this.persist_owners().await;
-                this.owners_persist_flag.store(false, Ordering::SeqCst);
-            });
-        }
-    }
     pub async fn persist_reports(&self) { let reports=self.reports.read().await; if let Ok(json)=serde_json::to_vec(&*reports) { let tmp=self.reports_path.with_extension("tmp"); if let Ok(mut f)=fs::File::create(&tmp).await { if f.write_all(&json).await.is_ok() { let _=f.sync_all().await; let _=fs::rename(&tmp,&*self.reports_path).await; } } } }
     pub async fn persist_admin_sessions(&self) { let map=self.admin_sessions.read().await; if let Ok(json)=serde_json::to_vec(&*map) { let tmp=self.admin_sessions_path.with_extension("tmp"); if let Ok(mut f)=fs::File::create(&tmp).await { if f.write_all(&json).await.is_ok() { let _=f.sync_all().await; let _=fs::rename(&tmp,&*self.admin_sessions_path).await; } } } }
     pub async fn persist_bans(&self) { let bans=self.bans.read().await; if let Ok(json)=serde_json::to_vec(&*bans) { let tmp=self.bans_path.with_extension("tmp"); if let Ok(mut f)=fs::File::create(&tmp).await { if f.write_all(&json).await.is_ok() { let _=f.sync_all().await; let _=fs::rename(&tmp,&*self.bans_path).await; } } } }
