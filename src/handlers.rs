@@ -302,6 +302,64 @@ pub async fn simple_delete_handler(State(state): State<AppState>, ConnectInfo(ad
     (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
 }
 
+#[axum::debug_handler]
+pub async fn simple_upload_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, mut multipart: Multipart) -> Response {
+    // Prevent banned IPs
+    let client_ip = real_client_ip(&headers, &addr);
+    if state.is_banned(&client_ip).await {
+        let hv = HeaderValue::from_static("/banned");
+        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response();
+    }
+
+    let sem = state.upload_sem.clone();
+    let _permit = match sem.try_acquire_owned() { Ok(p)=>p, Err(_)=> {
+        let hv = HeaderValue::from_static("/simple?m=Server+busy" );
+        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response();
+    }};
+
+    // Default TTL matches simple.html default (3d)
+    let mut ttl_code = "3d".to_string();
+    let mut files_to_process: Vec<(Option<String>, Vec<u8>)> = Vec::new();
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = match field.name() { Some(n)=>n.to_string(), None=>continue };
+        if name == "ttl" {
+            if let Ok(data) = field.bytes().await { if let Ok(s)=std::str::from_utf8(&data) { ttl_code = s.to_string(); } }
+            continue;
+        }
+        if name.starts_with("file") {
+            let original_name = field.file_name().map(|s| s.to_string());
+            if let Ok(data) = field.bytes().await { if !data.is_empty() { files_to_process.push((original_name, data.to_vec())); } }
+        }
+    }
+
+    if files_to_process.is_empty() {
+        let hv = HeaderValue::from_static("/simple?m=No+files");
+        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response();
+    }
+
+    let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
+    let mut saved_files = 0usize; let mut skipped = 0usize;
+    for (original_name, data) in &files_to_process {
+        if data.len() as u64 > MAX_FILE_BYTES { skipped+=1; continue; }
+        let storage_name = make_storage_name(original_name.as_deref());
+        if is_forbidden_extension(&storage_name) { skipped+=1; continue; }
+        let path = state.upload_dir.join(&storage_name);
+        if fs::write(&path, data).await.is_ok() {
+            let meta = FileMeta { owner: client_ip.clone(), expires, original: original_name.clone().unwrap_or_default() };
+            state.owners.write().await.insert(storage_name.clone(), meta);
+            saved_files +=1;
+        } else { skipped+=1; }
+    }
+    state.persist_owners().await; spawn_integrity_check(state.clone());
+
+    let mut msg = if saved_files>0 { format!("Uploaded+{}+file{}", saved_files, if saved_files==1 {""} else {"s"}) } else { "No+files".to_string() };
+    if skipped>0 { msg.push_str("+(some+skipped)"); }
+    let loc = format!("/simple?m={}", msg);
+    let hv = HeaderValue::from_str(&loc).unwrap_or_else(|_| HeaderValue::from_static("/simple"));
+    (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
+}
+
 pub async fn debug_ip_handler(ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap) -> Response {
     let edge = addr.ip().to_string();
     let cf = headers.get("CF-Connecting-IP").and_then(|v| v.to_str().ok()).unwrap_or("-");
@@ -496,6 +554,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/unban", post(unban_post_handler))
         .route("/healthz", get(|| async { "ok" }))
         .route("/simple", get(simple_list_handler))
+        .route("/simple/upload", post(simple_upload_handler))
         .route("/simple_delete", post(simple_delete_handler))
         .route("/auth", get(auth_get_handler).post(auth_post_handler))
         .route("/isadmin", get(is_admin_handler))
