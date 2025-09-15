@@ -3,8 +3,10 @@ use axum::http::Request;
 use axum::body::Body;
 use std::{net::SocketAddr as ClientAddr, time::{SystemTime, Duration}};
 use tokio::fs;
+use tokio::io::AsyncWriteExt as _; // explicit for file.write_all
+use tokio::io::BufWriter;
 use serde::{Serialize, Deserialize};
-use crate::util::{json_error, real_client_ip, is_forbidden_extension, make_storage_name, now_secs, ttl_to_duration, qualify_path, MAX_FILE_BYTES, PROD_HOST, get_cookie, ADMIN_SESSION_TTL};
+use crate::util::{json_error, real_client_ip, is_forbidden_extension, make_storage_name, now_secs, ttl_to_duration, qualify_path, MAX_FILE_BYTES, PROD_HOST, get_cookie, ADMIN_SESSION_TTL, new_id};
 use crate::util::extract_client_ip;
 use crate::state::{AppState, FileMeta, ReportRecord, cleanup_expired, verify_user_entries_with_report, spawn_integrity_check, ReconcileReport};
 use tower_http::services::ServeDir;
@@ -42,8 +44,8 @@ pub struct ReportRecordEmail {
 #[derive(Deserialize)] pub struct AdminFileDeleteForm { pub file: String }
 #[derive(Deserialize)] pub struct AdminReportDeleteForm { pub idx: usize }
 
-// Upload handler
-#[axum::debug_handler]
+// Upload handler (streaming). debug_handler only in debug builds.
+#[cfg_attr(debug_assertions, axum::debug_handler)]
 pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, mut multipart: Multipart) -> Response {
     if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
     let ip = real_client_ip(&headers, &addr);
@@ -54,67 +56,51 @@ pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): Co
     };
 
     let mut ttl_code = "24h".to_string();
-    let mut files_to_process = Vec::new();
+    // Optimistic ID list (mirrors order of file fields as they appear)
+    let mut optimistic_entries: Vec<(String, Option<String>)> = Vec::new(); // (storage_name, original_name)
+    let mut processed = 0usize; let mut skipped = 0usize;
 
-    while let Some(field) = multipart.next_field().await.unwrap() {
-        let name = if let Some(name) = field.name() {
-            name.to_string()
-        } else {
-            continue;
-        };
-
-        if name == "ttl" {
-            if let Ok(data) = field.bytes().await {
-                if let Ok(s) = std::str::from_utf8(&data) {
-                    ttl_code = s.to_string();
-                }
-            }
-            continue;
-        }
-
-        if name.starts_with("file") {
-            let original_name = field.file_name().map(|s| s.to_string());
-            if let Ok(data) = field.bytes().await {
-                if !data.is_empty() {
-                    files_to_process.push((original_name, data));
-                }
-            }
-        }
-    }
-
-    if files_to_process.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "no_files", "no files were uploaded");
-    }
-
-    let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
-    let mut saved_files = Vec::new();
-
-    for (original_name, data) in &files_to_process {
-        if data.len() as u64 > MAX_FILE_BYTES {
-            continue;
-        }
+    while let Ok(Some(mut field)) = multipart.next_field().await {
+        let name = match field.name() { Some(n)=>n, None=>continue };
+        if name == "ttl" { if let Ok(data)=field.bytes().await { if let Ok(s)=std::str::from_utf8(&data) { ttl_code = s.to_string(); } } continue; }
+        if !name.starts_with("file") { continue; }
+        let original_name = field.file_name().map(|s| s.to_string());
+        // Pre-generate storage name for optimistic link display on client (client may ignore if not in list)
         let storage_name = make_storage_name(original_name.as_deref());
-        if is_forbidden_extension(&storage_name) {
-            continue;
-        }
+        optimistic_entries.push((storage_name.clone(), original_name.clone()));
+        // Stream write
         let path = state.upload_dir.join(&storage_name);
-        if fs::write(&path, data).await.is_ok() {
-            let meta = FileMeta { owner: ip.clone(), expires, original: original_name.clone().unwrap_or_default() };
-            state.owners.write().await.insert(storage_name.clone(), meta);
-            saved_files.push(storage_name);
+        let file = match fs::File::create(&path).await { Ok(f)=>f, Err(_)=> { skipped+=1; continue } };
+        let mut writer = BufWriter::new(file);
+        let mut total: u64 = 0;
+        let mut oversized=false; let mut bad_ext=false;
+        if is_forbidden_extension(&storage_name) { bad_ext=true; }
+        while let Ok(Some(chunk)) = field.chunk().await {
+            total += chunk.len() as u64;
+            if total > MAX_FILE_BYTES { oversized = true; break; }
+            if bad_ext { continue; }
+            if writer.write_all(&chunk).await.is_err() { oversized=true; break; }
         }
+        // finalize
+        if oversized || bad_ext { let _=fs::remove_file(&path).await; skipped+=1; continue; }
+        if writer.flush().await.is_err() { let _=fs::remove_file(&path).await; skipped+=1; continue; }
+        // persist metadata in-memory
+        processed += 1;
+        let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
+        state.owners.write().await.insert(storage_name.clone(), FileMeta { owner: ip.clone(), expires, original: original_name.unwrap_or_default() });
     }
 
-    state.persist_owners().await;
+    // Debounced disk persistence
+    state.schedule_persist_owners();
     spawn_integrity_check(state.clone());
-
-    let truncated = saved_files.len() < files_to_process.len();
-    let remaining = files_to_process.len() - saved_files.len();
-
-    (StatusCode::OK, Json(UploadResponse { files: saved_files, truncated, remaining })).into_response()
+    let truncated = skipped>0;
+    let remaining = skipped;
+    // Return only the successfully processed storage names (processed == optimistic minus skipped)
+    let files: Vec<String> = optimistic_entries.into_iter().take(processed).map(|(n,_)| n).collect();
+    (StatusCode::OK, Json(UploadResponse { files, truncated, remaining })).into_response()
 }
 
-#[axum::debug_handler]
+#[cfg_attr(debug_assertions, axum::debug_handler)]
 pub async fn list_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap) -> Response {
     if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
     cleanup_expired(&state).await; let client_ip=real_client_ip(&headers, &addr); let reconcile_report=verify_user_entries_with_report(&state, &client_ip).await; cleanup_expired(&state).await; crate::state::check_storage_integrity(&state).await;
@@ -126,7 +112,7 @@ pub async fn list_handler(State(state): State<AppState>, ConnectInfo(addr): Conn
     let body=Json(ListResponse{ files: only_names, metas, reconcile: reconcile_report });
     let mut resp=body.into_response(); resp.headers_mut().insert(CACHE_CONTROL, "no-store".parse().unwrap()); resp }
 
-#[axum::debug_handler]
+#[cfg_attr(debug_assertions, axum::debug_handler)]
 pub async fn fetch_file_handler(State(state): State<AppState>, Path(file): Path<String>) -> Response {
     if file.contains('/') { return (StatusCode::BAD_REQUEST, "bad file").into_response(); }
     cleanup_expired(&state).await;
@@ -156,10 +142,10 @@ pub async fn fetch_file_handler(State(state): State<AppState>, Path(file): Path<
     }
 }
 
-#[axum::debug_handler]
-pub async fn delete_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Path(file): Path<String>) -> Response { let ip=real_client_ip(&headers, &addr); if state.is_banned(&ip).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); } if file.contains('/') || file.contains("..") || file.contains('\\') { return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file name"); } cleanup_expired(&state).await; { let owners=state.owners.read().await; match owners.get(&file) { Some(meta) if meta.owner==ip => {}, _=> return (StatusCode::NOT_FOUND, "not found").into_response(), } } { let mut owners=state.owners.write().await; owners.remove(&file); } let path=state.upload_dir.join(&file); let _=fs::remove_file(&path).await; state.persist_owners().await; (StatusCode::NO_CONTENT, ()).into_response() }
+#[cfg_attr(debug_assertions, axum::debug_handler)]
+pub async fn delete_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Path(file): Path<String>) -> Response { let ip=real_client_ip(&headers, &addr); if state.is_banned(&ip).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); } if file.contains('/') || file.contains("..") || file.contains('\\') { return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file name"); } cleanup_expired(&state).await; { let owners=state.owners.read().await; match owners.get(&file) { Some(meta) if meta.owner==ip => {}, _=> return (StatusCode::NOT_FOUND, "not found").into_response(), } } { let mut owners=state.owners.write().await; owners.remove(&file); } let path=state.upload_dir.join(&file); let _=fs::remove_file(&path).await; state.schedule_persist_owners(); (StatusCode::NO_CONTENT, ()).into_response() }
 
-#[axum::debug_handler]
+#[cfg_attr(debug_assertions, axum::debug_handler)]
 pub async fn report_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Form(form): Form<ReportForm>) -> Response {
     if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
     let ip = real_client_ip(&headers, &addr);
@@ -429,7 +415,7 @@ pub async fn auth_post_handler(State(state): State<AppState>, _headers: HeaderMa
     let current_key = { state.admin_key.read().await.clone() };
     if current_key.is_empty() { return json_error(StatusCode::INTERNAL_SERVER_ERROR, "no_key", "admin key unavailable"); }
     if subtle_equals(submitted.as_bytes(), current_key.as_bytes()) {
-        let token = crate::util::new_id();
+        let token = new_id();
         state.create_admin_session(token.clone()).await;
         state.persist_admin_sessions().await;
         let cookie = format!("adm={}; Path=/; HttpOnly; Max-Age={}; SameSite=Strict", token, ADMIN_SESSION_TTL);

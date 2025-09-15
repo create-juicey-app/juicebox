@@ -1,4 +1,5 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc, net::SocketAddr, time::{Duration, SystemTime}};
+use std::sync::atomic::AtomicBool;
 use tokio::fs; use tokio::sync::{RwLock, Semaphore};
 use axum::{Router, middleware};
 use juicebox::state::{AppState, FileMeta, ReportRecord, cleanup_expired};
@@ -77,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
         report_email_to,
         report_email_from,
         email_tx: None,
+        owners_persist_flag: Arc::new(AtomicBool::new(false)),
     };
 
     // Load or create admin key after state so helper can use now_secs etc
