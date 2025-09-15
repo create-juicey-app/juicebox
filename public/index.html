@@ -36,7 +36,7 @@
   <noscript><div style="padding:.9rem 1rem;text-align:center;background:#222e3d;border-bottom:1px solid #2c394a;font-size:.7rem;letter-spacing:.5px;">JavaScript is disabled or unsupported. Use the <a href="/simple" style="color:var(--accent);text-decoration:underline;">basic no‑script uploader</a>.</div></noscript>
   <header>
     <!-- Single H1 (visible brand + hidden descriptive text) -->
-    <h1>JuiceBox <span class="visually-hidden">Temporary File Host</span></h1>
+    <h1 class="brand-heading"><a href="/" class="brand-link" aria-label="JuiceBox Home"><img src="/logo.png" alt="" class="logo" decoding="async" draggable="false" />JuiceBox <span class="visually-hidden">Temporary File Host</span></a></h1>
     <p class="lead">Click, Upload, Share!</p>
   </header>
   <main id="mainContent" tabindex="-1">
@@ -83,10 +83,10 @@
       } else if(j.edge) {
         text = `Your ip is ${j.edge} (edge!) btw.`;
       } else {
-        text = 'Your ip is fucking weird btw.';
+        text = 'Your ip is weird btw.';
       }
       note.textContent = text;
-    }).catch(()=>{ note.textContent='Your ip is fucking weird btw.'; });
+    }).catch(()=>{ note.textContent='Your ip is weird btw.'; });
   });
   </script>
   <script src="/js/app.js" defer></script>

@@ -484,10 +484,43 @@
       setTimeout(()=> dropZone.classList.add('animate'), 500);
       const iconEl = dropZone.querySelector('.icon');
       function setOpen(open){ if(iconEl){ iconEl.textContent = open ? '📂' : '📁'; } }
+      
+      // Added: show box emoji (📦) when user is dragging multiple files, an archive, or a directory
+      let _dragSpecial = false;
+      function updateDragIcon(e){
+        if(!iconEl || !e || !e.dataTransfer) return;
+        const dt = e.dataTransfer;
+        let special = false;
+        if(dt.items){
+          const items = Array.from(dt.items).filter(it=> it.kind === 'file');
+          if(items.length > 1) special = true; // multi-file
+          for(const it of items){
+            if(special) break;
+            const entry = it.webkitGetAsEntry && it.webkitGetAsEntry();
+            if(entry && entry.isDirectory){ special = true; break; }
+            const f = it.getAsFile && it.getAsFile();
+            if(f){
+              const name = f.name.toLowerCase();
+              if(/\.(zip|tar|tgz|gz|rar|7z|bz2|xz|zipx)$/.test(name)){ special = true; break; }
+            }
+          }
+        }
+        if(special){
+          _dragSpecial = true;
+          iconEl.textContent = '📦';
+        } else if(!_dragSpecial) {
+          // fallback to open folder while hovering
+          iconEl.textContent = '📂';
+        }
+      }
+      ['dragenter','dragover'].forEach(evt=>{
+        dropZone.addEventListener(evt, ev=>{ updateDragIcon(ev); }, true);
+      });
+      ['dragleave','drop'].forEach(evt=>{
+        dropZone.addEventListener(evt, ()=>{ if(_dragSpecial){ _dragSpecial=false; setOpen(false); } });
+      });
       dropZone.addEventListener('mouseenter', ()=> setOpen(true));
-      dropZone.addEventListener('mouseleave', ()=> setOpen(false));
       dropZone.addEventListener('focusin', ()=> setOpen(true));
-      dropZone.addEventListener('focusout', ()=> setOpen(false));
       dropZone.addEventListener('dragenter', ()=> setOpen(true));
       dropZone.addEventListener('dragleave', ()=> !dropZone.classList.contains('drag') && setOpen(false));
       // ripple + click (non-capture to let normal handlers run first)
