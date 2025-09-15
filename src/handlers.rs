@@ -55,6 +55,9 @@ pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): Co
         Err(_) => return json_error(StatusCode::SERVICE_UNAVAILABLE, "busy", "server is busy, try again later"),
     };
 
+    // Streaming debug flag (set STREAM_DEBUG=1)
+    let stream_debug = std::env::var("STREAM_DEBUG").map(|v| matches!(v.as_str(), "1"|"true"|"yes"|"on"|"DEBUG")).unwrap_or(false);
+
     let mut ttl_code = "24h".to_string();
     // Optimistic ID list (mirrors order of file fields as they appear)
     let mut optimistic_entries: Vec<(String, Option<String>)> = Vec::new(); // (storage_name, original_name)
@@ -62,28 +65,31 @@ pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): Co
 
     while let Ok(Some(mut field)) = multipart.next_field().await {
         let name = match field.name() { Some(n)=>n, None=>continue };
-        if name == "ttl" { if let Ok(data)=field.bytes().await { if let Ok(s)=std::str::from_utf8(&data) { ttl_code = s.to_string(); } } continue; }
+        if name == "ttl" { if let Ok(data)=field.bytes().await { if let Ok(s)=std::str::from_utf8(&data) { ttl_code = s.to_string(); if stream_debug { eprintln!("stream: ttl field set to {ttl_code}"); } } } continue; }
         if !name.starts_with("file") { continue; }
         let original_name = field.file_name().map(|s| s.to_string());
         // Pre-generate storage name for optimistic link display on client (client may ignore if not in list)
         let storage_name = make_storage_name(original_name.as_deref());
+        if stream_debug { eprintln!("stream: start file storage={storage_name} original={:?}", original_name); }
         optimistic_entries.push((storage_name.clone(), original_name.clone()));
         // Stream write
         let path = state.upload_dir.join(&storage_name);
-        let file = match fs::File::create(&path).await { Ok(f)=>f, Err(_)=> { skipped+=1; continue } };
+        let file = match fs::File::create(&path).await { Ok(f)=>f, Err(e)=> { if stream_debug { eprintln!("stream: create_failed file={storage_name} err={e}"); } skipped+=1; continue } };
         let mut writer = BufWriter::new(file);
         let mut total: u64 = 0;
         let mut oversized=false; let mut bad_ext=false;
         if is_forbidden_extension(&storage_name) { bad_ext=true; }
         while let Ok(Some(chunk)) = field.chunk().await {
             total += chunk.len() as u64;
-            if total > MAX_FILE_BYTES { oversized = true; break; }
+            if stream_debug { eprintln!("stream: chunk file={storage_name} size={} total={total}", chunk.len()); }
+            if total > MAX_FILE_BYTES { oversized = true; if stream_debug { eprintln!("stream: oversized_detected file={storage_name} limit={MAX_FILE_BYTES} total={total}"); } break; }
             if bad_ext { continue; }
-            if writer.write_all(&chunk).await.is_err() { oversized=true; break; }
+            if let Err(e) = writer.write_all(&chunk).await { oversized=true; if stream_debug { eprintln!("stream: write_error file={storage_name} err={e}"); } break; }
         }
         // finalize
-        if oversized || bad_ext { let _=fs::remove_file(&path).await; skipped+=1; continue; }
-        if writer.flush().await.is_err() { let _=fs::remove_file(&path).await; skipped+=1; continue; }
+        if oversized || bad_ext { let _=fs::remove_file(&path).await; skipped+=1; if stream_debug { eprintln!("stream: discarded file={storage_name} reason={} size={total}", if oversized {"oversized"} else {"bad_ext"}); } continue; }
+        if writer.flush().await.is_err() { let _=fs::remove_file(&path).await; skipped+=1; if stream_debug { eprintln!("stream: flush_error file={storage_name}"); } continue; }
+        if stream_debug { eprintln!("stream: complete file={storage_name} size={total}"); }
         // persist metadata in-memory
         processed += 1;
         let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
@@ -97,6 +103,7 @@ pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): Co
     let remaining = skipped;
     // Return only the successfully processed storage names (processed == optimistic minus skipped)
     let files: Vec<String> = optimistic_entries.into_iter().take(processed).map(|(n,_)| n).collect();
+    if stream_debug { eprintln!("stream: response processed={processed} skipped={skipped}"); }
     (StatusCode::OK, Json(UploadResponse { files, truncated, remaining })).into_response()
 }
 

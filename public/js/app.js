@@ -1118,3 +1118,48 @@
   // Initial recompute after owned list load cycle
   setTimeout(recompute, 1500);
 })();
+(function addStreamingDebug(){
+  // Enable via localStorage.setItem('STREAM_DEBUG','1')
+  const enabled = (localStorage.getItem('STREAM_DEBUG')||'').match(/^(1|true|yes|on)$/i);
+  if(!enabled) return;
+  console.log('[stream-debug] client streaming debug enabled');
+  // Patch uploadOne to add detailed progress + timing
+  if(typeof uploadOne === 'function'){
+    const orig = uploadOne;
+    uploadOne = function(f,batch){
+      const started = performance.now();
+      return orig(f,batch).then(()=>{
+        const done = performance.now();
+        if(f && f.file){
+          console.log('[stream-debug] file', f.file.name, 'size', f.file.size, 'remote', f.remoteName, 'done', f.done, 'canceled', f.canceled, 'elapsed(ms)', (done-started).toFixed(1));
+        }
+      });
+    };
+  }
+  // Progress tap: observe XHR upload events (existing logic already updates barSpan)
+  const OrigXHR = window.XMLHttpRequest;
+  function Patched(){ const xhr = new OrigXHR(); let _fname='?'; let _size=0; let _lastLogged=0; const _open = xhr.open; xhr.open=function(m,u){ this.__url=u; return _open.apply(this,arguments); };
+    Object.defineProperty(xhr,'_debugInfo',{value:{},writable:true});
+    const _send = xhr.send; xhr.send=function(body){
+      try{ if(body instanceof FormData){ body.forEach((v,k)=>{ if(v && typeof v==='object' && 'name' in v && 'size' in v){ _fname=v.name; _size=v.size; } }); } }catch{}
+      if(xhr.upload){ xhr.upload.addEventListener('progress', e=>{ if(!e.lengthComputable) return; const pct = (e.loaded/_size)*100; const now=performance.now(); if(now-_lastLogged>250){ console.log('[stream-debug] progress', _fname, e.loaded+'/'+_size, pct.toFixed(2)+'%'); _lastLogged=now; } }); }
+      const t0 = performance.now();
+      xhr.addEventListener('loadend', ()=>{ console.log('[stream-debug] loadend', _fname, 'status', xhr.status, 'elapsed(ms)', (performance.now()-t0).toFixed(1)); });
+      return _send.apply(this, arguments);
+    };
+    return xhr; }
+  window.XMLHttpRequest = Patched;
+  // UI overlay for each file item
+  const style = document.createElement('style');
+  style.textContent='._streamDbg{font:400 10px system-ui,monospace;padding:2px 4px;margin-top:2px;background:#111;color:#7dd;border-radius:3px;opacity:.85;letter-spacing:.5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}';
+  document.documentElement.appendChild(style);
+  const mo = new MutationObserver(list=>{
+    list.forEach(m=>{
+      m.addedNodes && m.addedNodes.forEach(n=>{ if(!(n instanceof HTMLElement)) return; if(n.matches && (n.matches('.file-entry')||n.matches('#fileList > li'))){ attach(n); } n.querySelectorAll && n.querySelectorAll('.file-entry, #fileList > li').forEach(el=> attach(el)); });
+    });
+  });
+  function attach(node){ if(node._dbgAttached) return; node._dbgAttached=true; const dbg=document.createElement('div'); dbg.className='_streamDbg'; dbg.textContent='pending'; node.appendChild(dbg); node._dbgEl=dbg; }
+  mo.observe(document.getElementById('fileList')||document.body,{childList:true,subtree:true});
+  // Periodic update (poll f objects on batches)
+  setInterval(()=>{ try{ if(!window.batches) return; for(const batch of window.batches){ for(const f of batch.files){ if(!f || !f.container || !f.container._dbgEl) continue; if(f.done) { f.container._dbgEl.textContent='done size='+ (f.file?f.file.size:0); continue; } if(f.canceled){ f.container._dbgEl.textContent='canceled'; continue; } if(f.xhr && f.xhr.upload){ const bs = f.barSpan && f.barSpan.style.width || ''; f.container._dbgEl.textContent='uploading '+bs; } else { f.container._dbgEl.textContent='queued'; } } } }catch(e){} }, 400);
+})();
