@@ -17,6 +17,8 @@ use crate::util::{now_secs, ttl_to_duration, ADMIN_SESSION_TTL, ADMIN_KEY_TTL, n
     pub admin_sessions_path: Arc<PathBuf>, pub admin_sessions: Arc<RwLock<HashMap<String, u64>>>,
     pub admin_key_path: Arc<PathBuf>, pub admin_key: Arc<RwLock<String>>,
     pub bans_path: Arc<PathBuf>, pub bans: Arc<RwLock<Vec<IpBan>>>,
+    // directory for assembling chunked uploads
+    pub chunk_dir: Arc<PathBuf>,
     // email notification config
     pub mailgun_api_key: Option<String>,
     pub mailgun_domain: Option<String>,

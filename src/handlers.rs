@@ -539,6 +539,7 @@ pub fn build_router(state: AppState) -> Router {
     let js_service = ServeDir::new(static_root.join("js"));
     Router::new()
         .route("/upload", post(upload_handler))
+        .route("/upload/chunk", post(upload_chunk_handler))
         .route("/list", get(list_handler))
         .route("/mine", get(list_handler))
         .route("/f/{file}", get(fetch_file_handler).delete(delete_handler))
@@ -560,4 +561,60 @@ pub fn build_router(state: AppState) -> Router {
         .route("/", get(root_handler))
         .route("/{*path}", get(file_handler))
         .with_state(state)
+}
+
+#[cfg_attr(debug_assertions, axum::debug_handler)]
+pub async fn upload_chunk_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    // Basic validations & rate limiting by semaphore like normal upload
+    if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
+    let ip = real_client_ip(&headers, &addr);
+    let sem = state.upload_sem.clone();
+    let _permit = match sem.try_acquire_owned() { Ok(p)=>p, Err(_)=> return json_error(StatusCode::SERVICE_UNAVAILABLE, "busy", "server busy") };
+
+    // Required headers
+    let upload_id = headers.get("X-Upload-Id").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let filename = headers.get("X-Filename").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let chunk_index = headers.get("X-Chunk-Index").and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<u32>().ok());
+    let chunk_count = headers.get("X-Chunk-Count").and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<u32>().ok());
+    let total_size = headers.get("X-Total-Size").and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<u64>().ok());
+    let ttl_code = headers.get("X-Ttl").and_then(|v| v.to_str().ok()).unwrap_or("24h");
+    if upload_id.is_empty() || filename.is_empty() || chunk_index.is_none() || chunk_count.is_none() || total_size.is_none() { return json_error(StatusCode::BAD_REQUEST, "missing", "missing headers"); }
+    let (chunk_index, chunk_count, total_size) = (chunk_index.unwrap(), chunk_count.unwrap(), total_size.unwrap());
+    if chunk_index >= chunk_count || chunk_count==0 { return json_error(StatusCode::BAD_REQUEST, "bad_index", "invalid chunk index"); }
+    if total_size > MAX_FILE_BYTES { return json_error(StatusCode::PAYLOAD_TOO_LARGE, "too_large", "file too large"); }
+
+    // directory path for this upload id
+    let up_dir = state.chunk_dir.join(upload_id);
+    if !up_dir.exists() { if let Err(e)=tokio::fs::create_dir_all(&up_dir).await { eprintln!("chunk: mkdir error id={upload_id} err={e}"); return json_error(StatusCode::INTERNAL_SERVER_ERROR, "fs", "fs error"); } }
+
+    // write chunk file
+    let part_path = up_dir.join(format!("{}.part", chunk_index));
+    match tokio::fs::write(&part_path, &body).await { Ok(_)=>{}, Err(e)=> { eprintln!("chunk: write error id={upload_id} idx={chunk_index} err={e}"); return json_error(StatusCode::INTERNAL_SERVER_ERROR, "write", "write error"); } }
+
+    // If last chunk, assemble
+    if chunk_index + 1 == chunk_count {
+        // verify all parts exist
+        for i in 0..chunk_count { if !up_dir.join(format!("{}.part", i)).exists() { return json_error(StatusCode::BAD_REQUEST, "missing_part", "missing chunk"); } }
+        // create final storage name
+        let storage_name = make_storage_name(Some(filename));
+        if is_forbidden_extension(&storage_name) { let _=tokio::fs::remove_dir_all(&up_dir).await; return json_error(StatusCode::BAD_REQUEST, "ext", "forbidden extension"); }
+        let final_path = state.upload_dir.join(&storage_name);
+        let mut out = match tokio::fs::File::create(&final_path).await { Ok(f)=>f, Err(_)=> { return json_error(StatusCode::INTERNAL_SERVER_ERROR, "create", "create error"); } };
+        let mut writer = BufWriter::new(&mut out);
+        let mut written: u64 = 0;
+        for i in 0..chunk_count {
+            let p = up_dir.join(format!("{}.part", i));
+            match tokio::fs::read(&p).await { Ok(bytes)=> { written += bytes.len() as u64; if written> total_size || written > MAX_FILE_BYTES { let _=tokio::fs::remove_file(&final_path).await; let _=tokio::fs::remove_dir_all(&up_dir).await; return json_error(StatusCode::BAD_REQUEST, "size_mismatch", "size mismatch"); } if let Err(e)=writer.write_all(&bytes).await { eprintln!("chunk: assemble write err={e}"); let _=tokio::fs::remove_file(&final_path).await; let _=tokio::fs::remove_dir_all(&up_dir).await; return json_error(StatusCode::INTERNAL_SERVER_ERROR, "assemble_write", "assemble write"); } }, Err(_)=> { let _=tokio::fs::remove_file(&final_path).await; let _=tokio::fs::remove_dir_all(&up_dir).await; return json_error(StatusCode::BAD_REQUEST, "missing_part", "missing chunk"); } }
+        }
+        if writer.flush().await.is_err() { let _=tokio::fs::remove_file(&final_path).await; let _=tokio::fs::remove_dir_all(&up_dir).await; return json_error(StatusCode::INTERNAL_SERVER_ERROR, "flush", "flush error"); }
+        // success: cleanup parts
+        let _=tokio::fs::remove_dir_all(&up_dir).await;
+        let expires = now_secs() + ttl_to_duration(ttl_code).as_secs();
+        state.owners.write().await.insert(storage_name.clone(), FileMeta { owner: ip.clone(), expires, original: filename.to_string() });
+        state.schedule_persist_owners();
+        spawn_integrity_check(state.clone());
+        return (StatusCode::OK, Json(UploadResponse { files: vec![storage_name], truncated:false, remaining:0 })).into_response();
+    }
+    // Not final chunk: 202 Accepted
+    (StatusCode::ACCEPTED, Json(serde_json::json!({"received": chunk_index, "remaining": (chunk_count - chunk_index - 1)}))).into_response()
 }
