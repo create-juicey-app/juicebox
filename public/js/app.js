@@ -1048,7 +1048,7 @@
   };
 })();
 (function patchUploadResponseHandling(){
-  // Enhance existing xhr.onload inside uploadOne via monkey patch if not already handled
+  // this function sucks.
   if(typeof uploadOne === 'function'){
     const orig = uploadOne;
     uploadOne = function(f,batch){

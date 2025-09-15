@@ -7,26 +7,26 @@
   <link rel="stylesheet" href="/css/app.css" />
 </head>
 <body>
-  <h1>Orange JuiceBox</h1>
-  <p style="margin:0 0 1.1rem;font-size:.8rem;opacity:.75" id="mainDesc">Basic uploader for old browsers and disabled JavaScript.</p>
+  <h1 class="page-title">Orange JuiceBox</h1>
+  <p id="mainDesc" class="lead">Basic uploader for old browsers and disabled JavaScript.</p>
   {{MESSAGE}}
   <form class="upload" method="post" enctype="multipart/form-data" action="/simple/upload" aria-describedby="mainDesc" aria-label="Upload files form">
     <fieldset>
       <label for="file">Files</label>
       <input id="file" type="file" name="file" multiple required />
       <div class="ttl-box">
-        <label for="ttl" style="margin:0">Retention:</label>
+        <label for="ttl" class="ttl-label">Retention:</label>
         <select name="ttl" id="ttl">
           <option>1h</option><option>3h</option><option>12h</option><option>1d</option><option selected>3d</option><option>7d</option><option>14d</option>
         </select>
-        <span style="font-size:.6rem;opacity:.55">auto delete</span>
+        <span class="note-extra">auto delete</span>
       </div>
       <button class="primary" type="submit">Upload</button>
     </fieldset>
   </form>
   <div class="files-panel" role="region" aria-label="Your uploaded files">
-    <h2 style="margin:.1rem 0  .6rem;font-size:.9rem;letter-spacing:.5px;opacity:.8;text-transform:uppercase">Your Files</h2>
-    <table role="table" aria-describedby="tableNote">
+    <h2 class="files-heading">Your Files</h2>
+    <table class="files-table" role="table" aria-describedby="tableNote">
       <thead><tr><th>Name</th><th>Expires In</th><th>Delete</th></tr></thead>
       <tbody>
         {{ROWS}}
@@ -35,6 +35,6 @@
     <p class="note" id="tableNote">Files are linked to your IP. They expire automatically. Keep page for reference or bookmark links.</p>
     <p class="note">Notice: Your IP address is used only to associate and manage your uploaded files, enforce limits, and enable moderation/abuse handling. It is not shared and is discarded when all related files expire.</p>
   </div>
-  <p class="note">Return to <a href="/">the normie page</a>. <span style="display:block;margin-top:.35rem">Also: <a href="/report">Report</a> • <a href="/terms">Terms</a> • <a href="https://buymeacoffee.com/juiceydev" target="_blank" rel="noopener">Donate</a></span></p>
+  <p class="note">Return to <a href="/">the normie page</a>. <span class="note-extra">Also: <a href="/report">Report</a> • <a href="/terms">Terms</a> • <a href="https://buymeacoffee.com/juiceydev" target="_blank" rel="noopener">Donate</a></span></p>
 </body>
 </html>
