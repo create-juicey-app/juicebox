@@ -137,11 +137,39 @@ async fn main() -> anyhow::Result<()> {
                 let admin_files = format!("https://{}/admin/files", PROD_HOST);
                 let admin_reports = format!("https://{}/admin/reports", PROD_HOST);
                 let ban_link = if !ev.owner_ip.is_empty() { format!("https://{}/admin/ban?ip={}", PROD_HOST, ev.owner_ip) } else { String::new() };
-                html.push_str("<div style=\"display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;\">");
-                html.push_str(&format!("<a href=\"{}\" style=\"background:#ff9800;color:#111;padding:8px 12px;border-radius:8px;font-size:12px;text-decoration:none;font-weight:600;\">Open File</a>", file_link));
-                html.push_str(&format!("<a href=\"{}\" style=\"background:#40618a;color:#fff;padding:8px 12px;border-radius:8px;font-size:12px;text-decoration:none;font-weight:600;\">Manage Files</a>", admin_files));
-                html.push_str(&format!("<a href=\"{}\" style=\"background:#3d8f6e;color:#fff;padding:8px 12px;border-radius:8px;font-size:12px;text-decoration:none;font-weight:600;\">View Reports</a>", admin_reports));
-                if !ban_link.is_empty() { html.push_str(&format!("<a href=\"{}\" style=\"background:#ff3d00;color:#fff;padding:8px 12px;border-radius:8px;font-size:12px;text-decoration:none;font-weight:600;\">Ban Owner IP</a>", ban_link)); }
+                let has_ban = !ban_link.is_empty();
+                html.push_str("<div style=\"display:inline-flex;flex-wrap:nowrap;margin-top:6px;\">");
+
+                // First (left rounded)
+                html.push_str(&format!(
+                    "<a href=\"{}\" style=\"background:#ff9800;color:#111;padding:8px 12px;font-size:12px;text-decoration:none;font-weight:600;border-radius:8px 0 0 8px;\">Open File</a>",
+                    file_link
+                ));
+
+                // Middle (square)
+                html.push_str(&format!(
+                    "<a href=\"{}\" style=\"background:#40618a;color:#fff;padding:8px 12px;font-size:12px;text-decoration:none;font-weight:600;border-radius:0;\">Manage Files</a>",
+                    admin_files
+                ));
+
+                if has_ban {
+                    // Middle (square)
+                    html.push_str(&format!(
+                        "<a href=\"{}\" style=\"background:#3d8f6e;color:#fff;padding:8px 12px;font-size:12px;text-decoration:none;font-weight:600;border-radius:0;\">View Reports</a>",
+                        admin_reports
+                    ));
+                    // Last (right rounded)
+                    html.push_str(&format!(
+                        "<a href=\"{}\" style=\"background:#ff3d00;color:#fff;padding:8px 12px;font-size:12px;text-decoration:none;font-weight:600;border-radius:0 8px 8px 0;\">Ban Owner IP</a>",
+                        ban_link
+                    ));
+                } else {
+                    // Last (right rounded because no ban button)
+                    html.push_str(&format!(
+                        "<a href=\"{}\" style=\"background:#3d8f6e;color:#fff;padding:8px 12px;font-size:12px;text-decoration:none;font-weight:600;border-radius:0 8px 8px 0;\">View Reports</a>",
+                        admin_reports
+                    ));
+                }
                 html.push_str("</div>");
                 html.push_str("<p style=\"margin-top:16px;font-size:10px;opacity:.55;\">Automated notification. Use admin dashboard to delete report or file. Do not forward externally.</p>");
                 html.push_str("</div></body></html>");

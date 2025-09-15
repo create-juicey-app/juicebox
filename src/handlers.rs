@@ -8,7 +8,6 @@ use crate::util::{json_error, real_client_ip, is_forbidden_extension, make_stora
 use crate::util::extract_client_ip;
 use crate::state::{AppState, FileMeta, ReportRecord, cleanup_expired, verify_user_entries_with_report, spawn_integrity_check, ReconcileReport};
 use tower_http::services::ServeDir;
-use tokio::sync::mpsc;
 use time::{OffsetDateTime};
 
 // Email event for reports
@@ -163,7 +162,21 @@ pub async fn report_handler(State(state): State<AppState>, ConnectInfo(addr): Co
     if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
     let ip = real_client_ip(&headers, &addr);
     let now = now_secs();
-    let mut record = ReportRecord { file: form.file.clone(), reason: form.reason.clone(), details: form.details.clone().unwrap_or_default(), ip: ip.clone(), time: now };
+    // Canonicalize file id: if exact not found and no extension supplied, try auto-matching stored file with extension.
+    let mut file_name = form.file.trim().to_string();
+    {
+        let owners = state.owners.read().await; // read lock scope
+        if !owners.contains_key(&file_name) && !file_name.contains('.') {
+            // collect candidates that start with "{id}." (single extension segment)
+            let prefix = format!("{file_name}.");
+            let mut candidates: Vec<&String> = owners.keys().filter(|k| k.starts_with(&prefix)).collect();
+            // deterministic selection: pick shortest name (i.e., shortest extension); then lexicographically
+            candidates.sort();
+            candidates.sort_by_key(|k| k.len());
+            if let Some(best) = candidates.first() { file_name = (*best).clone(); }
+        }
+    }
+    let record = ReportRecord { file: file_name.clone(), reason: form.reason.clone(), details: form.details.clone().unwrap_or_default(), ip: ip.clone(), time: now };
     let (owner_ip, original_name, expires, size) = {
         let owners = state.owners.read().await;
         if let Some(meta) = owners.get(&record.file) {
@@ -182,7 +195,7 @@ pub async fn report_handler(State(state): State<AppState>, ConnectInfo(addr): Co
     };
     state.persist_reports().await;
     if let Some(tx) = &state.email_tx {
-        let iso = OffsetDateTime::from_unix_timestamp(now as i64).ok().map(|t| t.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()).unwrap_or_default();
+        let iso = OffsetDateTime::from_unix_timestamp(now as i64).map(|t| t.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()).unwrap_or_default();
         let _ = tx.send(ReportRecordEmail {
             file: record.file.clone(),
             reason: record.reason.clone(),
