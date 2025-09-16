@@ -1,7 +1,9 @@
 /* basic placeholder css */
 :root { --accent:#ff8a00; --bg:#0f141b; --fg:#e8edf2; font-family: system-ui, sans-serif; }
 body { background:var(--bg); color:var(--fg); margin:0; font:14px/1.4 system-ui, sans-serif; }
-a { color: var(--accent); }
+/* Global link styling: no underline by default; underline on hover/focus */
+a { color: var(--accent); text-decoration: none; }
+a:hover, a:focus { text-decoration: underline; }
 
 :root { --bg:#0d1218; --panel:#1d2733; --panel-border:#2f3b4a; --accent:#ff9800; --accent-rgb:255 152 0; --text:#f2f6fb; --text-subtle:#b5c0cc; --text-muted:#9aa7b5; --danger:#e53935; --ok:#4caf50; --radius:14px; font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif; --e-out:cubic-bezier(.16,.8,.3,1); --e-in:cubic-bezier(.5,.05,.2,.99); }
   * { box-sizing:border-box; }
@@ -15,6 +17,10 @@ a { color: var(--accent); }
   .panel section { padding:1.25rem 1.35rem 1.5rem; }
   .panel h2 { margin:0 0 1rem; font-size:1.05rem; font-weight:600; letter-spacing:.7px; text-transform:uppercase; color:var(--text-subtle); }
 
+  /* Footer link styling: white, no underline until hover */
+  .footer-links a, .footer-links a:visited { color:#fff; text-decoration:none; }
+  .footer-links a:hover, .footer-links a:focus { text-decoration:underline; }
+
   /* === Drop-zone (deduplicated) === */
   /* Updated: Orange contrasted drop-zone theme */
   .drop-zone { position:relative; border:2px dashed #ff9800; border-radius:calc(var(--radius) - 4px); padding:3.5rem 1rem; text-align:center; cursor:pointer; min-height:240px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.65rem; transition:.25s border-color,.25s background,.25s transform,.25s box-shadow; width:100%; overflow:hidden; background:linear-gradient(145deg,#462605,#2d1803 58%,#271503); color:var(--text); box-shadow:0 4px 14px -6px rgba(0,0,0,.6), 0 0 0 1px rgba(255,152,0,.15); }
@@ -25,21 +31,15 @@ a { color: var(--accent); }
   .drop-zone .ripple { position:absolute; border-radius:50%; background:radial-gradient(circle at center, rgba(var(--accent-rgb)/.55), rgba(var(--accent-rgb)/0) 70%); transform:scale(0); animation:dzRipple .85s var(--e-out) forwards; pointer-events:none; opacity:.9; mix-blend-mode:overlay; }
   /* Adjusted pattern colors for orange theme */
   .drop-zone::before { content:""; position:absolute; inset:0; pointer-events:none; background:
-    radial-gradient(circle, transparent 22%, #3a2106 22%, #3a2106 78%, transparent 78%, transparent) 0% 0% / 64px 64px,
-    radial-gradient(circle, transparent 22%, #3a2106 22%, #3a2106 78%, transparent 78%, transparent) 32px 32px / 64px 64px,
-    linear-gradient(#ff9800 2px, transparent 2px) 0 -1px / 32px 32px,
     linear-gradient(90deg,#ff9800 2px,#3a2106 2px) -1px 0 / 32px 32px #3a2106; background-size:64px 64px,64px 64px,32px 32px,32px 32px; opacity:.18; }
   .drop-zone::after { content:""; position:absolute; inset:0; background:linear-gradient(to bottom, rgba(20,12,5,0) 58%, rgba(20,12,5,.78) 100%); pointer-events:none; }
   .drop-zone.animate::before { animation:dzDiag 24s linear infinite; }
   .drop-zone.drag::before { animation:dzDiagFast 2.2s linear infinite; opacity:.28; }
   /* Focus ring ensure sufficient contrast on orange surface */
-  .drop-zone:focus-visible { box-shadow:0 0 0 3px rgba(0,0,0,.55),0 0 0 5px rgba(var(--accent-rgb)/.55); }
+  .drop-zone:focus-visible { box-shadow:0 0 0 3px rgba(var(--accent-rgb)/.55),0 0 0 5px rgba(var(--accent-rgb)/.55); }
   @keyframes dzRipple { to { transform:scale(1); opacity:0; } }
   /* Pattern + motion */
   .drop-zone::before { content:""; position:absolute; inset:0; pointer-events:none; background:
-    radial-gradient(circle, transparent 20%, #1b232c 20%, #1b232c 80%, transparent 80%, transparent) 0% 0% / 64px 64px,
-    radial-gradient(circle, transparent 20%, #1b232c 20%, #1b232c 80%, transparent 80%, transparent) 32px 32px / 64px 64px,
-    linear-gradient(#ffa200 2px, transparent 2px) 0 -1px / 32px 32px,
     linear-gradient(90deg,#ffa200 2px,#1b232c 2px) -1px 0 / 32px 32px #1b232c; background-size:64px 64px,64px 64px,32px 32px,32px 32px; opacity:.16; }
   .drop-zone::after { content:""; position:absolute; inset:0; background:linear-gradient(to bottom, rgba(15,20,27,0) 58%, rgba(15,20,27,.82) 100%); pointer-events:none; }
   .drop-zone.animate::before { animation:dzDiag 24s linear infinite; }
@@ -56,8 +56,6 @@ a { color: var(--accent); }
   ul#fileList li:hover { box-shadow:0 4px 22px -10px rgba(0,0,0,.7); }
   ul#fileList li.removing { animation:squishOutSoft .48s var(--e-out) forwards; transform-origin:top center; }
   @keyframes squishOut { 0% { opacity:1; transform:scale(1); height:var(--orig-h); margin-top:var(--orig-mt); margin-bottom:var(--orig-mb); }
-    60% { opacity:.35; transform:scale(.96,.65); }
-    100% { opacity:0; transform:scale(.95,.2); height:0; margin-top:0; margin-bottom:0; padding-top:0; padding-bottom:0; }
   }
   @keyframes squishOutSoft {
     0% { opacity:1; transform:scale(1); height:var(--orig-h); margin-top:var(--orig-mt); margin-bottom:var(--orig-mb); }
@@ -256,10 +254,14 @@ a { color: var(--accent); }
   .brand-heading { display:flex; align-items:center; justify-content:center; gap:.6rem; margin:0; }
   .brand-link { display:flex; align-items:center; gap:.6rem; line-height:1; text-decoration:none; color:inherit; }
   .brand-link { position:relative; }
-  .brand-link .visually-hidden + span, .brand-link span.visually-hidden { /* no change, just placeholder if needed */ }
   /* Adjust heading font metrics to center with icon */
   .brand-heading .brand-link { padding:.25rem .9rem .3rem; }
   .brand-heading .logo { margin:0 12px 0 0; }
+
+  /* Inspired note and share links tweaks */
+  .inspired-note { color:var(--text-muted); margin:.2rem 0 .2rem; font-size:.8rem; }
+  .share-links a { text-decoration:none; }
+  .share-links a:hover, .share-links a:focus { text-decoration:underline; }
 
   .logo {
     /* larger, explicitly sized icon and force pixelated rendering (no antialias)
