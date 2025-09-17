@@ -31,11 +31,6 @@ a { color: var(--accent); }
   /* Focus ring ensure sufficient contrast on orange surface */
   .drop-zone:focus-visible { box-shadow:0 0 0 3px rgba(0,0,0,.55),0 0 0 5px rgba(var(--accent-rgb)/.55); }
   @keyframes dzRipple { to { transform:scale(1); opacity:0; } }
-  /* Pattern + motion */
-
-  .drop-zone::after { content:""; position:absolute; inset:0; background:linear-gradient(to bottom, rgba(15,20,27,0) 58%, rgba(15,20,27,.82) 100%); pointer-events:none; }
-  .drop-zone.animate::before { animation:dzDiag 24s linear infinite; }
-  .drop-zone.drag::before { animation:dzDiagFast 2.2s linear infinite; opacity:.24; }
   @keyframes dzDiag { from { background-position:0 0, 32px 32px, 0 -1px, -1px 0; } to { background-position:64px 64px, 96px 96px, 64px 63px, 63px 64px; } }
   @keyframes dzDiagFast { from { background-position:0 0, 32px 32px, 0 -1px, -1px 0; } to { background-position:64px 64px, 96px 96px, 64px 63px, 63px 64px; } }
 
