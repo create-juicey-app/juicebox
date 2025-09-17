@@ -9,6 +9,7 @@ use crate::util::extract_client_ip;
 use crate::state::{AppState, FileMeta, ReportRecord, cleanup_expired, verify_user_entries_with_report, spawn_integrity_check, ReconcileReport};
 use tower_http::services::ServeDir;
 use time::{OffsetDateTime};
+use tera::{Tera, Context};
 
 // Email event for reports
 #[derive(Clone, Debug)]
@@ -250,114 +251,54 @@ pub async fn file_handler(State(state): State<AppState>, Path(path): Path<String
     }
 }
 
-pub async fn root_handler(State(state): State<AppState>) -> Response { let index_path=state.static_dir.join("index.html"); if !index_path.exists() { return (StatusCode::NOT_FOUND, "index missing").into_response(); } match fs::read(&index_path).await { Ok(bytes)=>{ let mime=mime_guess::from_path(&index_path).first_or_octet_stream(); ([(axum::http::header::CONTENT_TYPE, mime.as_ref())], bytes).into_response() }, Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR, "cant read index").into_response() } }
-
-pub async fn simple_list_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Query(query): Query<SimpleQuery>) -> Response {
-    let ip = real_client_ip(&headers, &addr);
-    let owners = state.owners.read().await;
-    let now = now_secs();
-    let mut rows = String::new();
-    for (file, meta) in owners.iter() {
-        if meta.owner == ip {
-            let rem = if meta.expires > now { meta.expires - now } else { 0 };
-            let ttl_disp = if rem >= 86400 { format!("{}d", rem/86400) } else if rem >= 3600 { format!("{}h", rem/3600) } else if rem >= 60 { format!("{}m", rem/60) } else { format!("{}s", rem) };
-            let display = if meta.original.trim().is_empty() { file } else { &meta.original };
-            rows.push_str(&format!("<tr><td><a href=\"/f/{stored}\" rel=noopener title=\"{stored}\">{disp}</a></td><td>{ttl}</td><td><form method=post action=/simple_delete style=\"margin:0\"><input type=hidden name=f value=\"{stored}\" /><button type=submit>Delete</button></form></td></tr>", stored=file, disp=htmlescape::encode_minimal(display), ttl=ttl_disp));
-        }
+pub async fn root_handler(State(state): State<AppState>) -> Response {
+    // Prepare Tera context (for now, just English, can expand for i18n)
+    let mut ctx = Context::new();
+    ctx.insert("lang", "en");
+    // Example: pass translation map (t) for i18n
+    let mut t = std::collections::HashMap::new();
+    // (You can load translations from a file or hardcode for now)
+    t.insert("title", "JuiceBox - Fast Temporary File Host");
+    t.insert("meta_description", "JuiceBox is an open-source and simple high-speed temporary file host with hotlinking. Click, upload, share lightweight expiring links with selectable file retention up to 500mb.");
+    t.insert("og_title", "JuiceBox – Fast Temporary File Host");
+    t.insert("og_description", "Upload files up to 500MB and share instant expiring links (1h–14d retention).");
+    t.insert("twitter_title", "JuiceBox – Fast Temporary File Host");
+    t.insert("twitter_description", "Upload files (≤500MB) and share expiring links with selectable retention.");
+    t.insert("skip_main", "Skip to main content");
+    t.insert("skip_files", "Skip to your files");
+    t.insert("js_disabled", "JavaScript is disabled or unsupported. Use the <a href='/simple' style='color:var(--accent);text-decoration:underline;'>basic no‑script uploader</a>.");
+    t.insert("brand_subtitle", "Fast Temporary File Host");
+    t.insert("lead", "Click, Upload, Share!");
+    t.insert("upload", "Upload");
+    t.insert("ttl_title", "Choose how long the uploaded files will be kept before automatic deletion");
+    t.insert("retention", "Retention:");
+    t.insert("ttl_adjust", "Adjust retention from 1 hour up to 14 days");
+    t.insert("auto_delete", "auto delete");
+    t.insert("drop_title", "Click or drag files here to upload (max 500MB each)");
+    t.insert("file_picker", "Select files to upload (maximum 500 megabytes each)");
+    t.insert("drop_hint", "Click or drop files");
+    t.insert("upload_note", "Upload your files. Links show after each finishes. Maximum file size is 500MB, Files expire after selected retention. Limit: maximum 5 active files per IP (delete one to free a slot). See <a href='/faq' target='_blank' rel='noopener' title='Open FAQ in new tab'>Read the FAQ</a>.");
+    t.insert("privacy_note", "Notice: Your IP address is processed only to associate uploads with your session, apply limits, and enable abuse/moderation actions. It is not shared and is removed once all related files expire.");
+    t.insert("your_files", "Your Files");
+    t.insert("owned_note", "These are files linked to your IP, They persist across refresh until deleted.");
+    t.insert("about_heading", "What is JuiceBox?");
+    t.insert("about_1", "JuiceBox Temporary File Host is a fast, simple way to share files without creating an account. Pick a retention period from 1 hour up to 14 days, upload files up to 500 MB, and instantly share lightweight expiring links. When the timer ends, files are automatically deleted. It’s perfect for quick hand‑offs, code snippets, screenshots, small archives, and any content you don’t want to keep online forever.");
+    t.insert("about_2", "How it works: drag and drop or click to select files, choose a retention window, then copy the link once each upload completes. We limit each IP to a small number of active files to prevent abuse; delete an older item to free a slot. For a minimal experience, try the <a href='/simple'>no‑script uploader</a>. For details about limits, retention, thumbnails and moderation, read the <a href='/faq'>Frequently Asked Questions</a>. Our focus is speed, privacy and ease: no tracking pixels, no social logins, and no permanent storage, just quick, disposable sharing.");
+    t.insert("about_3", "Privacy and safety: your IP is used only to associate uploads, enforce rate limits and handle abuse reports, and it is removed after related files expire. To report prohibited content or request removal, visit the <a href='/report'>Report form</a> page. Use of the service implies acceptance of our <a href='/terms'>Terms of Service</a>. If you prefer to browse a simple landing link to share with others, you can point them to the home page or the <a href='/faq'>FAQ guide</a> for guidance.");
+    t.insert("inspired", "Inspired by");
+    t.insert("share", "Share:");
+    t.insert("home", "Home");
+    t.insert("simple", "Simple");
+    t.insert("faq", "FAQ");
+    t.insert("report", "Report");
+    t.insert("terms", "Terms");
+    t.insert("donate", "Donate");
+    ctx.insert("t", &t);
+    let tera = &state.tera;
+    match tera.render("index.html.tera", &ctx) {
+        Ok(rendered) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], rendered).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {}", e)).into_response(),
     }
-    let message_html = if let Some(m)=query.m { if !m.is_empty() { format!("<p style=\"color:#ff9800;font-size:.7rem;\">{}</p>", htmlescape::encode_minimal(&m)) } else { String::new() } } else { String::new() };
-    let tpl_path = state.static_dir.join("simple.html");
-    match fs::read(&tpl_path).await {
-        Ok(bytes) => {
-            let mut body = String::from_utf8_lossy(&bytes).into_owned();
-            body = body.replace("{{MESSAGE}}", &message_html).replace("{{ROWS}}", &rows);
-            ([(axum::http::header::CONTENT_TYPE, "text/html")], body).into_response()
-        },
-        Err(_) => {
-            let body = format!("<html><body><h1>Your Files</h1>{}<ul>{}</ul><form method=post action=/simple_delete><input name=f><button type=submit>Delete</button></form></body></html>", message_html, owners.iter().filter(|(_,m)| m.owner==ip).map(|(f,m)| format!("<li>{}</li>", if m.original.trim().is_empty(){ f } else { &m.original })).collect::<String>());
-            ([(axum::http::header::CONTENT_TYPE, "text/html")], body).into_response()
-        }
-    }
-}
-
-#[axum::debug_handler]
-pub async fn simple_delete_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Form(frm): Form<SimpleDeleteForm>) -> Response {
-    let ip=real_client_ip(&headers, &addr);
-    let target=frm.f;
-    let owned = {
-        let owners=state.owners.read().await;
-        owners.get(&target).map(|m| m.owner.clone())
-    };
-    if owned.is_some() && owned.unwrap() == ip {
-        {
-            let mut owners=state.owners.write().await;
-            owners.remove(&target);
-        }
-        let _ = fs::remove_file(state.upload_dir.join(&target)).await;
-        state.persist_owners().await;
-        let hv = HeaderValue::from_static("/simple?m=Deleted");
-        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response();
-    }
-    let hv = HeaderValue::from_static("/simple?m=Not+found");
-    (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
-}
-
-#[axum::debug_handler]
-pub async fn simple_upload_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, mut multipart: Multipart) -> Response {
-    // Prevent banned IPs
-    let client_ip = real_client_ip(&headers, &addr);
-    if state.is_banned(&client_ip).await {
-        let hv = HeaderValue::from_static("/banned");
-        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response();
-    }
-
-    let sem = state.upload_sem.clone();
-    let _permit = match sem.try_acquire_owned() { Ok(p)=>p, Err(_)=> {
-        let hv = HeaderValue::from_static("/simple?m=Server+busy" );
-        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response();
-    }};
-
-    // Default TTL matches simple.html default (3d)
-    let mut ttl_code = "3d".to_string();
-    let mut files_to_process: Vec<(Option<String>, Vec<u8>)> = Vec::new();
-
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let name = match field.name() { Some(n)=>n.to_string(), None=>continue };
-        if name == "ttl" {
-            if let Ok(data) = field.bytes().await { if let Ok(s)=std::str::from_utf8(&data) { ttl_code = s.to_string(); } }
-            continue;
-        }
-        if name.starts_with("file") {
-            let original_name = field.file_name().map(|s| s.to_string());
-            if let Ok(data) = field.bytes().await { if !data.is_empty() { files_to_process.push((original_name, data.to_vec())); } }
-        }
-    }
-
-    if files_to_process.is_empty() {
-        let hv = HeaderValue::from_static("/simple?m=No+files");
-        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response();
-    }
-
-    let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
-    let mut saved_files = 0usize; let mut skipped = 0usize;
-    for (original_name, data) in &files_to_process {
-        if data.len() as u64 > MAX_FILE_BYTES { skipped+=1; continue; }
-        let storage_name = make_storage_name(original_name.as_deref());
-        if is_forbidden_extension(&storage_name) { skipped+=1; continue; }
-        let path = state.upload_dir.join(&storage_name);
-        if fs::write(&path, data).await.is_ok() {
-            let meta = FileMeta { owner: client_ip.clone(), expires, original: original_name.clone().unwrap_or_default() };
-            state.owners.write().await.insert(storage_name.clone(), meta);
-            saved_files +=1;
-        } else { skipped+=1; }
-    }
-    state.persist_owners().await; spawn_integrity_check(state.clone());
-
-    let mut msg = if saved_files>0 { format!("Uploaded+{}+file{}", saved_files, if saved_files==1 {""} else {"s"}) } else { "No+files".to_string() };
-    if skipped>0 { msg.push_str("+(some+skipped)"); }
-    let loc = format!("/simple?m={}", msg);
-    let hv = HeaderValue::from_str(&loc).unwrap_or_else(|_| HeaderValue::from_static("/simple"));
-    (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
 }
 
 pub async fn debug_ip_handler(ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap) -> Response {
@@ -532,6 +473,19 @@ pub async fn admin_report_delete_handler(State(state): State<AppState>, headers:
     state.persist_reports().await;
     let hv = HeaderValue::from_static("/admin/reports");
     (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
+}
+
+// Placeholder handlers for /simple endpoints
+pub async fn simple_list_handler() -> axum::response::Response {
+    (axum::http::StatusCode::NOT_IMPLEMENTED, "Not implemented").into_response()
+}
+
+pub async fn simple_upload_handler() -> axum::response::Response {
+    (axum::http::StatusCode::NOT_IMPLEMENTED, "Not implemented").into_response()
+}
+
+pub async fn simple_delete_handler() -> axum::response::Response {
+    (axum::http::StatusCode::NOT_IMPLEMENTED, "Not implemented").into_response()
 }
 
 // Add cache middleware for static asset dirs (css/js)

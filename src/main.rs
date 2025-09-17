@@ -6,6 +6,7 @@ use juicebox::util::{ttl_to_duration, now_secs, PROD_HOST, UPLOAD_CONCURRENCY};
 use juicebox::handlers::{build_router, add_security_headers, enforce_host, add_cache_headers};
 use juicebox::handlers::ban_gate;
 use juicebox::rate_limit::build_rate_limiter;
+use tera::Tera;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -56,6 +57,11 @@ async fn main() -> anyhow::Result<()> {
     let report_email_to = std::env::var("REPORT_EMAIL_TO").ok();
     let report_email_from = std::env::var("REPORT_EMAIL_FROM").ok();
 
+    // Initialize Tera
+    let tera = match Tera::new("templates/**/*.tera") {
+        Ok(t) => std::sync::Arc::new(t),
+        Err(e) => panic!("Failed to initialize Tera: {}", e),
+    };
     let mut state = AppState {
         upload_dir,
         static_dir,
@@ -77,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
         report_email_to,
         report_email_from,
         email_tx: None,
+        tera,
     };
 
     // Load or create admin key after state so helper can use now_secs etc
