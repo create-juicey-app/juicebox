@@ -34,6 +34,15 @@ pub fn setup_test_app() -> (AppState, TempDir) {
         reports: Arc::new(RwLock::new(Vec::<ReportRecord>::new())),
         admin_sessions_path,
         admin_sessions: Arc::new(RwLock::new(HashMap::<String,u64>::new())),
+        admin_key_path: todo!(),
+        admin_key: todo!(),
+        bans_path: todo!(),
+        bans: todo!(),
+        mailgun_api_key: todo!(),
+        mailgun_domain: todo!(),
+        report_email_to: todo!(),
+        report_email_from: todo!(),
+        email_tx: todo!(),
     };
 
     (state, temp_dir)
