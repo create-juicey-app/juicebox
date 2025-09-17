@@ -2,30 +2,39 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>JuiceBox</title>
+  <title>JuiceBox - Fast Temporary File Host</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <!-- Social & SEO meta additions -->
-  <meta name="description" content="JuiceBox – simple high-speed temporary file host. Click, upload, share lightweight expiring links with selectable retention." />
+  <meta name="description" content="JuiceBox is an open-source and simple high-speed temporary file host with hotlinking. Click, upload, share lightweight expiring links with selectable file retention up to 500mb." />
   <link rel="canonical" href="https://box.juicey.dev/" />
   <meta name="keywords" content="file upload, temporary file host, share files, expiring links, quick file sharing" />
   <meta name="author" content="JuiceBox" />
   <meta name="theme-color" content="#0f141b" />
+  <!-- Favicons -->
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="/favicon.ico" />
+  <meta name="robots" content="index,follow" />
   <!-- Open Graph -->
   <meta property="og:type" content="website" />
   <meta property="og:title" content="JuiceBox – Fast Temporary File Host" />
   <meta property="og:description" content="Upload files up to 500MB and share instant expiring links (1h–14d retention)." />
-  <meta property="og:url" content="/" />
+  <meta property="og:url" content="https://box.juicey.dev/" />
   <meta property="og:site_name" content="JuiceBox" />
-  <meta property="og:image" content="/silly.webp" />
+  <meta property="og:image" content="https://box.juicey.dev/silly.gif" />
   <meta property="og:image:alt" content="JuiceBox, Temporary File Host, the silly file share." />
+  <meta property="og:locale" content="en_US" />
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="JuiceBox – Fast Temporary File Host" />
   <meta name="twitter:description" content="Upload files (≤500MB) and share expiring links with selectable retention." />
-  <meta name="twitter:image" content="/silly.webp" />
+  <meta name="twitter:image" content="https://box.juicey.dev/silly.gif" />
   <meta name="twitter:image:alt" content="JuiceBox, Temporary File Host, the silly file share." />
   <!-- End social meta -->
   <link rel="stylesheet" href="/css/app.css" />
+  <style>
+    /* Ensure footer links are white for contrast */
+    .footer-links a, .footer-links a:visited { color: #fff !important; }
+  </style>
 </head>
 <body>
   <!-- Reworked skip links in a nav landmark -->
@@ -36,7 +45,7 @@
   <noscript><div style="padding:.9rem 1rem;text-align:center;background:#222e3d;border-bottom:1px solid #2c394a;font-size:.7rem;letter-spacing:.5px;">JavaScript is disabled or unsupported. Use the <a href="/simple" style="color:var(--accent);text-decoration:underline;">basic no‑script uploader</a>.</div></noscript>
   <header>
     <!-- Single H1 (visible brand + hidden descriptive text) -->
-    <h1 class="brand-heading"><a href="/" class="brand-link" aria-label="JuiceBox Home"><img src="/logo.png" alt="" class="logo" decoding="async" draggable="false" />JuiceBox <span class="visually-hidden">Temporary File Host</span></a></h1>
+    <h1 class="brand-heading"><a href="/" class="brand-link" aria-label="JuiceBox Home"><img src="/logo.png" alt="JuiceBox logo" class="logo" decoding="async" draggable="false" />JuiceBox <span class="visually-hidden">Fast Temporary File Host</span></a></h1>
     <p class="lead">Click, Upload, Share!</p>
   </header>
   <main id="mainContent" tabindex="-1">
@@ -55,7 +64,7 @@
         <div class="muted" id="dropHint" title="Click or drop to begin selecting files">Click or drop files</div>
       </div>
       <ul id="fileList" title="Upload queue showing files, progress bars, and actions" role="list"></ul>
-      <p class="site-note" title="Upload usage note">Upload your files. Links show after each finishes. Maximum file size is 500MB, Files expire after selected retention. Limit: maximum 5 active files per IP (delete one to free a slot). See <a href="/faq" target="_blank" rel="noopener" title="Open FAQ in new tab">FAQ</a>.</p>
+      <p class="site-note" title="Upload usage note">Upload your files. Links show after each finishes. Maximum file size is 500MB, Files expire after selected retention. Limit: maximum 5 active files per IP (delete one to free a slot). See <a href="/faq" target="_blank" rel="noopener" title="Open FAQ in new tab">Read the FAQ</a>.</p>
       <p class="site-note" title="Privacy notice">Notice: Your IP address is processed only to associate uploads with your session, apply limits, and enable abuse/moderation actions. It is not shared and is removed once all related files expire.</p>
     </section></div>
     <div class="panel" id="ownedPanel" style="display:none"><section>
@@ -63,10 +72,59 @@
       <ul id="ownedList" title="List of files you have uploaded" role="list"></ul>
       <p class="site-note" title="Owned files note">These are files linked to your IP, They persist across refresh until deleted.</p>
     </section></div>
+
+    <!-- New informative section to improve page quality and keyword match -->
+    <div class="panel"><section id="about">
+      <h2 id="aboutHeading">What is JuiceBox?</h2>
+      <p>
+        JuiceBox Temporary File Host is a fast, simple way to share files without creating an account. Pick a retention period from
+        1 hour up to 14 days, upload files up to 500&nbsp;MB, and instantly share lightweight expiring links. When the timer ends,
+        files are automatically deleted. It’s perfect for quick hand‑offs, code snippets, screenshots, small archives, and any
+        content you don’t want to keep online forever.
+      </p>
+      <p>
+        How it works: drag and drop or click to select files, choose a retention window, then copy the link once each upload completes.
+        We limit each IP to a small number of active files to prevent abuse; delete an older item to free a slot. For a minimal
+        experience, try the <a href="/simple">no‑script uploader</a>. For details about limits, retention, thumbnails and moderation,
+        read the <a href="/faq">Frequently Asked Questions</a>. Our focus is speed, privacy and ease: no tracking pixels, no social logins, and no permanent
+        storage, just quick, disposable sharing.
+      </p>
+      <p>
+        Privacy and safety: your IP is used only to associate uploads, enforce rate limits and handle abuse reports, and it is removed
+        after related files expire. To report prohibited content or request removal, visit the <a href="/report">Report form</a> page. Use of the
+        service implies acceptance of our <a href="/terms">Terms of Service</a>. If you prefer to browse a simple landing link to share with others,
+        you can point them to the home page or the <a href="/faq">FAQ guide</a> for guidance.
+      </p>
+      <p class="inspired-note">Inspired by <a href="https://catbox.moe" target="_blank" rel="noopener nofollow">Catbox</a></p>
+      <nav aria-label="Share" class="share-links" style="margin-top:.35rem;font-size:.8em;opacity:.85">
+        Share: 
+        <a href="https://bsky.app/intent/compose?text=Upload%20and%20share%20temporary%20files%20with%20JuiceBox%20https%3A%2F%2Fbox.juicey.dev%2F" rel="noopener nofollow" target="_blank">Bluesky</a>
+        • <a href="https://twitter.com/intent/tweet?text=Upload%20and%20share%20temporary%20files%20with%20JuiceBox&url=https%3A%2F%2Fbox.juicey.dev%2F" rel="noopener nofollow" target="_blank">X/Twitter</a>
+        • <a href="https://www.reddit.com/submit?url=https%3A%2F%2Fbox.juicey.dev%2F&title=JuiceBox%20%E2%80%94%20Fast%20Temporary%20File%20Host" rel="noopener nofollow" target="_blank">Reddit</a>
+      </nav>
+    </section></div>
+
+    <!-- Structured data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "JuiceBox",
+      "url": "https://box.juicey.dev/",
+      "applicationCategory": "Utility",
+      "operatingSystem": "All",
+      "description": "Fast temporary file host to upload and share expiring links (1h–14d retention, up to 500MB).",
+      "offers": {
+        "@type": "Offer",
+        "price": 0,
+        "priceCurrency": "USD"
+      }
+    }
+    </script>
   </main>
   <footer title="Service tagline">juicebox // simple high-speed file host
-  <nav aria-label="Site links" class="footer-links" style="display:block;margin-top:.45rem;font-size:.6rem;opacity:.65;letter-spacing:.35px">
-    <a href="/report">Report</a> • <a href="/terms">Terms</a> • <a href="https://buymeacoffee.com/juiceydev" target="_blank" rel="noopener">Donate</a>
+  <nav aria-label="Site links" class="footer-links" style="display:block;margin-top:.45rem;font-size:.6rem;letter-spacing:.35px;color:#fff;">
+    <a href="/">Home</a> • <a href="/simple">Simple</a> • <a href="/faq">FAQ</a> • <a href="/report">Report</a> • <a href="/terms">Terms</a> • <a href="https://buymeacoffee.com/juiceydev" target="_blank" rel="noopener">Donate</a>
   </nav>
   <br><span id="ipNote" style="display:block;font-size:.55rem;opacity:.45;margin-top:.4rem;letter-spacing:.3px"></span></footer>
   <script>

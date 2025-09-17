@@ -447,7 +447,15 @@ pub async fn is_admin_handler(State(state): State<AppState>, headers: HeaderMap)
 
 fn subtle_equals(a: &[u8], b: &[u8]) -> bool { if a.len()!=b.len() { return false; } let mut diff: u8 = 0; for i in 0..a.len() { diff |= a[i] ^ b[i]; } diff == 0 }
 
-pub async fn add_security_headers(req: axum::http::Request<Body>, next: Next) -> Response { let mut resp=next.run(req).await; let h=resp.headers_mut(); if !h.contains_key("X-Content-Type-Options") { h.insert("X-Content-Type-Options", "nosniff".parse().unwrap()); } if !h.contains_key("X-Frame-Options") { h.insert("X-Frame-Options", "DENY".parse().unwrap()); } if !h.contains_key("Referrer-Policy") { h.insert("Referrer-Policy", "no-referrer".parse().unwrap()); } if !h.contains_key("Content-Security-Policy") { h.insert("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:".parse().unwrap()); } if !h.contains_key("Cache-Control") { h.insert("Cache-Control", "private, max-age=0, no-store".parse().unwrap()); } if !h.contains_key("Permissions-Policy") { h.insert("Permissions-Policy", "camera=(), microphone=(), geolocation=(), fullscreen=(), payment=()".parse().unwrap()); } resp }
+pub async fn add_security_headers(req: axum::http::Request<Body>, next: Next) -> Response { let mut resp=next.run(req).await; let h=resp.headers_mut(); if !h.contains_key("X-Content-Type-Options") { h.insert("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:".parse().unwrap()); } if !h.contains_key("Permissions-Policy") { h.insert("Permissions-Policy", "camera=(), microphone=(), geolocation=(), fullscreen=(), payment=()".parse().unwrap()); }
+  // Ensure charset is specified for HTML responses
+  if let Some(ct_val) = h.get(axum::http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()) {
+    let ct_lower = ct_val.to_ascii_lowercase();
+    if ct_lower.starts_with("text/html") && !ct_lower.contains("charset=") {
+      h.insert(axum::http::header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
+    }
+  }
+  resp }
 
 pub async fn enforce_host(req: axum::http::Request<Body>, next: Next) -> Response { let host = req.headers().get("host").and_then(|h| h.to_str().ok()).unwrap_or_default(); if host == PROD_HOST { next.run(req).await } else { let uri = format!("https://{}{}", PROD_HOST, req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("/")); let hv = HeaderValue::from_str(&uri).unwrap(); (StatusCode::MOVED_PERMANENTLY, [(axum::http::header::LOCATION, hv)]).into_response() } }
 
