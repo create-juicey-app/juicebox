@@ -24,11 +24,7 @@ a { color: var(--accent); }
   .drop-zone.drag { border-color:#ffc369; background:linear-gradient(145deg,#5a310a,#382107 55%,#311d07); box-shadow:0 6px 18px -8px rgba(0,0,0,.7),0 0 0 2px rgba(255,152,0,.35); transform:scale(1.015); }
   .drop-zone .ripple { position:absolute; border-radius:50%; background:radial-gradient(circle at center, rgba(var(--accent-rgb)/.55), rgba(var(--accent-rgb)/0) 70%); transform:scale(0); animation:dzRipple .85s var(--e-out) forwards; pointer-events:none; opacity:.9; mix-blend-mode:overlay; }
   /* Adjusted pattern colors for orange theme */
-  .drop-zone::before { content:""; position:absolute; inset:0; pointer-events:none; background:
-    radial-gradient(circle, transparent 22%, #3a2106 22%, #3a2106 78%, transparent 78%, transparent) 0% 0% / 64px 64px,
-    radial-gradient(circle, transparent 22%, #3a2106 22%, #3a2106 78%, transparent 78%, transparent) 32px 32px / 64px 64px,
-    linear-gradient(#ff9800 2px, transparent 2px) 0 -1px / 32px 32px,
-    linear-gradient(90deg,#ff9800 2px,#3a2106 2px) -1px 0 / 32px 32px #3a2106; background-size:64px 64px,64px 64px,32px 32px,32px 32px; opacity:.18; }
+  
   .drop-zone::after { content:""; position:absolute; inset:0; background:linear-gradient(to bottom, rgba(20,12,5,0) 58%, rgba(20,12,5,.78) 100%); pointer-events:none; }
   .drop-zone.animate::before { animation:dzDiag 24s linear infinite; }
   .drop-zone.drag::before { animation:dzDiagFast 2.2s linear infinite; opacity:.28; }
