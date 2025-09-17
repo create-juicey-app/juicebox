@@ -10,6 +10,7 @@ use crate::state::{AppState, FileMeta, ReportRecord, cleanup_expired, verify_use
 use tower_http::services::ServeDir;
 use time::{OffsetDateTime};
 use tera::{Tera, Context};
+use std::collections::HashMap;
 
 // Email event for reports
 #[derive(Clone, Debug)]
@@ -42,6 +43,7 @@ pub struct ReportRecordEmail {
 #[derive(Deserialize)] pub struct UnbanForm { pub ip: String }
 #[derive(Deserialize)] pub struct AdminFileDeleteForm { pub file: String }
 #[derive(Deserialize)] pub struct AdminReportDeleteForm { pub idx: usize }
+#[derive(Debug, Deserialize)] pub struct LangQuery { pub lang: Option<String> }
 
 // Upload handler
 #[axum::debug_handler]
@@ -251,49 +253,24 @@ pub async fn file_handler(State(state): State<AppState>, Path(path): Path<String
     }
 }
 
-pub async fn root_handler(State(state): State<AppState>) -> Response {
-    // Prepare Tera context (for now, just English, can expand for i18n)
+pub async fn root_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+    // Determine language (default to en)
+    let lang = query.lang.as_deref().unwrap_or("en");
+    let lang_file = format!("translations/lang_{}.toml", lang);
+    // Try to load translation file, fallback to English if missing
+    let t_map: HashMap<String, String> = {
+        let content = match fs::read_to_string(&lang_file).await {
+            Ok(s) => s,
+            Err(_) => match fs::read_to_string("translations/lang_en.toml").await {
+                Ok(s) => s,
+                Err(_) => String::new(),
+            },
+        };
+        toml::from_str(&content).unwrap_or_else(|_| HashMap::new())
+    };
     let mut ctx = Context::new();
-    ctx.insert("lang", "en");
-    // Example: pass translation map (t) for i18n
-    let mut t = std::collections::HashMap::new();
-    // (You can load translations from a file or hardcode for now)
-    t.insert("title", "JuiceBox - Fast Temporary File Host");
-    t.insert("meta_description", "JuiceBox is an open-source and simple high-speed temporary file host with hotlinking. Click, upload, share lightweight expiring links with selectable file retention up to 500mb.");
-    t.insert("og_title", "JuiceBox – Fast Temporary File Host");
-    t.insert("og_description", "Upload files up to 500MB and share instant expiring links (1h–14d retention).");
-    t.insert("twitter_title", "JuiceBox – Fast Temporary File Host");
-    t.insert("twitter_description", "Upload files (≤500MB) and share expiring links with selectable retention.");
-    t.insert("skip_main", "Skip to main content");
-    t.insert("skip_files", "Skip to your files");
-    t.insert("js_disabled", "JavaScript is disabled or unsupported. Use the <a href='/simple' style='color:var(--accent);text-decoration:underline;'>basic no‑script uploader</a>.");
-    t.insert("brand_subtitle", "Fast Temporary File Host");
-    t.insert("lead", "Click, Upload, Share!");
-    t.insert("upload", "Upload");
-    t.insert("ttl_title", "Choose how long the uploaded files will be kept before automatic deletion");
-    t.insert("retention", "Retention:");
-    t.insert("ttl_adjust", "Adjust retention from 1 hour up to 14 days");
-    t.insert("auto_delete", "auto delete");
-    t.insert("drop_title", "Click or drag files here to upload (max 500MB each)");
-    t.insert("file_picker", "Select files to upload (maximum 500 megabytes each)");
-    t.insert("drop_hint", "Click or drop files");
-    t.insert("upload_note", "Upload your files. Links show after each finishes. Maximum file size is 500MB, Files expire after selected retention. Limit: maximum 5 active files per IP (delete one to free a slot). See <a href='/faq' target='_blank' rel='noopener' title='Open FAQ in new tab'>Read the FAQ</a>.");
-    t.insert("privacy_note", "Notice: Your IP address is processed only to associate uploads with your session, apply limits, and enable abuse/moderation actions. It is not shared and is removed once all related files expire.");
-    t.insert("your_files", "Your Files");
-    t.insert("owned_note", "These are files linked to your IP, They persist across refresh until deleted.");
-    t.insert("about_heading", "What is JuiceBox?");
-    t.insert("about_1", "JuiceBox Temporary File Host is a fast, simple way to share files without creating an account. Pick a retention period from 1 hour up to 14 days, upload files up to 500 MB, and instantly share lightweight expiring links. When the timer ends, files are automatically deleted. It’s perfect for quick hand‑offs, code snippets, screenshots, small archives, and any content you don’t want to keep online forever.");
-    t.insert("about_2", "How it works: drag and drop or click to select files, choose a retention window, then copy the link once each upload completes. We limit each IP to a small number of active files to prevent abuse; delete an older item to free a slot. For a minimal experience, try the <a href='/simple'>no‑script uploader</a>. For details about limits, retention, thumbnails and moderation, read the <a href='/faq'>Frequently Asked Questions</a>. Our focus is speed, privacy and ease: no tracking pixels, no social logins, and no permanent storage, just quick, disposable sharing.");
-    t.insert("about_3", "Privacy and safety: your IP is used only to associate uploads, enforce rate limits and handle abuse reports, and it is removed after related files expire. To report prohibited content or request removal, visit the <a href='/report'>Report form</a> page. Use of the service implies acceptance of our <a href='/terms'>Terms of Service</a>. If you prefer to browse a simple landing link to share with others, you can point them to the home page or the <a href='/faq'>FAQ guide</a> for guidance.");
-    t.insert("inspired", "Inspired by");
-    t.insert("share", "Share:");
-    t.insert("home", "Home");
-    t.insert("simple", "Simple");
-    t.insert("faq", "FAQ");
-    t.insert("report", "Report");
-    t.insert("terms", "Terms");
-    t.insert("donate", "Donate");
-    ctx.insert("t", &t);
+    ctx.insert("lang", lang);
+    ctx.insert("t", &t_map);
     let tera = &state.tera;
     match tera.render("index.html.tera", &ctx) {
         Ok(rendered) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], rendered).into_response(),

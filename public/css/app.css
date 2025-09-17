@@ -1439,3 +1439,23 @@ button.primary:active {
     font-size: 1.5rem;
   }
 }
+
+#langForm select:focus {
+  outline: 2px solid #6cf;
+  border-color: #6cf;
+}
+/* Fix unreadable option text in Chromium browsers */
+#langForm select, #langForm option {
+  color: #fff;
+  background: #181f2b;
+}
+/* Forcing color in Chromium for options */
+@media screen and (-webkit-min-device-pixel-ratio:0) {
+  #langForm option {
+    color: #fff;
+    background: #181f2b;
+  }
+}
+@media (max-width: 600px) {
+  #langForm { margin:1rem 0 0 0; }
+}

@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="{{ lang | default(value="en") }}">
+<html lang="{{ lang | default(value='en') }}">
 <head>
   <meta charset="UTF-8" />
-  <title>{{ t.title | default(value="JuiceBox - Fast Temporary File Host") }}</title>
+  <title>{{ t.title | default(value='JuiceBox - Fast Temporary File Host') }}</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <!-- Social & SEO meta additions -->
-  <meta name="description" content="{{ t.meta_description | default(value="JuiceBox is an open-source and simple high-speed temporary file host with hotlinking. Click, upload, share lightweight expiring links with selectable file retention up to 500mb.") }}" />
+  <meta name="description" content="{{ t.meta_description | default(value='JuiceBox is an open-source and simple high-speed temporary file host with hotlinking. Click, upload, share lightweight expiring links with selectable file retention up to 500mb.') }}" />
   <link rel="canonical" href="https://box.juicey.dev/" />
   <meta name="keywords" content="file upload, temporary file host, share files, expiring links, quick file sharing" />
   <meta name="author" content="JuiceBox" />
@@ -16,8 +16,8 @@
   <meta name="robots" content="index,follow" />
   <!-- Open Graph -->
   <meta property="og:type" content="website" />
-  <meta property="og:title" content="{{ t.og_title | default(value="JuiceBox – Fast Temporary File Host") }}" />
-  <meta property="og:description" content="{{ t.og_description | default(value="Upload files up to 500MB and share instant expiring links (1h–14d retention).") }}" />
+  <meta property="og:title" content="{{ t.og_title | default(value='JuiceBox – Fast Temporary File Host') }}" />
+  <meta property="og:description" content="{{ t.og_description | default(value='Upload files up to 500MB and share instant expiring links (1h–14d retention).') }}" />
   <meta property="og:url" content="https://box.juicey.dev/" />
   <meta property="og:site_name" content="JuiceBox" />
   <meta property="og:image" content="https://box.juicey.dev/silly.gif" />
@@ -25,8 +25,8 @@
   <meta property="og:locale" content="en_US" />
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="{{ t.twitter_title | default(value="JuiceBox – Fast Temporary File Host") }}" />
-  <meta name="twitter:description" content="{{ t.twitter_description | default(value="Upload files (≤500MB) and share expiring links with selectable retention.") }}" />
+  <meta name="twitter:title" content="{{ t.twitter_title | default(value='JuiceBox – Fast Temporary File Host') }}" />
+  <meta name="twitter:description" content="{{ t.twitter_description | default(value='Upload files (≤500MB) and share expiring links with selectable retention.') }}" />
   <meta name="twitter:image" content="https://box.juicey.dev/silly.gif" />
   <meta name="twitter:image:alt" content="JuiceBox, Temporary File Host, the silly file share." />
   <!-- End social meta -->
@@ -40,22 +40,59 @@
     <a href="#mainContent" class="skip-link">{{ t.skip_main | default(value="Skip to main content") }}</a>
     <a href="#yourFiles" class="skip-link">{{ t.skip_files | default(value="Skip to your files") }}</a>
   </nav>
-  <noscript><div style="padding:.9rem 1rem;text-align:center;background:#222e3d;border-bottom:1px solid #2c394a;font-size:.7rem;letter-spacing:.5px;">{{ t.js_disabled | default(value="JavaScript is disabled or unsupported. Use the <a href='/simple' style='color:var(--accent);text-decoration:underline;'>basic no‑script uploader</a>.") }}</div></noscript>
+
+ 
   <header>
     <h1 class="brand-heading"><a href="/" class="brand-link" aria-label="JuiceBox Home"><img src="/logo.png" alt="JuiceBox logo" class="logo" decoding="async" draggable="false" />JuiceBox <span class="visually-hidden">{{ t.brand_subtitle | default(value="Fast Temporary File Host") }}</span></a></h1>
     <p class="lead">{{ t.lead | default(value="Click, Upload, Share!") }}</p>
   </header>
   <main id="mainContent" tabindex="-1">
+    <script>
+  // Language switcher: set cookie and reload with lang param
+  window.addEventListener('DOMContentLoaded', function() {
+    var sel = document.getElementById('langSelect');
+    if(!sel) return;
+    sel.addEventListener('change', function(){
+      var lang = sel.value;
+      document.cookie = 'lang=' + lang + ';path=/;max-age=31536000';
+      var url = new URL(window.location.href);
+      url.searchParams.set('lang', lang);
+      window.location = url.toString();
+    });
+    // On load, if cookie exists and no lang param, reload with cookie
+    var m = document.cookie.match(/(?:^|; )lang=([a-z]{2})/);
+    if(m && !new URLSearchParams(window.location.search).has('lang')){
+      var url = new URL(window.location.href);
+      url.searchParams.set('lang', m[1]);
+      window.location = url.toString();
+    }
+  });
+  </script>
+
+    <form id="langForm" style="margin:1.2rem 0 0 0;" aria-label="Language selector">
+        <label for="langSelect" id="langLabel" style="font-size:.9em;opacity:.85;display:flex;align-items:center;gap:.4em;cursor:pointer;">
+            <span aria-hidden="true" style="font-size:1.2em;filter:drop-shadow(0 1px 2px #0f141b33);">🌐</span>
+            <span class="visually-hidden">{{ t.language_select | default(value="Select language") }}</span>
+            <select id="langSelect" name="lang" style="font-size:1em;padding:.25em 1.2em .25em .7em;border-radius:7px;margin-left:.1em;background:#181f2b;color:#fff;border:1px solid #2a3240;box-shadow:0 1px 4px #0002;appearance:none;cursor:pointer;transition:border .2s;" aria-labelledby="langLabel">
+                <option value="en" {% if lang == "en" %}selected{% endif %}>🇬🇧 English</option>
+                <option value="fr" {% if lang == "fr" %}selected{% endif %}>🇫🇷 Français</option>
+                <option value="es" {% if lang == "es" %}selected{% endif %}>🇪🇸 Español</option>
+            </select>
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 20 20" style="margin-left:-1.5em;pointer-events:none;position:relative;z-index:2;fill:#fff;opacity:.7;">
+                <path d="M5.5 8l4.5 4.5L14.5 8z"/>
+            </svg>
+        </label>
+    </form>
     <div class="panel"><section id="uploadSection">
       <h2 title="Upload new files below">{{ t.upload | default(value="Upload") }}</h2>
       <div class="ttl-row" style="display:flex;align-items:center;gap:.55rem;margin:.3rem 0 1rem;font-size:.62rem;letter-spacing:.4px;" title="{{ t.ttl_title | default(value="Choose how long the uploaded files will be kept before automatic deletion") }}">
         <label for="ttlSelect" class="subtle" title="Retention period">{{ t.retention | default(value="Retention:") }}</label>
-        <input id="ttlSelect" type="range" min="0" max="6" step="1" value="4" aria-label="Retention" title="{{ t.ttl_adjust | default(value="Adjust retention from 1 hour up to 14 days") }}" />
+        <input id="ttlSelect" type="range" min="0" max="6" step="1" value="4" aria-label="Retention" title="{{ t.ttl_adjust | default(value='Adjust retention from 1 hour up to 14 days') }}" />
         <span id="ttlValue" class="ttl-value" title="Current retention value">3d</span>
         <span class="subtle" title="Files are automatically deleted after retention">{{ t.auto_delete | default(value="auto delete") }}</span>
       </div>
-      <div class="drop-zone" id="dropZone" aria-describedby="dropHint" title="{{ t.drop_title | default(value="Click or drag files here to upload (max 500MB each)") }}">
-        <input type="file" id="fileInput" multiple title="File picker" aria-label="{{ t.file_picker | default(value="Select files to upload (maximum 500 megabytes each)") }}" aria-describedby="dropHint" />
+      <div class="drop-zone" id="dropZone" aria-describedby="dropHint" title="{{ t.drop_title | default(value='Click or drag files here to upload (max 500MB each)') }}">
+        <input type="file" id="fileInput" multiple title="File picker" aria-label="{{ t.file_picker | default(value='Select files to upload (maximum 500 megabytes each)') }}" aria-describedby="dropHint" />
         <div class="icon" title="Folder icon">📁</div>
         <div class="muted" id="dropHint" title="Click or drop to begin selecting files">{{ t.drop_hint | default(value="Click or drop files") }}</div>
       </div>
@@ -74,9 +111,12 @@
       <p>{{ t.about_2 | default(value="How it works: drag and drop or click to select files, choose a retention window, then copy the link once each upload completes. We limit each IP to a small number of active files to prevent abuse; delete an older item to free a slot. For a minimal experience, try the <a href='/simple'>no‑script uploader</a>. For details about limits, retention, thumbnails and moderation, read the <a href='/faq'>Frequently Asked Questions</a>. Our focus is speed, privacy and ease: no tracking pixels, no social logins, and no permanent storage, just quick, disposable sharing.") }}</p>
       <p>{{ t.about_3 | default(value="Privacy and safety: your IP is used only to associate uploads, enforce rate limits and handle abuse reports, and it is removed after related files expire. To report prohibited content or request removal, visit the <a href='/report'>Report form</a> page. Use of the service implies acceptance of our <a href='/terms'>Terms of Service</a>. If you prefer to browse a simple landing link to share with others, you can point them to the home page or the <a href='/faq'>FAQ guide</a> for guidance.") }}</p>
       <p class="inspired-note">{{ t.inspired | default(value="Inspired by") }} <a href="https://catbox.moe" target="_blank" rel="noopener nofollow">Catbox</a></p>
-      <nav aria-label="Share" class="share-links" style="margin-top:.35rem;font-size:.8em;opacity:.85">
-        {{ t.share | default(value="Share:") }} 
-        <a href="https://bsky.app/intent/compose?text=Upload%20and%20share%20temporary%20files%20with%20JuiceBox%20https%3A%2F%2Fbox.juicey.dev%2F" rel="noopener nofollow" target="_blank">Bluesky</a>
+      <nav aria-label="{{ t.share_aria | default(value='Share') }}" class="share-links" style="margin-top:.35rem;font-size:.8em;opacity:.85">
+        {{ t.share | default(value='Share:') }}
+        <a href="https://bsky.app/intent/compose?text={{ t.social_bsky | default(value='Upload and share temporary files with JuiceBox https://box.juicey.dev/') | urlencode }}" rel="noopener nofollow" target="_blank">Bluesky</a>
+        <a href="https://twitter.com/intent/tweet?text={{ t.social_twitter | default(value='Upload and share temporary files with JuiceBox https://box.juicey.dev/') | urlencode }}" rel="noopener nofollow" target="_blank">{{ t.twitter | default(value='Twitter') }}</a>
+        <a href="https://www.reddit.com/submit?url=https://box.juicey.dev/&title={{ t.social_reddit | default(value='Upload and share temporary files with JuiceBox') | urlencode }}" rel="noopener nofollow" target="_blank">{{ t.reddit | default(value='Reddit') }}</a>
+        <!-- Example: add more social links with translation keys if needed -->
       </nav>
     </section></div>
     <script type="application/ld+json">
@@ -92,9 +132,9 @@
     }
     </script>
   </main>
-  <footer title="Service tagline">juicebox // simple high-speed file host
-  <nav aria-label="Site links" class="footer-links" style="display:block;margin-top:.45rem;font-size:.6rem;letter-spacing:.35px;color:#fff;">
-    <a href="/">{{ t.home | default(value="Home") }}</a> • <a href="/simple">{{ t.simple | default(value="Simple") }}</a> • <a href="/faq">{{ t.faq | default(value="FAQ") }}</a> • <a href="/report">{{ t.report | default(value="Report") }}</a> • <a href="/terms">{{ t.terms | default(value="Terms") }}</a> • <a href="https://buymeacoffee.com/juiceydev" target="_blank" rel="noopener">{{ t.donate | default(value="Donate") }}</a>
+  <footer title="{{ t.footer_tagline | default(value='Service tagline') }}">juicebox // {{ t.footer_sub | default(value='simple high-speed file host') }}
+  <nav aria-label="{{ t.site_links | default(value='Site links') }}" class="footer-links" style="display:block;margin-top:.45rem;font-size:.6rem;letter-spacing:.35px;color:#fff;">
+    <a href="/">{{ t.home | default(value='Home') }}</a> • <a href="/simple">{{ t.simple | default(value='Simple') }}</a> • <a href="/faq">{{ t.faq | default(value='FAQ') }}</a> • <a href="/report">{{ t.report | default(value='Report') }}</a> • <a href="/terms">{{ t.terms | default(value='Terms') }}</a> • <a href="https://buymeacoffee.com/juiceydev" target="_blank" rel="noopener">{{ t.donate | default(value='Donate') }}</a>
   </nav>
   <br><span id="ipNote" style="display:block;font-size:.55rem;opacity:.45;margin-top:.4rem;letter-spacing:.3px"></span></footer>
   <script>
