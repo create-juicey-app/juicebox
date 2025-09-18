@@ -1,0 +1,43 @@
+<!--
+  Tera template for Simple uploader page with i18n translation keys
+-->
+<!DOCTYPE html>
+<html lang="{{ lang | default(value='en') }}">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ t.simple_title | default(value='Orange JuiceBox') }}</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <h1 class="page-title">{{ t.simple_title }}</h1>
+  <p id="mainDesc" class="lead">{{ t.simple_lead }}</p>
+  {{ MESSAGE }}
+  <form class="upload" method="post" enctype="multipart/form-data" action="/simple/upload" aria-describedby="mainDesc" aria-label="{{ t.simple_form_aria }}">
+    <fieldset>
+      <label for="file">{{ t.simple_files_label }}</label>
+      <input id="file" type="file" name="file" multiple required />
+      <div class="ttl-box">
+        <label for="ttl" class="ttl-label">{{ t.retention }}</label>
+        <select name="ttl" id="ttl">
+          <option>1h</option><option>3h</option><option>12h</option><option>1d</option><option selected>3d</option><option>7d</option><option>14d</option>
+        </select>
+        <span class="note-extra">{{ t.auto_delete }}</span>
+      </div>
+      <button class="primary" type="submit">{{ t.simple_upload_btn }}</button>
+    </fieldset>
+  </form>
+  <div class="files-panel" role="region" aria-label="{{ t.simple_files_panel_aria }}">
+    <h2 class="files-heading">{{ t.your_files }}</h2>
+    <table class="files-table" role="table" aria-describedby="tableNote">
+      <thead><tr><th>{{ t.simple_table_name }}</th><th>{{ t.simple_table_expires }}</th><th>{{ t.simple_table_delete }}</th></tr></thead>
+      <tbody>
+        {{ ROWS }}
+      </tbody>
+    </table>
+    <p class="note" id="tableNote">{{ t.simple_table_note }}</p>
+    <p class="note">{{ t.privacy_note }}</p>
+  </div>
+  <p class="note">{{ t.simple_return | safe }}</p>
+</body>
+</html>

@@ -1,0 +1,23 @@
+<!--
+  Tera template for Banned page with i18n translation keys
+-->
+<!DOCTYPE html>
+<html lang="{{ lang | default(value='en') }}">
+<head>
+<meta charset="utf-8" />
+<title>{{ t.banned_title | default(value='Access Restricted') }}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="stylesheet" href="/css/app.css" />
+<style>body{display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#0f141b;color:#e8edf2;font:15px/1.5 system-ui,sans-serif} .card{background:#18222d;border:1px solid #2b3746;padding:2.2rem 2rem 2.4rem;border-radius:18px;box-shadow:0 8px 32px -12px rgba(0,0,0,.65);} h1{margin:0 0 1rem;font-size:1.65rem;letter-spacing:.5px;} p{margin:.55rem 0 .65rem;font-size:.82rem;} code, .code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.72rem;background:#121b24;border:1px solid #273240;padding:.2rem .35rem .25rem;border-radius:6px;} .reason{color:#ffb347;} a{color:#ff9800;text-decoration:none;} a:hover{text-decoration:underline;} .dim{opacity:.65;font-size:.65rem;} footer{margin-top:1.4rem;font-size:.55rem;letter-spacing:.5px;opacity:.55;text-align:center;} .ip{font-weight:600;} </style>
+</head>
+<body>
+  <div class="card" role="alert" aria-live="assertive">
+    <h1>{{ t.banned_heading | default(value='Request Blocked') }}</h1>
+    <p>{{ t.banned_ip | default(value='Your IP') }} <span class="ip">{{ IP }}</span> {{ t.banned_banned | default(value='has been banned.') }}</p>
+    <p class="reason">{{ t.banned_reason | default(value='Reason:') }} {{ REASON }}</p>
+    <p class="dim">{{ t.banned_dim | default(value='Automatic uploads and page loads are disabled for this address.') }} {{ TIME_LINE }}</p>
+    <p style="margin-top:1.1rem;font-size:.7rem;line-height:1.4;opacity:.75">{{ t.banned_help | default(value='If you believe this was a mistake, wait a while and try again or contact the operator through the public repository issue tracker.') }}</p>
+    <footer>&copy; JuiceBox</footer>
+  </div>
+</body>
+</html>

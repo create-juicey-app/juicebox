@@ -285,13 +285,77 @@ pub async fn debug_ip_handler(ConnectInfo(addr): ConnectInfo<ClientAddr>, header
     Json(serde_json::json!({"edge": edge, "cf": cf, "xff": xff})).into_response()
 }
 
-pub async fn report_page_handler(State(state): State<AppState>) -> Response {
-    let path = state.static_dir.join("report.html");
-    if !path.exists() { return (StatusCode::NOT_FOUND, "report page missing").into_response(); }
-    match fs::read(&path).await {
-        Ok(bytes) => { let mime = mime_guess::from_path(&path).first_or_octet_stream(); ([(axum::http::header::CONTENT_TYPE, mime.as_ref())], bytes).into_response() },
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "cant read report").into_response()
+// Helper to load translation map for a given lang code, with debug logging
+async fn load_translation_map(lang: &str) -> HashMap<String, String> {
+    let lang_file = format!("translations/lang_{}.toml", lang);
+    println!("[i18n] Attempting to load translation file: {}", lang_file);
+    let content = match fs::read_to_string(&lang_file).await {
+        Ok(s) => {
+            println!("[i18n] Loaded file: {}", lang_file);
+            s
+        },
+        Err(e) => {
+            println!("[i18n] Failed to load {}: {}. Falling back to lang_en.toml", lang_file, e);
+            match fs::read_to_string("translations/lang_en.toml").await {
+                Ok(s) => s,
+                Err(e2) => {
+                    println!("[i18n] Failed to load fallback lang_en.toml: {}", e2);
+                    String::new()
+                },
+            }
+        },
+    };
+    match toml::from_str::<HashMap<String, String>>(&content) {
+        Ok(map) => {
+            println!("[i18n] Loaded {} keys for lang {}", map.len(), lang);
+            map
+        },
+        Err(e) => {
+            println!("[i18n] Failed to parse TOML for lang {}: {}", lang, e);
+            HashMap::new()
+        }
     }
+}
+
+async fn render_tera_page(state: &AppState, template: &str, lang: &str, extra: Option<(&str, &tera::Value)>) -> Response {
+    let t_map = load_translation_map(lang).await;
+    let mut ctx = Context::new();
+    ctx.insert("lang", lang);
+    ctx.insert("t", &t_map);
+    if let Some((k, v)) = extra {
+        ctx.insert(k, v);
+    }
+    let tera = &state.tera;
+    match tera.render(template, &ctx) {
+        Ok(rendered) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], rendered).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {}", e)).into_response(),
+    }
+}
+
+pub async fn faq_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+    let lang = query.lang.as_deref().unwrap_or("en");
+    render_tera_page(&state, "faq.html.tera", lang, None).await
+}
+
+pub async fn terms_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+    let lang = query.lang.as_deref().unwrap_or("en");
+    render_tera_page(&state, "terms.html.tera", lang, None).await
+}
+
+pub async fn report_page_handler_i18n(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+    let lang = query.lang.as_deref().unwrap_or("en");
+    render_tera_page(&state, "report.html.tera", lang, None).await
+}
+
+pub async fn simple_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+    let lang = query.lang.as_deref().unwrap_or("en");
+    // You may want to pass extra context for MESSAGE/ROWS if needed
+    render_tera_page(&state, "simple.html.tera", lang, None).await
+}
+
+pub async fn banned_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+    let lang = query.lang.as_deref().unwrap_or("en");
+    render_tera_page(&state, "banned.html.tera", lang, None).await
 }
 
 pub async fn ban_page_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -489,7 +553,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/mine", get(list_handler))
         .route("/f/{file}", get(fetch_file_handler).delete(delete_handler))
         .route("/d/{file}", delete(delete_handler))
-        .route("/report", get(report_page_handler).post(report_handler))
+        .route("/report", get(report_page_handler_i18n).post(report_handler))
         .route("/unban", post(unban_post_handler))
         .route("/healthz", get(|| async { "ok" }))
         .route("/simple", get(simple_list_handler))
@@ -501,6 +565,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/ban", get(ban_page_handler).post(ban_post_handler))
         .route("/admin/files", get(admin_files_handler).post(admin_file_delete_handler))
         .route("/admin/reports", get(admin_reports_handler).post(admin_report_delete_handler))
+        .route("/faq", get(faq_handler))
+        .route("/terms", get(terms_handler))
         .nest_service("/css", css_service.clone())
         .nest_service("/js", js_service.clone())
         .route("/", get(root_handler))

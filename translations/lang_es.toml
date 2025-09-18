@@ -38,3 +38,127 @@ donate = "Donar"
 social_twitter = "Sube y comparte archivos temporales con JuiceBox https://box.juicey.dev/"
 social_reddit = "Sube y comparte archivos temporales con JuiceBox"
 social_bsky = "Sube y comparte archivos temporales con JuiceBox https://box.juicey.dev/"
+
+# FAQ page translations
+faq_title = "JuiceBox FAQ"
+faq_meta_description = "Preguntas frecuentes sobre JuiceBox, alojamiento temporal de archivos"
+faq_lead = "Todo lo que sueles preguntar antes de subir."
+faq_basics = "Básicos"
+faq_q1 = "¿Qué es JuiceBox?"
+faq_a1 = "Un pequeño host temporal de archivos. Sube archivo → obtén enlace → comparte → se autodestruye después. Sin cuentas."
+faq_q2 = "¿Necesito una cuenta?"
+faq_a2 = "No. La propiedad se asocia a la IP de cliente Cloudflare. Solo para borrar, limitar y moderar. Sin perfil, contraseña ni email, solo IP."
+faq_q3 = "¿Cuál es el límite de tamaño de archivo?"
+faq_a3 = "Hasta 500MB por subida. ¿Carpeta? Se comprime en tu navegador y el ZIP debe caber en 500MB."
+faq_q4 = "¿Qué tipos de archivo están bloqueados?"
+faq_a4 = "Ejecutables y scripts (.exe .dll .bat .cmd .com .js .ps1 .sh .php etc.). Si puede ser abusado, probablemente está bloqueado."
+faq_q5 = "¿Puedo hotlinkear archivos?"
+faq_a5 = "Sí. El enlace (/f/<id>) es directo y cacheable hasta que expire. Cuando expira, da 404."
+faq_expiration = "Expiración"
+faq_q6 = "¿Cuándo desaparecen los archivos?"
+faq_a6 = "Tú eliges el tiempo (1h → 14d). Al acabar: se borra archivo y metadatos, el enlace deja de funcionar."
+faq_q7 = "¿Puedo extender la vida de un archivo?"
+faq_a7 = "Aún no. Sube de nuevo con más retención si necesitas más tiempo."
+faq_q8 = "¿Qué pasa tras expirar?"
+faq_a8 = "El archivo se elimina, el registro desaparece y el enlace da 404."
+faq_privacy = "Privacidad y Seguridad"
+faq_q9 = "¿Guardan mi IP real?"
+faq_a9 = "Solo la IP de Cloudflare con cada subida, para borrar y limitar abusos. Se elimina con el archivo. No hay rastreo ni venta. Si es demasiado: no subas cosas sensibles."
+faq_q10 = "¿Las subidas están cifradas?"
+faq_a10 = "En tránsito sí (HTTPS). En disco no. Por moderación y simplicidad. No lo uses como bóveda."
+faq_q11 = "¿Escanean malware?"
+faq_a11 = "Solo bloqueo básico por extensión. Si hay abuso, se podría añadir hash + lookup. No ejecutes cosas sospechosas."
+faq_q12 = "¿Otros pueden listar mis archivos?"
+faq_a12 = "No hay exploración pública. Solo con el enlace exacto. Forzar IDs solo activa límites."
+faq_abuse = "Abuso y Límites"
+faq_q13 = "¿Límites de tasa?"
+faq_a13 = "Ráfagas cortas ok (≈60, se recarga lento). Se ajustará si hay abuso."
+faq_q14 = "¿Reglas de contenido?"
+faq_a14 = "Nada ilegal, malware, datos personales ajenos, odio o acoso. Dudas: pregunta o asume que no. Ver Términos."
+faq_banned = "Contenido Prohibido"
+faq_q15 = "¿Qué contenido está prohibido?"
+faq_a15 = "Material ilegal, CSAM, menores sexualizados, imágenes íntimas no consentidas, doxxing, malware, extremismo, odio, copyright masivo, usar como CDN permanente."
+faq_q16 = "¿Por qué estas restricciones?"
+faq_a16 = "¿Por qué lo preguntas?"
+faq_q17 = "¿Qué pasa si subo contenido prohibido?"
+faq_a17 = "No lo hagas, se borra y probablemente te baneo. Cosas graves se escalan."
+faq_removal = "Eliminación"
+faq_q18 = "¿Cómo borro un archivo antes de tiempo?"
+faq_a18 = "Haz clic en ❌ en la UI o manda DELETE /d/<archivo> desde la misma red."
+faq_q19 = "¿El staff puede borrar archivos?"
+faq_a19 = "Sí."
+faq_api = "Notas de API"
+faq_q20 = "¿Hay API?"
+faq_a20 = "POST /upload con multipart file(s) + ttl opcional. Devuelve JSON: { files: [\"f/abc123\"] }. Eso es todo."
+faq_q21 = "¿Valores de retención?"
+faq_a21 = "1h 3h 12h 1d 3d 7d 14d. Si es inválido: 3d."
+faq_feedback = "¿Duda? Abre un issue o envía feedback."
+
+# Terms page translations
+terms_title = "Términos de Servicio de JuiceBox"
+terms_meta_description = "Términos de servicio para JuiceBox, alojamiento temporal de archivos"
+terms_effective = "Vigente: 2024 (Revisión ampliada Sep 2024)"
+terms_last_updated = "Última actualización: 2024-09-01"
+terms_sections = [
+  { heading = "1. Aceptación", body = "Al subir, acceder o compartir archivos en JuiceBox aceptas estos Términos y políticas. Si no estás de acuerdo, no uses el servicio." },
+  { heading = "2. Descripción del Servicio", body = "JuiceBox es un host temporal de archivos. No hay indexado, se borra tras el tiempo elegido (1h a 14d). Se ofrece \"TAL CUAL\" y \"SEGÚN DISPONIBILIDAD\": sin garantías de uptime ni idoneidad." },
+  { heading = "3. Definiciones", body = "<ul><li><strong>\"Tú\"</strong>: cualquier persona o entidad que sube o accede a contenido.</li><li><strong>\"Contenido\"</strong>: cualquier archivo, dato o enlace generado en el servicio.</li><li><strong>\"Retención\"</strong>: el TTL elegido al subir, determina el borrado.</li><li><strong>\"IP Edge\"</strong>: la IP de Cloudflare vista por el origen, para agrupar y limitar." },
+  { heading = "4. Contenido Prohibido", body = "Prohibido subir/distribuir: material ilegal, CSAM, menores sexualizados, imágenes íntimas no consentidas, doxxing, datos personales sensibles, malware, exploits, propaganda extremista, incitación al odio, copyright masivo, uso como CDN permanente." },
+  { heading = "5. Responsabilidades del Usuario", body = "<ul><li>Verifica que tienes derechos para publicar el contenido.</li><li>No subas datos personales o regulados.</li><li>No intentes saltar límites de tamaño, tipo o tasa.</li><li>No ataques la infraestructura ni abuses del hotlinking.</li></ul>" },
+  { heading = "6. Privacidad y Logs Mínimos", body = "No hay cuentas. Solo se usa la IP de Cloudflare para propiedad y límites. No se usan cabeceras IP de visitante. Logs rotativos mínimos, no se perfilan usuarios." },
+  { heading = "7. Manejo y Retención de Datos", body = "Cada subida guarda: id, nombre original, tamaño, tipo, retención y IP edge. Al expirar o borrar: se elimina el registro y el archivo. No se conservan restos de bajo nivel. Backups, si hay, son cortos y cíclicos." },
+  { heading = "8. Seguridad", body = "Transporte por HTTPS. Archivos no cifrados en disco. No hay escaneo de malware salvo filtro de extensión. Trata todo como no confiable." },
+  { heading = "9. Disponibilidad y Cambios", body = "Puede haber caídas, pérdida de datos o cambios. Límites y bloqueos pueden cambiar sin aviso. Usar tras cambios implica aceptación." },
+  { heading = "10. Eliminación y Moderación", body = "Puedes borrar antes de tiempo vía UI o endpoint desde la red original. Admins pueden borrar por abuso o legal. No se restauran archivos." },
+  { heading = "11. Copyright / DMCA", body = "Si crees que hay infracción, envía aviso con datos, enlaces y contacto. Se eliminarán archivos válidos. Contraavisos se evalúan caso a caso." },
+  { heading = "12. Descargo de Responsabilidad", body = "NO HAY GARANTÍAS, NI IMPLÍCITAS NI EXPLÍCITAS. USAS EL SERVICIO BAJO TU RIESGO." },
+  { heading = "13. Limitación de Responsabilidad", body = "Hasta el máximo legal, el operador no responde por daños indirectos, pérdida de datos, lucro cesante, etc." },
+  { heading = "14. Indemnización", body = "Aceptas indemnizar y eximir al operador de reclamaciones derivadas de tu uso o contenido." },
+  { heading = "15. Suspensión / Terminación", body = "Abuso, requerimiento legal o seguridad pueden causar bloqueo temporal o permanente. Reincidentes serán bloqueados a nivel de red." },
+  { heading = "16. Transparencia", body = "Se minimizan los logs. Si la ley exige entregar datos, solo se dará lo mínimo. Se notificará si es legalmente posible." },
+  { heading = "17. Miscelánea", body = "Si alguna cláusula es inválida, el resto sigue vigente. No hacer valer un derecho no es renuncia. No se crea sociedad ni agencia." },
+  { heading = "Contacto", body = "Reporta abuso, seguridad o avisos legales vía issues o canal designado." }
+]
+
+# Report page translations
+report_title = "Reportar contenido – JuiceBox"
+report_meta_description = "Reporta contenido abusivo o ilegal alojado en JuiceBox."
+report_lead = "Marca archivos abusivos, infractores o inseguros."
+report_file_label = "ID de archivo"
+report_file_placeholder = "Ejemplo: AbCdEf1234567890"
+report_reason_label = "Motivo"
+report_reason_spam = "Spam / publicidad"
+report_reason_malware = "Malware"
+report_reason_copyright = "Copyright"
+report_reason_personal = "Datos personales / privacidad"
+report_reason_harassment = "Acoso / odio"
+report_reason_other = "Otro"
+report_file_help = "Pega solo el identificador (lo que va tras /f/ en el enlace). Sin /f/ inicial."
+report_reason_help = "Elige el motivo más adecuado. Usa Otro si ninguno aplica."
+report_details_label = "Detalles (opcional)"
+report_details_placeholder = "Da contexto breve (máx 1000 caracteres). No incluyas datos personales."
+report_submit = "Enviar reporte"
+report_legal = "Tu IP se guarda solo para moderación, abuso y cumplimiento legal; se elimina con los datos relacionados. Reportes duplicados o de mala fe pueden ignorarse. Enviar no garantiza borrado."
+report_return_home = "Volver a <a href='/'>inicio</a>."
+
+# Simple uploader page translations
+simple_title = "Orange JuiceBox"
+simple_lead = "Subidor básico para navegadores antiguos o sin JavaScript."
+simple_form_aria = "Formulario de subida de archivos"
+simple_files_label = "Archivos"
+simple_upload_btn = "Subir"
+simple_files_panel_aria = "Tus archivos subidos"
+simple_table_name = "Nombre"
+simple_table_expires = "Expira en"
+simple_table_delete = "Borrar"
+simple_table_note = "Los archivos se asocian a tu IP. Expiran automáticamente. Guarda la página o los enlaces."
+simple_return = "Volver a <a href='/'>la página normal</a>. <span class='note-extra'>También: <a href='/report'>Reportar</a> • <a href='/terms'>Términos</a> • <a href='https://buymeacoffee.com/juiceydev' target='_blank' rel='noopener'>Donar</a></span>"
+
+# Banned page translations
+banned_title = "Acceso restringido"
+banned_heading = "Petición bloqueada"
+banned_ip = "Tu IP"
+banned_banned = "ha sido bloqueada."
+banned_reason = "Motivo:"
+banned_dim = "Las subidas y cargas de página están deshabilitadas para esta dirección."
+banned_help = "Si crees que es un error, espera un rato e inténtalo de nuevo o contacta al operador por el repositorio público."

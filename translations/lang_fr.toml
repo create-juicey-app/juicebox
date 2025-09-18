@@ -38,3 +38,127 @@ donate = "Faire un don"
 social_twitter = "Envoyez et partagez des fichiers temporaires avec JuiceBox https://box.juicey.dev/"
 social_reddit = "Envoyez et partagez des fichiers temporaires avec JuiceBox"
 social_bsky = "Envoyez et partagez des fichiers temporaires avec JuiceBox https://box.juicey.dev/"
+
+# FAQ page translations
+faq_title = "FAQ JuiceBox"
+faq_meta_description = "Questions fréquentes sur JuiceBox, hébergeur temporaire de fichiers"
+faq_lead = "Tout ce que vous demandez avant d'envoyer."
+faq_basics = "Bases"
+faq_q1 = "Qu'est-ce que JuiceBox ?"
+faq_a1 = "Un petit hébergeur temporaire. Déposez un fichier → obtenez un lien → partagez → il s'autodétruit. Pas de compte."
+faq_q2 = "Faut-il un compte ?"
+faq_a2 = "Non. La propriété est liée à l'IP client Cloudflare. Juste pour suppression, limites et modération. Pas de profil, mot de passe ou email, juste l'IP."
+faq_q3 = "Quelle est la limite de taille ?"
+faq_a3 = "Jusqu'à 500Mo par envoi. Un dossier ? Il est zippé dans votre navigateur et doit tenir dans 500Mo."
+faq_q4 = "Quels types de fichiers sont bloqués ?"
+faq_a4 = "Exécutables et scripts (.exe .dll .bat .cmd .com .js .ps1 .sh .php etc.). Si c'est risqué, c'est bloqué."
+faq_q5 = "Puis-je hotlinker les fichiers ?"
+faq_a5 = "Oui. Le lien (/f/<id>) est direct et cacheable jusqu'à expiration. Après, c'est 404."
+faq_expiration = "Expiration"
+faq_q6 = "Quand les fichiers disparaissent-ils ?"
+faq_a6 = "Vous choisissez la durée (1h → 14j). À la fin : suppression fichier + métadonnées, le lien ne marche plus."
+faq_q7 = "Peut-on prolonger la durée ?"
+faq_a7 = "Pas encore. Réenvoyez avec une durée plus longue si besoin."
+faq_q8 = "Que se passe-t-il après expiration ?"
+faq_a8 = "Le fichier est supprimé, l'enregistrement aussi, le lien renvoie 404."
+faq_privacy = "Vie privée & Sécurité"
+faq_q9 = "Enregistrez-vous mon IP réelle ?"
+faq_a9 = "On stocke l'IP Cloudflare à chaque envoi, pour suppression et limiter les abus. Supprimée avec le fichier. Pas de tracking ni de vente. Si c'est trop : n'envoyez rien de sensible."
+faq_q10 = "Les envois sont-ils chiffrés ?"
+faq_a10 = "En transit oui (HTTPS). Sur disque non. Pour modération et simplicité. Ne l'utilisez pas comme coffre-fort."
+faq_q11 = "Scannez-vous les malwares ?"
+faq_a11 = "Juste un filtrage basique par extension. Si abus, on pourra ajouter hash + lookup. Ne lancez rien de suspect."
+faq_q12 = "D'autres peuvent-ils lister mes fichiers ?"
+faq_a12 = "Pas de navigation publique. Il faut le lien exact. Forcer les IDs active juste les limites."
+faq_abuse = "Abus & Limites"
+faq_q13 = "Limites de débit ?"
+faq_a13 = "Petites rafales ok (≈60, recharge lente). Ajusté si abus."
+faq_q14 = "Règles de contenu ?"
+faq_a14 = "Rien d'illégal, pas de malware, pas de données privées d'autrui, pas de haine/harcèlement. Doute ? Demandez ou supposez non. Voir Conditions."
+faq_banned = "Contenu interdit"
+faq_q15 = "Quel contenu est interdit ?"
+faq_a15 = "Matériel illégal, CSAM, mineurs sexualisés, images intimes non consenties, doxxing, malware, extrémisme, haine, copyright massif, usage comme CDN permanent."
+faq_q16 = "Pourquoi ces restrictions ?"
+faq_a16 = "Pourquoi demander ?"
+faq_q17 = "Que se passe-t-il si j'envoie du contenu interdit ?"
+faq_a17 = "Ne le faites pas, ce sera supprimé et probablement ban IP. Cas graves signalés."
+faq_removal = "Suppression"
+faq_q18 = "Comment supprimer un fichier avant l'heure ?"
+faq_a18 = "Cliquez sur ❌ dans l'UI ou envoyez DELETE /d/<fichier> depuis le même réseau."
+faq_q19 = "Le staff peut-il supprimer ?"
+faq_a19 = "Oui."
+faq_api = "API"
+faq_q20 = "Y a-t-il une API ?"
+faq_a20 = "POST /upload avec multipart file(s) + ttl optionnel. Retourne JSON : { files: [\"f/abc123\"] }. C'est tout."
+faq_q21 = "Valeurs de rétention ?"
+faq_a21 = "1h 3h 12h 1d 3d 7d 14d. Invalide ? 3d."
+faq_feedback = "Une question ? Ouvrez un ticket ou envoyez un retour."
+
+# Terms page translations
+terms_title = "Conditions d'utilisation JuiceBox"
+terms_meta_description = "Conditions d'utilisation pour JuiceBox, hébergeur temporaire de fichiers"
+terms_effective = "En vigueur : 2024 (révision étendue Sep 2024)"
+terms_last_updated = "Dernière mise à jour : 2024-09-01"
+terms_sections = [
+  { heading = "1. Acceptation", body = "En envoyant, accédant ou partageant des fichiers sur JuiceBox, vous acceptez ces Conditions et politiques. Si vous n'êtes pas d'accord, n'utilisez pas le service." },
+  { heading = "2. Description du service", body = "JuiceBox est un hébergeur temporaire. Pas d'indexation, suppression après la durée choisie (1h à 14j). Service fourni \"EN L'ÉTAT\" et \"SELON DISPONIBILITÉ\" : aucune garantie d'uptime ou d'adéquation." },
+  { heading = "3. Définitions", body = "<ul><li><strong>\"Vous\"</strong> : toute personne ou entité envoyant ou accédant à du contenu.</li><li><strong>\"Contenu\"</strong> : tout fichier, donnée ou lien généré sur le service.</li><li><strong>\"Rétention\"</strong> : le TTL choisi à l'envoi, détermine la suppression.</li><li><strong>\"IP Edge\"</strong> : l'IP Cloudflare vue par l'origine, pour regrouper et limiter." },
+  { heading = "4. Contenu interdit", body = "Interdit d'envoyer/distribuer : matériel illégal, CSAM, mineurs sexualisés, images intimes non consenties, doxxing, données personnelles sensibles, malware, exploits, propagande extrémiste, incitation à la haine, copyright massif, usage comme CDN permanent." },
+  { heading = "5. Responsabilités de l'utilisateur", body = "<ul><li>Vérifiez que vous avez les droits pour publier le contenu.</li><li>Ne pas envoyer de données personnelles ou réglementées.</li><li>Ne pas contourner les limites de taille, type ou débit.</li><li>Ne pas attaquer l'infrastructure ni abuser du hotlinking.</li></ul>" },
+  { heading = "6. Vie privée et logs minimaux", body = "Pas de comptes. Seule l'IP Cloudflare pour propriété et limites. Pas d'en-têtes IP visiteur. Logs rotatifs minimaux, pas de profilage." },
+  { heading = "7. Gestion et rétention des données", body = "Chaque envoi stocke : id, nom original, taille, type, rétention et IP edge. À expiration ou suppression : enregistrement et fichier supprimés. Pas de traces bas niveau conservées. Backups courts et cycliques si présents." },
+  { heading = "8. Sécurité", body = "Transport en HTTPS. Fichiers non chiffrés sur disque. Pas de scan malware sauf filtrage extension. Considérez tout comme non fiable." },
+  { heading = "9. Disponibilité et changements", body = "Pannes, pertes de données ou changements possibles. Limites et blocages modifiables sans préavis. Utiliser après changement = acceptation." },
+  { heading = "10. Suppression et modération", body = "Suppression anticipée via UI ou endpoint depuis le réseau d'origine. Admins peuvent supprimer pour abus ou légal. Pas de restauration." },
+  { heading = "11. Copyright / DMCA", body = "Si vous pensez qu'il y a infraction, envoyez un avis avec infos, liens et contact. Suppression rapide si valide. Contre-avis étudiés au cas par cas." },
+  { heading = "12. Avertissement", body = "AUCUNE GARANTIE, IMPLICITE OU EXPLICITE. VOUS UTILISEZ LE SERVICE À VOS RISQUES." },
+  { heading = "13. Limitation de responsabilité", body = "Au maximum légal, l'opérateur n'est pas responsable des dommages indirects, pertes de données, profits, etc." },
+  { heading = "14. Indemnisation", body = "Vous acceptez d'indemniser l'opérateur pour toute réclamation liée à votre usage ou contenu." },
+  { heading = "15. Suspension / Résiliation", body = "Abus, demande légale ou sécurité peuvent entraîner un blocage temporaire ou définitif. Récidivistes bloqués au niveau réseau." },
+  { heading = "16. Transparence", body = "Logs minimisés. Si la loi exige, seules les données minimales seront fournies. Notification si légalement possible." },
+  { heading = "17. Divers", body = "Si une clause est invalide, le reste reste en vigueur. Non-exercice d'un droit ≠ renonciation. Pas de société ou agence créée." },
+  { heading = "Contact", body = "Signalez abus, sécurité ou avis légal via issues ou canal désigné." }
+]
+
+# Report page translations
+report_title = "Signaler un contenu – JuiceBox"
+report_meta_description = "Signalez un contenu abusif ou illégal hébergé sur JuiceBox."
+report_lead = "Signalez les fichiers abusifs, illicites ou dangereux."
+report_file_label = "ID du fichier"
+report_file_placeholder = "Exemple : AbCdEf1234567890"
+report_reason_label = "Motif"
+report_reason_spam = "Spam / publicité"
+report_reason_malware = "Malware"
+report_reason_copyright = "Copyright"
+report_reason_personal = "Données personnelles / vie privée"
+report_reason_harassment = "Harcèlement / haine"
+report_reason_other = "Autre"
+report_file_help = "Collez seulement l'identifiant (après /f/ dans le lien). Sans /f/ initial."
+report_reason_help = "Choisissez le motif le plus adapté. Autre si aucun ne convient."
+report_details_label = "Détails (optionnel)"
+report_details_placeholder = "Donnez un contexte bref (max 1000 caractères). N'incluez pas de données sensibles."
+report_submit = "Envoyer le signalement"
+report_legal = "Votre IP est stockée uniquement pour la modération, l'abus et la conformité légale ; supprimée avec les données liées. Les signalements abusifs peuvent être ignorés. Envoyer n'assure pas la suppression."
+report_return_home = "Retour à <a href='/'>l'accueil</a>."
+
+# Simple uploader page translations
+simple_title = "Orange JuiceBox"
+simple_lead = "Uploader basique pour vieux navigateurs ou sans JavaScript."
+simple_form_aria = "Formulaire d'envoi de fichiers"
+simple_files_label = "Fichiers"
+simple_upload_btn = "Envoyer"
+simple_files_panel_aria = "Vos fichiers envoyés"
+simple_table_name = "Nom"
+simple_table_expires = "Expire dans"
+simple_table_delete = "Supprimer"
+simple_table_note = "Les fichiers sont liés à votre IP. Ils expirent automatiquement. Gardez la page ou les liens."
+simple_return = "Retour à <a href='/'>la page normale</a>. <span class='note-extra'>Aussi : <a href='/report'>Signaler</a> • <a href='/terms'>Conditions</a> • <a href='https://buymeacoffee.com/juiceydev' target='_blank' rel='noopener'>Faire un don</a></span>"
+
+# Banned page translations
+banned_title = "Accès restreint"
+banned_heading = "Requête bloquée"
+banned_ip = "Votre IP"
+banned_banned = "a été bannie."
+banned_reason = "Motif :"
+banned_dim = "Les envois et chargements de page sont désactivés pour cette adresse."
+banned_help = "Si vous pensez qu'il s'agit d'une erreur, attendez un peu et réessayez ou contactez l'opérateur via le dépôt public."

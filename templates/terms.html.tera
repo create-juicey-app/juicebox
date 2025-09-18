@@ -1,0 +1,23 @@
+<!--
+  Tera template for Terms page with i18n translation keys
+-->
+<!DOCTYPE html>
+<html lang="{{ lang | default(value='en') }}">
+<head>
+  <meta charset="utf-8"/>
+  <title>{{ t.terms_title | default(value='JuiceBox Terms of Service') }}</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="description" content="{{ t.terms_meta_description | default(value='Terms of Service for JuiceBox temporary file host') }}"/>
+  <link rel="stylesheet" href="/css/app.css"/>
+  <style>body{max-width:860px;margin:0 auto;padding:1.4rem;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#0f141b;color:#e8ecf3}h1{margin:.2rem 0 1.2rem;font-size:1.8rem}h2{font-size:1rem;margin:1.4rem 0 .55rem;letter-spacing:.5px;text-transform:uppercase;opacity:.8}p,li{line-height:1.5;font-size:.85rem}code{background:#1d2732;padding:.15rem .35rem;border-radius:4px;font-size:.75rem}a{color:#ff9800}ul{padding-left:1.1rem}footer{margin:2.5rem 0 1rem;font-size:.6rem;opacity:.55;text-align:center}.panel{background:#1a2230;padding:1rem 1.1rem 1.2rem;border:1px solid #273242;border-radius:12px;margin:0 0 1rem}</style>
+</head>
+<body>
+<header><h1>{{ t.terms_title | default(value='Terms of Service') }}</h1><p style="opacity:.7;font-size:.9rem">{{ t.terms_effective | default(value='Effective: 2024 (Expanded revision Sep 2024)') }}</p></header>
+<main>
+{% for section in t.terms_sections %}
+<div class="panel"><h2>{{ section.heading }}</h2><p>{{ section.body | safe }}</p></div>
+{% endfor %}
+<p style="font-size:.65rem;opacity:.55">{{ t.terms_last_updated | default(value='Last updated: 2024-09-01') }}</p>
+<p style="font-size:.7rem"><a href="/">{{ t.home }}</a> • <a href="/faq">{{ t.faq }}</a> • <a href="/report">{{ t.report }}</a> • <a href="https://buymeacoffee.com/juiceydev" target="_blank" rel="noopener">{{ t.donate }}</a></p></main><footer>JuiceBox – temporary file host</footer>
+</body>
+</html>
