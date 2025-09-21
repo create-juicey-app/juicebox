@@ -556,7 +556,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/report", get(report_page_handler_i18n).post(report_handler))
         .route("/unban", post(unban_post_handler))
         .route("/healthz", get(|| async { "ok" }))
-        .route("/simple", get(simple_list_handler))
+        .route("/simple", get(simple_handler))
         .route("/simple/upload", post(simple_upload_handler))
         .route("/simple_delete", post(simple_delete_handler))
         .route("/auth", get(auth_get_handler).post(auth_post_handler))

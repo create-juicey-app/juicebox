@@ -142,20 +142,53 @@
     const note=document.getElementById('ipNote');
     if(!note) return;
     fetch('/debug-ip',{cache:'no-store'}).then(r=>r.json()).then(j=>{
-      let text;
+      let ip = null;
       if(j.cf && j.cf !== '-') {
-        text = `Your ip is ${j.cf} btw.`;
+        ip = j.cf;
       } else if(j.xff && j.xff !== '-') {
-        text = `Your ip is ${first} btw.`;
+        ip = j.xff.split(',')[0].trim();
       } else if(j.edge) {
-        text = `Your ip is ${j.edge} (edge!) btw.`;
-      } else {
-        text = 'Your ip is weird btw.';
+        ip = j.edge;
       }
-      note.textContent = text;
-    }).catch(()=>{ note.textContent='Your ip is weird btw.'; });
+      let censored = '██████';
+      if(ip && ip.length > 3) {
+        const parts = ip.split('.');
+        if(parts.length === 4) {
+          censored = parts[0]+'.'+parts[1]+'.███.██';
+        } else if(ip.includes(':')) {
+          censored = ip.replace(/([\da-f]{1,4})(:[\da-f]{1,4})+/, '████:████:████');
+        }
+      }
+      note.textContent = `Your IP is ${censored} (click to reveal) btw.`;
+      note.style.cursor = 'pointer';
+      let revealed = false;
+      note.onclick = function() {
+        if(revealed || !ip) return;
+        note.textContent = `Your IP is ${ip} btw.`;
+        note.style.opacity = 1;
+        revealed = true;
+      };
+    }).catch(()=>{ note.textContent='Your IP is weird btw.'; });
   });
   </script>
   <script src="/js/app.js" defer></script>
+  <script>
+  // Language auto-apply: checks cookie/localStorage and reloads with ?lang= if needed
+  (function(){
+    var getLang = function() {
+      var m = document.cookie.match(/(?:^|; )lang=([a-z]{2})/);
+      if(m) return m[1];
+      try { var l = localStorage.getItem('lang'); if(l) return l; } catch(e){}
+      return null;
+    };
+    var urlLang = new URLSearchParams(window.location.search).get('lang');
+    var cookieLang = getLang();
+    if(cookieLang && cookieLang !== urlLang) {
+      var url = new URL(window.location.href);
+      url.searchParams.set('lang', cookieLang);
+      window.location = url.toString();
+    }
+  })();
+  </script>
 </body>
 </html>

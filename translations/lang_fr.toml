@@ -99,26 +99,42 @@ terms_title = "Conditions d'utilisation JuiceBox"
 terms_meta_description = "Conditions d'utilisation pour JuiceBox, hébergeur temporaire de fichiers"
 terms_effective = "En vigueur : 2024 (révision étendue Sep 2024)"
 terms_last_updated = "Dernière mise à jour : 2024-09-01"
-terms_sections = [
-  { heading = "1. Acceptation", body = "En envoyant, accédant ou partageant des fichiers sur JuiceBox, vous acceptez ces Conditions et politiques. Si vous n'êtes pas d'accord, n'utilisez pas le service." },
-  { heading = "2. Description du service", body = "JuiceBox est un hébergeur temporaire. Pas d'indexation, suppression après la durée choisie (1h à 14j). Service fourni \"EN L'ÉTAT\" et \"SELON DISPONIBILITÉ\" : aucune garantie d'uptime ou d'adéquation." },
-  { heading = "3. Définitions", body = "<ul><li><strong>\"Vous\"</strong> : toute personne ou entité envoyant ou accédant à du contenu.</li><li><strong>\"Contenu\"</strong> : tout fichier, donnée ou lien généré sur le service.</li><li><strong>\"Rétention\"</strong> : le TTL choisi à l'envoi, détermine la suppression.</li><li><strong>\"IP Edge\"</strong> : l'IP Cloudflare vue par l'origine, pour regrouper et limiter." },
-  { heading = "4. Contenu interdit", body = "Interdit d'envoyer/distribuer : matériel illégal, CSAM, mineurs sexualisés, images intimes non consenties, doxxing, données personnelles sensibles, malware, exploits, propagande extrémiste, incitation à la haine, copyright massif, usage comme CDN permanent." },
-  { heading = "5. Responsabilités de l'utilisateur", body = "<ul><li>Vérifiez que vous avez les droits pour publier le contenu.</li><li>Ne pas envoyer de données personnelles ou réglementées.</li><li>Ne pas contourner les limites de taille, type ou débit.</li><li>Ne pas attaquer l'infrastructure ni abuser du hotlinking.</li></ul>" },
-  { heading = "6. Vie privée et logs minimaux", body = "Pas de comptes. Seule l'IP Cloudflare pour propriété et limites. Pas d'en-têtes IP visiteur. Logs rotatifs minimaux, pas de profilage." },
-  { heading = "7. Gestion et rétention des données", body = "Chaque envoi stocke : id, nom original, taille, type, rétention et IP edge. À expiration ou suppression : enregistrement et fichier supprimés. Pas de traces bas niveau conservées. Backups courts et cycliques si présents." },
-  { heading = "8. Sécurité", body = "Transport en HTTPS. Fichiers non chiffrés sur disque. Pas de scan malware sauf filtrage extension. Considérez tout comme non fiable." },
-  { heading = "9. Disponibilité et changements", body = "Pannes, pertes de données ou changements possibles. Limites et blocages modifiables sans préavis. Utiliser après changement = acceptation." },
-  { heading = "10. Suppression et modération", body = "Suppression anticipée via UI ou endpoint depuis le réseau d'origine. Admins peuvent supprimer pour abus ou légal. Pas de restauration." },
-  { heading = "11. Copyright / DMCA", body = "Si vous pensez qu'il y a infraction, envoyez un avis avec infos, liens et contact. Suppression rapide si valide. Contre-avis étudiés au cas par cas." },
-  { heading = "12. Avertissement", body = "AUCUNE GARANTIE, IMPLICITE OU EXPLICITE. VOUS UTILISEZ LE SERVICE À VOS RISQUES." },
-  { heading = "13. Limitation de responsabilité", body = "Au maximum légal, l'opérateur n'est pas responsable des dommages indirects, pertes de données, profits, etc." },
-  { heading = "14. Indemnisation", body = "Vous acceptez d'indemniser l'opérateur pour toute réclamation liée à votre usage ou contenu." },
-  { heading = "15. Suspension / Résiliation", body = "Abus, demande légale ou sécurité peuvent entraîner un blocage temporaire ou définitif. Récidivistes bloqués au niveau réseau." },
-  { heading = "16. Transparence", body = "Logs minimisés. Si la loi exige, seules les données minimales seront fournies. Notification si légalement possible." },
-  { heading = "17. Divers", body = "Si une clause est invalide, le reste reste en vigueur. Non-exercice d'un droit ≠ renonciation. Pas de société ou agence créée." },
-  { heading = "Contact", body = "Signalez abus, sécurité ou avis légal via issues ou canal désigné." }
-]
+terms_section_1_heading = "1. Acceptation"
+terms_section_1_body = "En envoyant, accédant ou partageant des fichiers sur JuiceBox, vous acceptez ces Conditions et politiques. Si vous n'êtes pas d'accord, n'utilisez pas le service."
+terms_section_2_heading = "2. Description du service"
+terms_section_2_body = "JuiceBox est un hébergeur temporaire. Pas d'indexation, suppression après la durée choisie (1h à 14j). Service fourni \"EN L'ÉTAT\" et \"SELON DISPONIBILITÉ\" : aucune garantie d'uptime ou d'adéquation."
+terms_section_3_heading = "3. Définitions"
+terms_section_3_body = '''<ul><li><strong>"Vous"</strong> : toute personne ou entité envoyant ou accédant à du contenu.</li><li><strong>"Contenu"</strong> : tout fichier, donnée ou lien généré sur le service.</li><li><strong>"Rétention"</strong> : le TTL choisi à l'envoi, détermine la suppression.</li><li><strong>"IP Edge"</strong> : l'IP Cloudflare vue par l'origine, pour regrouper et limiter.</li></ul>'''
+terms_section_4_heading = "4. Contenu interdit"
+terms_section_4_body = "Interdit d'envoyer/distribuer : matériel illégal, CSAM, mineurs sexualisés, images intimes non consenties, doxxing, données personnelles sensibles, malware, exploits, propagande extrémiste, incitation à la haine, copyright massif, usage comme CDN permanent."
+terms_section_5_heading = "5. Responsabilités de l'utilisateur"
+terms_section_5_body = '''<ul><li>Vérifiez que vous avez les droits pour publier le contenu.</li><li>Ne pas envoyer de données personnelles ou réglementées.</li><li>Ne pas contourner les limites de taille, type ou débit.</li><li>Ne pas attaquer l'infrastructure ni abuser du hotlinking.</li></ul>'''
+terms_section_6_heading = "6. Vie privée et logs minimaux"
+terms_section_6_body = "Pas de comptes. Seule l'IP Cloudflare pour propriété et limites. Pas d'en-têtes IP visiteur. Logs rotatifs minimaux, pas de profilage."
+terms_section_7_heading = "7. Gestion et rétention des données"
+terms_section_7_body = "Chaque envoi stocke : id, nom original, taille, type, rétention et IP edge. À expiration ou suppression : enregistrement et fichier supprimés. Pas de traces bas niveau conservées. Backups courts et cycliques si présents."
+terms_section_8_heading = "8. Sécurité"
+terms_section_8_body = "Transport en HTTPS. Fichiers non chiffrés sur disque. Pas de scan malware sauf filtrage extension. Considérez tout comme non fiable."
+terms_section_9_heading = "9. Disponibilité et changements"
+terms_section_9_body = "Pannes, pertes de données ou changements possibles. Limites et blocages modifiables sans préavis. Utiliser après changement = acceptation."
+terms_section_10_heading = "10. Suppression et modération"
+terms_section_10_body = "Suppression anticipée via UI ou endpoint depuis le réseau d'origine. Admins peuvent supprimer pour abus ou légal. Pas de restauration."
+terms_section_11_heading = "11. Copyright / DMCA"
+terms_section_11_body = "Si vous pensez qu'il y a infraction, envoyez un avis avec infos, liens et contact. Suppression rapide si valide. Contre-avis étudiés au cas par cas."
+terms_section_12_heading = "12. Avertissement"
+terms_section_12_body = "AUCUNE GARANTIE, IMPLICITE OU EXPLICITE. VOUS UTILISEZ LE SERVICE À VOS RISQUES."
+terms_section_13_heading = "13. Limitation de responsabilité"
+terms_section_13_body = "Au maximum légal, l'opérateur n'est pas responsable des dommages indirects, pertes de données, profits, etc."
+terms_section_14_heading = "14. Indemnisation"
+terms_section_14_body = "Vous acceptez d'indemniser l'opérateur pour toute réclamation liée à votre usage ou contenu."
+terms_section_15_heading = "15. Suspension / Résiliation"
+terms_section_15_body = "Abus, demande légale ou sécurité peuvent entraîner un blocage temporaire ou définitif. Récidivistes bloqués au niveau réseau."
+terms_section_16_heading = "16. Transparence"
+terms_section_16_body = "Logs minimisés. Si la loi exige, seules les données minimales seront fournies. Notification si légalement possible."
+terms_section_17_heading = "17. Divers"
+terms_section_17_body = "Si une clause est invalide, le reste reste en vigueur. Non-exercice d'un droit ≠ renonciation. Pas de société ou agence créée."
+terms_section_contact_heading = "Contact"
+terms_section_contact_body = "Signalez abus, sécurité ou avis légal via issues ou canal désigné."
 
 # Report page translations
 report_title = "Signaler un contenu – JuiceBox"

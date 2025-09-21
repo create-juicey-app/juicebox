@@ -3,60 +3,399 @@
 -->
 <!DOCTYPE html>
 <html lang="{{ lang | default(value='en') }}">
-<head>
-  <meta charset="utf-8"/>
-  <title>{{ t.faq_title | default(value='JuiceBox FAQ') }}</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <meta name="description" content="{{ t.faq_meta_description | default(value='Frequently asked questions about JuiceBox temporary file host') }}"/>
-  <link rel="stylesheet" href="/css/app.css"/>
-  <style>body{max-width:860px;margin:0 auto;padding:1.4rem;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#0f141b;color:#e8ecf3}h1{margin:.2rem 0 1rem;font-size:1.8rem}h2{font-size:1rem;margin:1.6rem 0 .6rem;letter-spacing:.5px;text-transform:uppercase;opacity:.8}p,li{line-height:1.5;font-size:.85rem}code{background:#1d2732;padding:.15rem .35rem;border-radius:4px;font-size:.75rem}a{color:#ff9800}hr{border:none;height:1px;background:#253240;margin:2rem 0}.qa{margin:0 0 1.4rem;padding:1rem 1rem 1.1rem;background:#1a2230;border:1px solid #273242;border-radius:12px}details{background:#141d26;padding:.9rem 1rem;border:1px solid #22303b;border-radius:10px;margin:.85rem 0}details[open]{border-color:#314356}summary{cursor:pointer;font-weight:600;letter-spacing:.4px;font-size:.8rem;list-style:none}summary::-webkit-details-marker{display:none}.small{font-size:.62rem;opacity:.55}footer{margin:2.5rem 0 1rem;font-size:.6rem;opacity:.55;text-align:center}</style>
-</head>
-<body>
-<header><h1>{{ t.faq_title | default(value='JuiceBox FAQ') }}</h1><p class="lead" style="opacity:.75;font-size:.9rem">{{ t.faq_lead | default(value='Everything you usually ask before uploading.') }}</p></header>
-<main><section class="details-list">
-<h2>{{ t.faq_basics | default(value='Basics') }}</h2>
-<details open><summary>{{ t.faq_q1 }}</summary><div class="details-animate"><div><p>{{ t.faq_a1 }}</p></div></div></details>
-<details><summary>{{ t.faq_q2 }}</summary><div class="details-animate"><div><p>{{ t.faq_a2 }}</p></div></div></details>
-<details><summary>{{ t.faq_q3 }}</summary><div class="details-animate"><div><p>{{ t.faq_a3 }}</p></div></div></details>
-<details><summary>{{ t.faq_q4 }}</summary><div class="details-animate"><div><p>{{ t.faq_a4 }}</p></div></div></details>
-<details><summary>{{ t.faq_q5 }}</summary><div class="details-animate"><div><p>{{ t.faq_a5 }}</p></div></div></details>
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ t.faq_title | default(value='JuiceBox FAQ') }}</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      name="description"
+      content="{{ t.faq_meta_description | default(value='Frequently asked questions about JuiceBox temporary file host') }}"
+    />
+    <link rel="stylesheet" href="/css/app.css" />
+    <style>
+      body {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 1.4rem;
+        font-family: system-ui, Segoe UI, Roboto, sans-serif;
+        background: #0f141b;
+        color: #e8ecf3;
+      }
+      h1 {
+        margin: 0.2rem 0 1rem;
+        font-size: 1.8rem;
+      }
+      h2 {
+        font-size: 1rem;
+        margin: 1.6rem 0 0.6rem;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        opacity: 0.8;
+      }
+      p,
+      li {
+        line-height: 1.5;
+        font-size: 0.85rem;
+      }
+      code {
+        background: #1d2732;
+        padding: 0.15rem 0.35rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+      }
+      a {
+        color: #ff9800;
+      }
+      hr {
+        border: none;
+        height: 1px;
+        background: #253240;
+        margin: 2rem 0;
+      }
+      .qa {
+        margin: 0 0 1.4rem;
+        padding: 1rem 1rem 1.1rem;
+        background: #1a2230;
+        border: 1px solid #273242;
+        border-radius: 12px;
+      }
+      details {
+        background: #141d26;
+        padding: 0.9rem 1rem;
+        border: 1px solid #22303b;
+        border-radius: 10px;
+        margin: 0.85rem 0;
+      }
+      details[open] {
+        border-color: #314356;
+      }
+      summary {
+        cursor: pointer;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+        font-size: 0.8rem;
+        list-style: none;
+      }
+      summary::-webkit-details-marker {
+        display: none;
+      }
+      .small {
+        font-size: 0.62rem;
+        opacity: 0.55;
+      }
+      footer {
+        margin: 2.5rem 0 1rem;
+        font-size: 0.6rem;
+        opacity: 0.55;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body
+    style="
+      background: #0f141b;
+      color: #e8ecf3;
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 1.4rem;
+      font-family: system-ui, Segoe UI, Roboto, sans-serif;
+    "
+  >
+    <nav class="skip-links" aria-label="Skip links">
+      <a
+        href="#mainContent"
+        class="skip-link"
+        >{{ t.skip_main | default(value="Skip to main content") }}</a
+      >
+    </nav>
+    <header>
+      <h1>{{ t.faq_title | default(value='JuiceBox FAQ') }}</h1>
+      <p class="lead" style="opacity: 0.75; font-size: 0.9rem">
+        {{ t.faq_lead | default(value='Everything you usually ask before uploading.') }}
+      </p>
+    </header>
+    <main id="mainContent" tabindex="-1">
+      <section class="details-list">
+        <h2>{{ t.faq_basics | default(value='Basics') }}</h2>
+        <details open>
+          <summary>{{ t.faq_q1 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a1 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q2 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a2 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q3 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a3 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q4 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a4 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q5 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a5 }}</p>
+            </div>
+          </div>
+        </details>
 
-<h2>{{ t.faq_expiration | default(value='Expiration') }}</h2>
-<details><summary>{{ t.faq_q6 }}</summary><div class="details-animate"><div><p>{{ t.faq_a6 }}</p></div></div></details>
-<details><summary>{{ t.faq_q7 }}</summary><div class="details-animate"><div><p>{{ t.faq_a7 }}</p></div></div></details>
-<details><summary>{{ t.faq_q8 }}</summary><div class="details-animate"><div><p>{{ t.faq_a8 }}</p></div></div></details>
+        <h2>{{ t.faq_expiration | default(value='Expiration') }}</h2>
+        <details>
+          <summary>{{ t.faq_q6 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a6 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q7 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a7 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q8 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a8 }}</p>
+            </div>
+          </div>
+        </details>
 
-<h2>{{ t.faq_privacy | default(value='Privacy & Security') }}</h2>
-<details><summary>{{ t.faq_q9 }}</summary><div class="details-animate"><div><p>{{ t.faq_a9 }}</p></div></div></details>
-<details><summary>{{ t.faq_q10 }}</summary><div class="details-animate"><div><p>{{ t.faq_a10 }}</p></div></div></details>
-<details><summary>{{ t.faq_q11 }}</summary><div class="details-animate"><div><p>{{ t.faq_a11 }}</p></div></div></details>
-<details><summary>{{ t.faq_q12 }}</summary><div class="details-animate"><div><p>{{ t.faq_a12 }}</p></div></div></details>
+        <h2>{{ t.faq_privacy | default(value='Privacy & Security') }}</h2>
+        <details>
+          <summary>{{ t.faq_q9 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a9 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q10 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a10 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q11 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a11 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q12 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a12 }}</p>
+            </div>
+          </div>
+        </details>
 
-<h2>{{ t.faq_abuse | default(value='Abuse & Limits') }}</h2>
-<details><summary>{{ t.faq_q13 }}</summary><div class="details-animate"><div><p>{{ t.faq_a13 }}</p></div></div></details>
-<details><summary>{{ t.faq_q14 }}</summary><div class="details-animate"><div><p>{{ t.faq_a14 }}</p></div></div></details>
+        <h2>{{ t.faq_abuse | default(value='Abuse & Limits') }}</h2>
+        <details>
+          <summary>{{ t.faq_q13 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a13 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q14 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a14 }}</p>
+            </div>
+          </div>
+        </details>
 
-<h2>{{ t.faq_banned | default(value='Banned Content') }}</h2>
-<details><summary>{{ t.faq_q15 }}</summary><div class="details-animate"><div><p>{{ t.faq_a15 }}</p></div></div></details>
-<details><summary>{{ t.faq_q16 }}</summary><div class="details-animate"><div><p>{{ t.faq_a16 }}</p></div></div></details>
-<details><summary>{{ t.faq_q17 }}</summary><div class="details-animate"><div><p>{{ t.faq_a17 }}</p></div></div></details>
+        <h2>{{ t.faq_banned | default(value='Banned Content') }}</h2>
+        <details>
+          <summary>{{ t.faq_q15 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a15 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q16 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a16 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q17 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a17 }}</p>
+            </div>
+          </div>
+        </details>
 
-<h2>{{ t.faq_removal | default(value='Removal') }}</h2>
-<details><summary>{{ t.faq_q18 }}</summary><div class="details-animate"><div><p>{{ t.faq_a18 }}</p></div></div></details>
-<details><summary>{{ t.faq_q19 }}</summary><div class="details-animate"><div><p>{{ t.faq_a19 }}</p></div></div></details>
+        <h2>{{ t.faq_removal | default(value='Removal') }}</h2>
+        <details>
+          <summary>{{ t.faq_q18 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a18 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q19 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a19 }}</p>
+            </div>
+          </div>
+        </details>
 
-<h2>{{ t.faq_api | default(value='API Notes') }}</h2>
-<details><summary>{{ t.faq_q20 }}</summary><div class="details-animate"><div><p>{{ t.faq_a20 }}</p></div></div></details>
-<details><summary>{{ t.faq_q21 }}</summary><div class="details-animate"><div><p>{{ t.faq_a21 }}</p></div></div></details>
-</section>
-<section>
-<hr/>
-<p class="small">{{ t.faq_feedback | default(value='Need something clarified? Open an issue / send feedback.') }}</p>
-<p class="small"><a href="/terms">{{ t.terms }}</a> • <a href="/">{{ t.home }}</a></p>
-</section></main><footer>JuiceBox – temporary file host
-  <nav aria-label="Site links" style="display:block;margin-top:.5rem;font-size:.6rem;opacity:.7;letter-spacing:.35px">
-    <a href="/report">{{ t.report }}</a> • <a href="/terms">{{ t.terms }}</a> • <a href="https://buymeacoffee.com/juiceydev" target="_blank" rel="noopener">{{ t.donate }}</a>
-  </nav>
-</footer>
-</body>
+        <h2>{{ t.faq_api | default(value='API Notes') }}</h2>
+        <details>
+          <summary>{{ t.faq_q20 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a20 }}</p>
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary>{{ t.faq_q21 }}</summary>
+          <div class="details-animate">
+            <div>
+              <p>{{ t.faq_a21 }}</p>
+            </div>
+          </div>
+        </details>
+      </section>
+      <section>
+        <hr />
+        <p class="small">
+          {{ t.faq_feedback | default(value='Need something clarified? Open an issue / send feedback.') }}
+        </p>
+        <p class="small">
+          <a href="/terms">{{ t.terms }}</a> • <a href="/">{{ t.home }}</a>
+        </p>
+      </section>
+    </main>
+    <footer
+      title="{{ t.footer_tagline | default(value='Service tagline') }}"
+      style="color: #fff !important; opacity: 1 !important; background: none"
+    >
+      juicebox //
+      {{ t.footer_sub | default(value='simple high-speed file host') }}
+      <nav
+        aria-label="{{ t.site_links | default(value='Site links') }}"
+        class="footer-links"
+        style="
+          display: block;
+          margin-top: 0.45rem;
+          font-size: 0.6rem;
+          letter-spacing: 0.35px;
+          color: #fff !important;
+          opacity: 1 !important;
+        "
+      >
+        <a
+          href="/"
+          style="color: #fff !important"
+          >{{ t.home | default(value='Home') }}</a
+        >
+        •
+        <a
+          href="/simple"
+          style="color: #fff !important"
+          >{{ t.simple | default(value='Simple') }}</a
+        >
+        •
+        <a
+          href="/faq"
+          style="color: #fff !important"
+          >{{ t.faq | default(value='FAQ') }}</a
+        >
+        •
+        <a
+          href="/report"
+          style="color: #fff !important"
+          >{{ t.report | default(value='Report') }}</a
+        >
+        •
+        <a
+          href="/terms"
+          style="color: #fff !important"
+          >{{ t.terms | default(value='Terms') }}</a
+        >
+        •
+        <a
+          href="https://buymeacoffee.com/juiceydev"
+          target="_blank"
+          rel="noopener"
+          style="color: #fff !important"
+          >{{ t.donate | default(value='Donate') }}</a
+        >
+      </nav>
+      <br /><span
+        id="ipNote"
+        style="
+          display: block;
+          font-size: 0.55rem;
+          opacity: 0.95 !important;
+          margin-top: 0.4rem;
+          letter-spacing: 0.3px;
+          color: #fff !important;
+        "
+      ></span>
+    </footer>
+    <script>
+      // Language auto-apply: checks cookie/localStorage and reloads with ?lang= if needed
+      (function () {
+        var getLang = function () {
+          var m = document.cookie.match(/(?:^|; )lang=([a-z]{2})/);
+          if (m) return m[1];
+          try {
+            var l = localStorage.getItem("lang");
+            if (l) return l;
+          } catch (e) {}
+          return null;
+        };
+        var urlLang = new URLSearchParams(window.location.search).get("lang");
+        var cookieLang = getLang();
+        if (cookieLang && cookieLang !== urlLang) {
+          var url = new URL(window.location.href);
+          url.searchParams.set("lang", cookieLang);
+          window.location = url.toString();
+        }
+      })();
+    </script>
+  </body>
 </html>
