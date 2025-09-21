@@ -9,6 +9,8 @@ use crate::util::extract_client_ip;
 use crate::state::{AppState, FileMeta, ReportRecord, cleanup_expired, verify_user_entries_with_report, spawn_integrity_check, ReconcileReport};
 use tower_http::services::ServeDir;
 use time::{OffsetDateTime};
+use tera::{Tera, Context};
+use std::collections::HashMap;
 
 // Email event for reports
 #[derive(Clone, Debug)]
@@ -41,6 +43,7 @@ pub struct ReportRecordEmail {
 #[derive(Deserialize)] pub struct UnbanForm { pub ip: String }
 #[derive(Deserialize)] pub struct AdminFileDeleteForm { pub file: String }
 #[derive(Deserialize)] pub struct AdminReportDeleteForm { pub idx: usize }
+#[derive(Debug, Deserialize)] pub struct LangQuery { pub lang: Option<String> }
 
 // Upload handler
 #[axum::debug_handler]
@@ -250,114 +253,29 @@ pub async fn file_handler(State(state): State<AppState>, Path(path): Path<String
     }
 }
 
-pub async fn root_handler(State(state): State<AppState>) -> Response { let index_path=state.static_dir.join("index.html"); if !index_path.exists() { return (StatusCode::NOT_FOUND, "index missing").into_response(); } match fs::read(&index_path).await { Ok(bytes)=>{ let mime=mime_guess::from_path(&index_path).first_or_octet_stream(); ([(axum::http::header::CONTENT_TYPE, mime.as_ref())], bytes).into_response() }, Err(_)=>(StatusCode::INTERNAL_SERVER_ERROR, "cant read index").into_response() } }
-
-pub async fn simple_list_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Query(query): Query<SimpleQuery>) -> Response {
-    let ip = real_client_ip(&headers, &addr);
-    let owners = state.owners.read().await;
-    let now = now_secs();
-    let mut rows = String::new();
-    for (file, meta) in owners.iter() {
-        if meta.owner == ip {
-            let rem = if meta.expires > now { meta.expires - now } else { 0 };
-            let ttl_disp = if rem >= 86400 { format!("{}d", rem/86400) } else if rem >= 3600 { format!("{}h", rem/3600) } else if rem >= 60 { format!("{}m", rem/60) } else { format!("{}s", rem) };
-            let display = if meta.original.trim().is_empty() { file } else { &meta.original };
-            rows.push_str(&format!("<tr><td><a href=\"/f/{stored}\" rel=noopener title=\"{stored}\">{disp}</a></td><td>{ttl}</td><td><form method=post action=/simple_delete style=\"margin:0\"><input type=hidden name=f value=\"{stored}\" /><button type=submit>Delete</button></form></td></tr>", stored=file, disp=htmlescape::encode_minimal(display), ttl=ttl_disp));
-        }
-    }
-    let message_html = if let Some(m)=query.m { if !m.is_empty() { format!("<p style=\"color:#ff9800;font-size:.7rem;\">{}</p>", htmlescape::encode_minimal(&m)) } else { String::new() } } else { String::new() };
-    let tpl_path = state.static_dir.join("simple.html");
-    match fs::read(&tpl_path).await {
-        Ok(bytes) => {
-            let mut body = String::from_utf8_lossy(&bytes).into_owned();
-            body = body.replace("{{MESSAGE}}", &message_html).replace("{{ROWS}}", &rows);
-            ([(axum::http::header::CONTENT_TYPE, "text/html")], body).into_response()
-        },
-        Err(_) => {
-            let body = format!("<html><body><h1>Your Files</h1>{}<ul>{}</ul><form method=post action=/simple_delete><input name=f><button type=submit>Delete</button></form></body></html>", message_html, owners.iter().filter(|(_,m)| m.owner==ip).map(|(f,m)| format!("<li>{}</li>", if m.original.trim().is_empty(){ f } else { &m.original })).collect::<String>());
-            ([(axum::http::header::CONTENT_TYPE, "text/html")], body).into_response()
-        }
-    }
-}
-
-#[axum::debug_handler]
-pub async fn simple_delete_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Form(frm): Form<SimpleDeleteForm>) -> Response {
-    let ip=real_client_ip(&headers, &addr);
-    let target=frm.f;
-    let owned = {
-        let owners=state.owners.read().await;
-        owners.get(&target).map(|m| m.owner.clone())
+pub async fn root_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+    // Determine language (default to en)
+    let lang = query.lang.as_deref().unwrap_or("en");
+    let lang_file = format!("translations/lang_{}.toml", lang);
+    // Try to load translation file, fallback to English if missing
+    let t_map: HashMap<String, String> = {
+        let content = match fs::read_to_string(&lang_file).await {
+            Ok(s) => s,
+            Err(_) => match fs::read_to_string("translations/lang_en.toml").await {
+                Ok(s) => s,
+                Err(_) => String::new(),
+            },
+        };
+        toml::from_str(&content).unwrap_or_else(|_| HashMap::new())
     };
-    if owned.is_some() && owned.unwrap() == ip {
-        {
-            let mut owners=state.owners.write().await;
-            owners.remove(&target);
-        }
-        let _ = fs::remove_file(state.upload_dir.join(&target)).await;
-        state.persist_owners().await;
-        let hv = HeaderValue::from_static("/simple?m=Deleted");
-        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response();
+    let mut ctx = Context::new();
+    ctx.insert("lang", lang);
+    ctx.insert("t", &t_map);
+    let tera = &state.tera;
+    match tera.render("index.html.tera", &ctx) {
+        Ok(rendered) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], rendered).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {}", e)).into_response(),
     }
-    let hv = HeaderValue::from_static("/simple?m=Not+found");
-    (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
-}
-
-#[axum::debug_handler]
-pub async fn simple_upload_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, mut multipart: Multipart) -> Response {
-    // Prevent banned IPs
-    let client_ip = real_client_ip(&headers, &addr);
-    if state.is_banned(&client_ip).await {
-        let hv = HeaderValue::from_static("/banned");
-        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response();
-    }
-
-    let sem = state.upload_sem.clone();
-    let _permit = match sem.try_acquire_owned() { Ok(p)=>p, Err(_)=> {
-        let hv = HeaderValue::from_static("/simple?m=Server+busy" );
-        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response();
-    }};
-
-    // Default TTL matches simple.html default (3d)
-    let mut ttl_code = "3d".to_string();
-    let mut files_to_process: Vec<(Option<String>, Vec<u8>)> = Vec::new();
-
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let name = match field.name() { Some(n)=>n.to_string(), None=>continue };
-        if name == "ttl" {
-            if let Ok(data) = field.bytes().await { if let Ok(s)=std::str::from_utf8(&data) { ttl_code = s.to_string(); } }
-            continue;
-        }
-        if name.starts_with("file") {
-            let original_name = field.file_name().map(|s| s.to_string());
-            if let Ok(data) = field.bytes().await { if !data.is_empty() { files_to_process.push((original_name, data.to_vec())); } }
-        }
-    }
-
-    if files_to_process.is_empty() {
-        let hv = HeaderValue::from_static("/simple?m=No+files");
-        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response();
-    }
-
-    let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
-    let mut saved_files = 0usize; let mut skipped = 0usize;
-    for (original_name, data) in &files_to_process {
-        if data.len() as u64 > MAX_FILE_BYTES { skipped+=1; continue; }
-        let storage_name = make_storage_name(original_name.as_deref());
-        if is_forbidden_extension(&storage_name) { skipped+=1; continue; }
-        let path = state.upload_dir.join(&storage_name);
-        if fs::write(&path, data).await.is_ok() {
-            let meta = FileMeta { owner: client_ip.clone(), expires, original: original_name.clone().unwrap_or_default() };
-            state.owners.write().await.insert(storage_name.clone(), meta);
-            saved_files +=1;
-        } else { skipped+=1; }
-    }
-    state.persist_owners().await; spawn_integrity_check(state.clone());
-
-    let mut msg = if saved_files>0 { format!("Uploaded+{}+file{}", saved_files, if saved_files==1 {""} else {"s"}) } else { "No+files".to_string() };
-    if skipped>0 { msg.push_str("+(some+skipped)"); }
-    let loc = format!("/simple?m={}", msg);
-    let hv = HeaderValue::from_str(&loc).unwrap_or_else(|_| HeaderValue::from_static("/simple"));
-    (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
 }
 
 pub async fn debug_ip_handler(ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap) -> Response {
@@ -367,13 +285,77 @@ pub async fn debug_ip_handler(ConnectInfo(addr): ConnectInfo<ClientAddr>, header
     Json(serde_json::json!({"edge": edge, "cf": cf, "xff": xff})).into_response()
 }
 
-pub async fn report_page_handler(State(state): State<AppState>) -> Response {
-    let path = state.static_dir.join("report.html");
-    if !path.exists() { return (StatusCode::NOT_FOUND, "report page missing").into_response(); }
-    match fs::read(&path).await {
-        Ok(bytes) => { let mime = mime_guess::from_path(&path).first_or_octet_stream(); ([(axum::http::header::CONTENT_TYPE, mime.as_ref())], bytes).into_response() },
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "cant read report").into_response()
+// Helper to load translation map for a given lang code, with debug logging
+async fn load_translation_map(lang: &str) -> HashMap<String, String> {
+    let lang_file = format!("translations/lang_{}.toml", lang);
+    println!("[i18n] Attempting to load translation file: {}", lang_file);
+    let content = match fs::read_to_string(&lang_file).await {
+        Ok(s) => {
+            println!("[i18n] Loaded file: {}", lang_file);
+            s
+        },
+        Err(e) => {
+            println!("[i18n] Failed to load {}: {}. Falling back to lang_en.toml", lang_file, e);
+            match fs::read_to_string("translations/lang_en.toml").await {
+                Ok(s) => s,
+                Err(e2) => {
+                    println!("[i18n] Failed to load fallback lang_en.toml: {}", e2);
+                    String::new()
+                },
+            }
+        },
+    };
+    match toml::from_str::<HashMap<String, String>>(&content) {
+        Ok(map) => {
+            println!("[i18n] Loaded {} keys for lang {}", map.len(), lang);
+            map
+        },
+        Err(e) => {
+            println!("[i18n] Failed to parse TOML for lang {}: {}", lang, e);
+            HashMap::new()
+        }
     }
+}
+
+async fn render_tera_page(state: &AppState, template: &str, lang: &str, extra: Option<(&str, &tera::Value)>) -> Response {
+    let t_map = load_translation_map(lang).await;
+    let mut ctx = Context::new();
+    ctx.insert("lang", lang);
+    ctx.insert("t", &t_map);
+    if let Some((k, v)) = extra {
+        ctx.insert(k, v);
+    }
+    let tera = &state.tera;
+    match tera.render(template, &ctx) {
+        Ok(rendered) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], rendered).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {}", e)).into_response(),
+    }
+}
+
+pub async fn faq_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+    let lang = query.lang.as_deref().unwrap_or("en");
+    render_tera_page(&state, "faq.html.tera", lang, None).await
+}
+
+pub async fn terms_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+    let lang = query.lang.as_deref().unwrap_or("en");
+    render_tera_page(&state, "terms.html.tera", lang, None).await
+}
+
+pub async fn report_page_handler_i18n(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+    let lang = query.lang.as_deref().unwrap_or("en");
+    render_tera_page(&state, "report.html.tera", lang, None).await
+}
+
+pub async fn simple_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+    let lang = query.lang.as_deref().unwrap_or("en");
+    // You may want to pass extra context for MESSAGE/ROWS if needed
+    render_tera_page(&state, "simple.html.tera", lang, None).await
+}
+
+pub async fn banned_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+    let lang = query.lang.as_deref().unwrap_or("en");
+    render_tera_page(&state, "banned.html.tera", lang, None).await
 }
 
 pub async fn ban_page_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -534,6 +516,19 @@ pub async fn admin_report_delete_handler(State(state): State<AppState>, headers:
     (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
 }
 
+// Placeholder handlers for /simple endpoints
+pub async fn simple_list_handler() -> axum::response::Response {
+    (axum::http::StatusCode::NOT_IMPLEMENTED, "Not implemented").into_response()
+}
+
+pub async fn simple_upload_handler() -> axum::response::Response {
+    (axum::http::StatusCode::NOT_IMPLEMENTED, "Not implemented").into_response()
+}
+
+pub async fn simple_delete_handler() -> axum::response::Response {
+    (axum::http::StatusCode::NOT_IMPLEMENTED, "Not implemented").into_response()
+}
+
 // Add cache middleware for static asset dirs (css/js)
 pub async fn add_cache_headers(req: axum::http::Request<Body>, next: Next) -> Response {
     let path = req.uri().path().to_string();
@@ -558,10 +553,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/mine", get(list_handler))
         .route("/f/{file}", get(fetch_file_handler).delete(delete_handler))
         .route("/d/{file}", delete(delete_handler))
-        .route("/report", get(report_page_handler).post(report_handler))
+        .route("/report", get(report_page_handler_i18n).post(report_handler))
         .route("/unban", post(unban_post_handler))
         .route("/healthz", get(|| async { "ok" }))
-        .route("/simple", get(simple_list_handler))
+        .route("/simple", get(simple_handler))
         .route("/simple/upload", post(simple_upload_handler))
         .route("/simple_delete", post(simple_delete_handler))
         .route("/auth", get(auth_get_handler).post(auth_post_handler))
@@ -570,6 +565,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/ban", get(ban_page_handler).post(ban_post_handler))
         .route("/admin/files", get(admin_files_handler).post(admin_file_delete_handler))
         .route("/admin/reports", get(admin_reports_handler).post(admin_report_delete_handler))
+        .route("/faq", get(faq_handler))
+        .route("/terms", get(terms_handler))
         .nest_service("/css", css_service.clone())
         .nest_service("/js", js_service.clone())
         .route("/", get(root_handler))

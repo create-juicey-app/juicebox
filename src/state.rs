@@ -22,6 +22,7 @@ use crate::util::{now_secs, ttl_to_duration, ADMIN_SESSION_TTL, ADMIN_KEY_TTL, n
     pub report_email_to: Option<String>,
     pub report_email_from: Option<String>,
     pub email_tx: Option<tokio::sync::mpsc::Sender<crate::handlers::ReportRecordEmail>>, // channel to worker
+    pub tera: std::sync::Arc<tera::Tera>,
 }
 
 impl AppState {
