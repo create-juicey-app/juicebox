@@ -91,13 +91,13 @@
         <span id="ttlValue" class="ttl-value" title="Current retention value">3d</span>
         <span class="subtle" title="Files are automatically deleted after retention">{{ t.auto_delete | default(value="auto delete") }}</span>
       </div>
-      <div class="drop-zone" id="dropZone" aria-describedby="dropHint" title="{{ t.drop_title | default(value='Click or drag files here to upload (max 500MB each)') }}">
-        <input type="file" id="fileInput" multiple title="File picker" aria-label="{{ t.file_picker | default(value='Select files to upload (maximum 500 megabytes each)') }}" aria-describedby="dropHint" />
+      <div class="drop-zone" id="dropZone" aria-describedby="dropHint" title="{{ t.drop_title | default(value='Click or drag files here to upload (max {max_size} each)') | replace(from='{max_size}', to=max_file_size_str) }}">
+        <input type="file" id="fileInput" multiple title="File picker" aria-label="{{ t.file_picker | default(value='Select files to upload (maximum {max_size} each)') | replace(from='{max_size}', to=max_file_size_str) }}" aria-describedby="dropHint" />
         <div class="icon" title="Folder icon">📁</div>
         <div class="muted" id="dropHint" title="Click or drop to begin selecting files">{{ t.drop_hint | default(value="Click or drop files") }}</div>
       </div>
       <ul id="fileList" title="Upload queue showing files, progress bars, and actions" role="list"></ul>
-      <p class="site-note" title="Upload usage note">{{ t.upload_note | default(value="Upload your files. Links show after each finishes. Maximum file size is 500MB, Files expire after selected retention. Limit: maximum 5 active files per IP (delete one to free a slot). See <a href='/faq' target='_blank' rel='noopener' title='Open FAQ in new tab'>Read the FAQ</a>.") }}</p>
+      <p class="site-note" title="Upload usage note">{{ t.upload_note | default(value="Upload your files. Links show after each finishes. Maximum file size is {max_size}, Files expire after selected retention. Limit: maximum 5 active files per IP (delete one to free a slot). See <a href='/faq' target='_blank' rel='noopener' title='Open FAQ in new tab'>Read the FAQ</a>.") | replace(from='{max_size}', to=max_file_size_str) }}</p>
       <p class="site-note" title="Privacy notice">{{ t.privacy_note | default(value="Notice: Your IP address is processed only to associate uploads with your session, apply limits, and enable abuse/moderation actions. It is not shared and is removed once all related files expire.") }}</p>
     </section></div>
     <div class="panel" id="ownedPanel" style="display:none"><section>
@@ -189,6 +189,10 @@
       window.location = url.toString();
     }
   })();
+  </script>
+  <script>
+    window.MAX_FILE_BYTES = "{{ max_file_bytes | default(value=524288000) }}";
+    window.MAX_FILE_SIZE_STR = "{{ max_file_size_str | default(value='500MB') }}";
   </script>
 </body>
 </html>

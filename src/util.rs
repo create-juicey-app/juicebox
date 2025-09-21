@@ -4,11 +4,19 @@ use std::{time::{SystemTime, UNIX_EPOCH, Duration}, net::IpAddr};
 use sanitize_filename::sanitize;
 // removed rand; using cuid now
 use crate::state::AppState;
+use once_cell::sync::Lazy;
+use std::sync::OnceLock;
 
 // Public constants
 // RANDOM_NAME_LEN removed (no longer needed with CUID)
 pub const UPLOAD_CONCURRENCY: usize = 8;
-pub const MAX_FILE_BYTES: u64 = 500 * 1024 * 1024; // 500MB
+// Replace const with a static that reads from env at startup
+static MAX_FILE_BYTES: Lazy<u64> = Lazy::new(|| {
+    std::env::var("MAX_FILE_SIZE")
+        .ok()
+        .and_then(|v| parse_size_bytes(&v))
+        .unwrap_or(500 * 1024 * 1024) // default 500MB
+});
 pub const PROD_HOST: &str = "box.juicey.dev";
 // Disallowed extensions
 pub const FORBIDDEN_EXTENSIONS: &[&str] = &["exe","dll","bat","cmd","com","scr","cpl","msi","msp","jar","ps1","psm1","vbs","js","jse","wsf","wsh","reg","sh","php","pl","py","rb","gadget","hta","mht","mhtml"];
@@ -89,4 +97,37 @@ pub fn get_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         if k == name { return kv.next().map(|v| v.trim().to_string()); }
     }
     None
+}
+
+// Helper: parse human-readable size (e.g. "500MB", "1GB")
+fn parse_size_bytes(s: &str) -> Option<u64> {
+    let s = s.trim().to_ascii_lowercase();
+    if let Some(num) = s.strip_suffix("gb") {
+        num.trim().parse::<u64>().ok().map(|n| n * 1024 * 1024 * 1024)
+    } else if let Some(num) = s.strip_suffix("mb") {
+        num.trim().parse::<u64>().ok().map(|n| n * 1024 * 1024)
+    } else if let Some(num) = s.strip_suffix("kb") {
+        num.trim().parse::<u64>().ok().map(|n| n * 1024)
+    } else if let Some(num) = s.strip_suffix("b") {
+        num.trim().parse::<u64>().ok()
+    } else {
+        s.parse::<u64>().ok()
+    }
+}
+
+// Helper: format bytes as human readable (e.g. 500MB, 1GB)
+pub fn format_bytes(n: u64) -> String {
+    if n >= 1024 * 1024 * 1024 {
+        format!("{:.0}GB", n as f64 / 1024.0 / 1024.0 / 1024.0)
+    } else if n >= 1024 * 1024 {
+        format!("{:.0}MB", n as f64 / 1024.0 / 1024.0)
+    } else if n >= 1024 {
+        format!("{:.0}KB", n as f64 / 1024.0)
+    } else {
+        format!("{}B", n)
+    }
+}
+
+pub fn max_file_bytes() -> u64 {
+    *MAX_FILE_BYTES
 }

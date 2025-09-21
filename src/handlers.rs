@@ -4,7 +4,7 @@ use axum::body::Body;
 use std::{net::SocketAddr as ClientAddr, time::{SystemTime, Duration}};
 use tokio::fs;
 use serde::{Serialize, Deserialize};
-use crate::util::{json_error, real_client_ip, is_forbidden_extension, make_storage_name, now_secs, ttl_to_duration, qualify_path, MAX_FILE_BYTES, PROD_HOST, get_cookie, ADMIN_SESSION_TTL};
+use crate::util::{json_error, real_client_ip, is_forbidden_extension, make_storage_name, now_secs, ttl_to_duration, qualify_path, max_file_bytes, format_bytes, PROD_HOST, get_cookie, ADMIN_SESSION_TTL};
 use crate::util::extract_client_ip;
 use crate::state::{AppState, FileMeta, ReportRecord, cleanup_expired, verify_user_entries_with_report, spawn_integrity_check, ReconcileReport};
 use tower_http::services::ServeDir;
@@ -93,7 +93,7 @@ pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): Co
     let mut saved_files = Vec::new();
 
     for (original_name, data) in &files_to_process {
-        if data.len() as u64 > MAX_FILE_BYTES {
+        if data.len() as u64 > max_file_bytes() {
             continue;
         }
         let storage_name = make_storage_name(original_name.as_deref());
@@ -271,6 +271,8 @@ pub async fn root_handler(State(state): State<AppState>, Query(query): Query<Lan
     let mut ctx = Context::new();
     ctx.insert("lang", lang);
     ctx.insert("t", &t_map);
+    ctx.insert("max_file_bytes", &max_file_bytes());
+    ctx.insert("max_file_size_str", &format_bytes(max_file_bytes()));
     let tera = &state.tera;
     match tera.render("index.html.tera", &ctx) {
         Ok(rendered) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], rendered).into_response(),
