@@ -45,6 +45,13 @@ pub struct ReportRecordEmail {
 #[derive(Deserialize)] pub struct AdminReportDeleteForm { pub idx: usize }
 #[derive(Debug, Deserialize)] pub struct LangQuery { pub lang: Option<String> }
 
+// Config response
+#[derive(Serialize)]
+pub struct ConfigResponse {
+    pub max_file_bytes: u64,
+    pub max_file_size_str: String,
+}
+
 // Upload handler
 #[axum::debug_handler]
 pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, mut multipart: Multipart) -> Response {
@@ -518,6 +525,14 @@ pub async fn admin_report_delete_handler(State(state): State<AppState>, headers:
     (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, hv)]).into_response()
 }
 
+pub async fn config_handler() -> Response {
+    let resp = ConfigResponse {
+        max_file_bytes: crate::util::max_file_bytes(),
+        max_file_size_str: crate::util::format_bytes(crate::util::max_file_bytes()),
+    };
+    Json(resp).into_response()
+}
+
 // Placeholder handlers for /simple endpoints
 pub async fn simple_list_handler() -> axum::response::Response {
     (axum::http::StatusCode::NOT_IMPLEMENTED, "Not implemented").into_response()
@@ -569,6 +584,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/admin/reports", get(admin_reports_handler).post(admin_report_delete_handler))
         .route("/faq", get(faq_handler))
         .route("/terms", get(terms_handler))
+        .route("/api/config", get(config_handler))
         .nest_service("/css", css_service.clone())
         .nest_service("/js", js_service.clone())
         .route("/", get(root_handler))

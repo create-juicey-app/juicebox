@@ -1,3 +1,16 @@
+// --- Dynamic config fetch ---
+window.MAX_FILE_BYTES = 500 * 1024 * 1024;
+window.MAX_FILE_SIZE_STR = "500MB";
+fetch("/api/config", { cache: "no-store" })
+  .then((r) => (r.ok ? r.json() : null))
+  .then((cfg) => {
+    if (cfg && typeof cfg.max_file_bytes === "number")
+      window.MAX_FILE_BYTES = cfg.max_file_bytes;
+    if (cfg && typeof cfg.max_file_size_str === "string")
+      window.MAX_FILE_SIZE_STR = cfg.max_file_size_str;
+  })
+  .catch(() => {});
+
 // Rewritten client logic for stable uploads & deletes
 const dropZone = document.getElementById("dropZone");
 // ensure input exists
@@ -77,7 +90,15 @@ function fmtBytes(b) {
 }
 
 // Added: generic snackbar helper alias expected by later code (now specialized for errors and shake)
-function showSnack(msg) {
+function showSnack(msg, opts) {
+  opts = opts || {};
+  console.log("[showSnack]", msg, {
+    MAX_FILE_BYTES: window.MAX_FILE_BYTES,
+    MAX_FILE_SIZE_STR: window.MAX_FILE_SIZE_STR,
+    fileSize: opts.fileSize,
+    fileSizeStr: opts.fileSizeStr,
+    fileName: opts.fileName,
+  });
   let sb = document.getElementById("snackbar");
   if (!sb) {
     sb = document.createElement("div");
@@ -1240,11 +1261,9 @@ if (dropZone) {
           const exp = parseFloat(chip.dataset.exp || "0");
           if (exp) {
             const total = parseFloat(chip.dataset.total || "0");
-            if (total > 0) {
-              const remain = exp - now;
-              if (remain > 0 && remain / total <= 0.01) {
-                chip.classList.add("expiring");
-              }
+            const remain = exp - now;
+            if (remain > 0 && remain / total <= 0.01) {
+              chip.classList.add("expiring");
             }
           }
           if (exp && now >= exp) {
@@ -1290,7 +1309,27 @@ if (dropZone) {
     const filtered = [];
     arr.forEach((f) => {
       if (f.size > SIZE_LIMIT) {
-        showSnack("Refused " + f.name + " (over " + SIZE_LIMIT_STR + ")");
+        showSnack(
+          "Refused " +
+            f.name +
+            " (" +
+            fmtBytes(f.size) +
+            ", over " +
+            SIZE_LIMIT_STR +
+            ")",
+          {
+            fileSize: f.size,
+            fileSizeStr: fmtBytes(f.size),
+            fileName: f.name,
+          }
+        );
+        console.error("File rejected (too large)", {
+          name: f.name,
+          size: f.size,
+          size_fmt: fmtBytes(f.size),
+          SIZE_LIMIT,
+          SIZE_LIMIT_STR,
+        });
       } else {
         filtered.push(f);
       }
@@ -1325,6 +1364,10 @@ if (dropZone) {
   }
   // Override local showSnack for this closure to reuse global error styling
   function showSnack(msg) {
+    console.log("[showSnack]", msg, {
+      MAX_FILE_BYTES: window.MAX_FILE_BYTES,
+      MAX_FILE_SIZE_STR: window.MAX_FILE_SIZE_STR,
+    });
     if (window.showSnack) {
       window.showSnack(msg);
     }
@@ -1581,7 +1624,10 @@ if (dropZone) {
   observer.observe(document.body, { subtree: true, childList: true });
 })();
 (function () {
-  const MAX_BYTES = 500 * 1024 * 1024;
+  const MAX_BYTES =
+    typeof window.MAX_FILE_BYTES === "number"
+      ? window.MAX_FILE_BYTES
+      : 500 * 1024 * 1024;
   const MAX_BOXES = 10;
   window.__JB_PREFILTER_ACTIVE = true; // flag to disable legacy drop addBatch path
   const snack = document.getElementById("snackbar");
@@ -1780,14 +1826,18 @@ if (dropZone) {
       } // size check
       const totalSize = files.reduce((n, o) => n + o.file.size, 0);
       if (totalSize > MAX_BYTES) {
-        showSnackLocal("Folder too large (>500MB): " + name);
+        showSnackLocal(
+          `Folder too large (> ${window.MAX_FILE_SIZE_STR}): ` + name
+        );
         continue;
       }
       // Build zip
 
       const zipFile = await buildZipFile(files, name);
       if (zipFile.size > MAX_BYTES) {
-        showSnackLocal("Zipped folder exceeds 500MB: " + name);
+        showSnackLocal(
+          `Zipped folder exceeds ${window.MAX_FILE_SIZE_STR}: ` + name
+        );
         continue;
       }
       zips.push(zipFile);
@@ -1836,7 +1886,7 @@ if (dropZone) {
     // Feedback hierarchy
     if (accept.length === 0) {
       if (sizeRejected && !emptySkipped) {
-        showSnackLocal("File too large (limit 500MB)");
+        showSnackLocal(`File too large (limit ${window.MAX_FILE_SIZE_STR})`);
         return false;
       }
       if (emptySkipped && !sizeRejected) {
@@ -1857,7 +1907,8 @@ if (dropZone) {
       const parts = [];
       if (accept.length !== files.length)
         parts.push("added " + accept.length + " of " + files.length);
-      if (sizeRejected) parts.push(sizeRejected + " too large");
+      if (sizeRejected)
+        parts.push(sizeRejected + ` too large (> ${window.MAX_FILE_SIZE_STR})`);
       if (emptySkipped) parts.push(emptySkipped + " empty");
       showSnackLocal(parts.join("; "));
     }

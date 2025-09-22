@@ -216,7 +216,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(middleware::from_fn(add_security_headers))
         .layer(middleware::from_fn_with_state(state.clone(), ban_gate))
         .layer(rate_layer)
-        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 512));
+        .layer(axum::extract::DefaultBodyLimit::max(juicebox::util::max_file_bytes() as usize));
     if state.production { app = app.layer(middleware::from_fn(enforce_host)); }
 
     let addr: SocketAddr = ([0,0,0,0], 1200).into();
