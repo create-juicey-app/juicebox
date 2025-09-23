@@ -54,12 +54,7 @@
         }
       </script>
     {% endif %}
-/* Success message style */
-.status-success {
-  background: linear-gradient(90deg, #4caf50 60%, #81c784 100%) !important;
-  color: #fff !important;
-  border-color: #4caf50 !important;
-}
+
       <fieldset>
         
         <label for="file">{{ t.simple_files_label }}</label>
