@@ -7,31 +7,32 @@
     <meta charset="utf-8" />
     <title>{{ t.simple_title | default(value='Orange JuiceBox') }}</title>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <link rel="stylesheet" href="/css/app.css" />
+    <link rel="stylesheet" href="/css/simple.css" />
+    <link rel="icon" href="/img/favicon.webp" type="image/webp" />
   </head>
-  <body
-    style="
-      background: #0f141b;
-      color: #e8ecf3;
-      max-width: 860px;
-      margin: 0 auto;
-      padding: 1.4rem;
-      font-family: system-ui, Segoe UI, Roboto, sans-serif;
-    "
-  >
+  <body>
     <nav class="skip-links" aria-label="Skip links">
-      <a
-        href="#mainContent"
-        class="skip-link"
-        >{{ t.skip_main | default(value="Skip to main content") }}</a
-      >
+      <a href="#mainContent" class="skip-link">{{ t.skip_main | default(value="Skip to main content") }}</a>
     </nav>
-    <h1 class="page-title">{{ t.simple_title }}</h1>
-    <p id="mainDesc" class="lead" style="opacity: 0.75; font-size: 0.9rem">
-      {{ t.simple_lead }}
-    </p>
-    {{ MESSAGE }}
+    <h1 class="page-title">{{ t.simple_title | default(value='Orange JuiceBox') }}</h1>
+    <p id="mainDesc" class="lead">{{ t.simple_lead }}</p>
+    {% if MESSAGE is defined %}
+      {{ MESSAGE }}
+    {% endif %}
+    <form method="get" action="/simple" aria-label="Language selector (no JavaScript)" class="lang-form">
+      <label for="langSelectSimple" id="langLabelSimple" class="lang-label">
+        <span aria-hidden="true" class="lang-icon">🌐</span>
+        <span class="visually-hidden">{{ t.language_select | default(value="Select language") }}</span>
+        <select id="langSelectSimple" name="lang" aria-labelledby="langLabelSimple">
+          <option value="en" {% if lang == "en" %}selected{% endif %}>🇬🇧 English</option>
+          <option value="fr" {% if lang == "fr" %}selected{% endif %}>🇫🇷 Français</option>
+          <option value="es" {% if lang == "es" %}selected{% endif %}>🇪🇸 Español</option>
+        </select>
+      </label>
+      <button type="submit" class="lang-btn">OK</button>
+    </form>
     <form
+      id="mainContent"
       class="upload"
       method="post"
       enctype="multipart/form-data"
@@ -73,9 +74,9 @@
           </tr>
         </thead>
         <tbody>
-          {{
-            ROWS
-          }}
+          {% if ROWS is defined %}
+            {{ ROWS }}
+          {% endif %}
         </tbody>
       </table>
       <p class="note" id="tableNote">{{ t.simple_table_note }}</p>
@@ -84,71 +85,8 @@
     <p class="note">{{ t.simple_return | safe }}</p>
     <footer
       title="{{ t.footer_tagline | default(value='Service tagline') }}"
-      style="color: #fff !important; opacity: 1 !important; background: none"
     >
-      juicebox //
-      {{ t.footer_sub | default(value='simple high-speed file host') }}
-      <nav
-        aria-label="{{ t.site_links | default(value='Site links') }}"
-        class="footer-links"
-        style="
-          display: block;
-          margin-top: 0.45rem;
-          font-size: 0.6rem;
-          letter-spacing: 0.35px;
-          color: #fff !important;
-          opacity: 1 !important;
-        "
-      >
-        <a
-          href="/"
-          style="color: #fff !important"
-          >{{ t.home | default(value='Home') }}</a
-        >
-        •
-        <a
-          href="/simple"
-          style="color: #fff !important"
-          >{{ t.simple | default(value='Simple') }}</a
-        >
-        •
-        <a
-          href="/faq"
-          style="color: #fff !important"
-          >{{ t.faq | default(value='FAQ') }}</a
-        >
-        •
-        <a
-          href="/report"
-          style="color: #fff !important"
-          >{{ t.report | default(value='Report') }}</a
-        >
-        •
-        <a
-          href="/terms"
-          style="color: #fff !important"
-          >{{ t.terms | default(value='Terms') }}</a
-        >
-        •
-        <a
-          href="https://buymeacoffee.com/juiceydev"
-          target="_blank"
-          rel="noopener"
-          style="color: #fff !important"
-          >{{ t.donate | default(value='Donate') }}</a
-        >
-      </nav>
-      <br /><span
-        id="ipNote"
-        style="
-          display: block;
-          font-size: 0.55rem;
-          opacity: 0.95 !important;
-          margin-top: 0.4rem;
-          letter-spacing: 0.3px;
-          color: #fff !important;
-        "
-      ></span>
+      juicebox // {{ t.footer_sub | default(value='simple high-speed file host') }}
     </footer>
   </body>
 </html>

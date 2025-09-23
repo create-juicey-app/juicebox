@@ -22,6 +22,18 @@ pub fn setup_test_app() -> (AppState, TempDir) {
     std::fs::create_dir_all(&*upload_dir).unwrap();
     std::fs::create_dir_all(&*data_dir).unwrap();
 
+    let admin_key_path = Arc::new(data_dir.join("admin_key.json"));
+    let bans_path = Arc::new(data_dir.join("ip_bans.json"));
+    let admin_key = Arc::new(RwLock::new(String::from("test_admin_key")));
+    let bans = Arc::new(RwLock::new(Vec::<juicebox::state::IpBan>::new()));
+    let mailgun_api_key = Some("test_mailgun_api_key".to_string());
+    let mailgun_domain = Some("test.mailgun.org".to_string());
+    let report_email_to = Some("to@example.com".to_string());
+    let report_email_from = Some("from@example.com".to_string());
+    let (email_tx, _email_rx) = tokio::sync::mpsc::channel::<juicebox::handlers::ReportRecordEmail>(1);
+    let email_tx = Some(email_tx);
+    let tera = Arc::new(tera::Tera::default());
+
     let state = AppState {
         upload_dir,
         static_dir,
@@ -34,15 +46,16 @@ pub fn setup_test_app() -> (AppState, TempDir) {
         reports: Arc::new(RwLock::new(Vec::<ReportRecord>::new())),
         admin_sessions_path,
         admin_sessions: Arc::new(RwLock::new(HashMap::<String,u64>::new())),
-        admin_key_path: todo!(),
-        admin_key: todo!(),
-        bans_path: todo!(),
-        bans: todo!(),
-        mailgun_api_key: todo!(),
-        mailgun_domain: todo!(),
-        report_email_to: todo!(),
-        report_email_from: todo!(),
-        email_tx: todo!(),
+        admin_key_path,
+        admin_key,
+        bans_path,
+        bans,
+        mailgun_api_key,
+        mailgun_domain,
+        report_email_to,
+        report_email_from,
+        email_tx,
+        tera,
     };
 
     (state, temp_dir)

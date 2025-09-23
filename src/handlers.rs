@@ -283,7 +283,11 @@ pub async fn root_handler(State(state): State<AppState>, Query(query): Query<Lan
     let tera = &state.tera;
     match tera.render("index.html.tera", &ctx) {
         Ok(rendered) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], rendered).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {}", e)).into_response(),
+        Err(e) => {
+            eprintln!("[Tera] Error rendering template 'index.html.tera': {e}\n{:#?}", e);
+            // Tera::Error no longer exposes line information directly.
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {}", e)).into_response()
+        },
     }
 }
 
@@ -337,7 +341,11 @@ async fn render_tera_page(state: &AppState, template: &str, lang: &str, extra: O
     let tera = &state.tera;
     match tera.render(template, &ctx) {
         Ok(rendered) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], rendered).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {}", e)).into_response(),
+        Err(e) => {
+            eprintln!("[Tera] Error rendering template '{}': {e}\n{:#?}", template, e);
+            // Tera::Error no longer exposes line information directly.
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {}", e)).into_response()
+        },
     }
 }
 
@@ -538,8 +546,86 @@ pub async fn simple_list_handler() -> axum::response::Response {
     (axum::http::StatusCode::NOT_IMPLEMENTED, "Not implemented").into_response()
 }
 
-pub async fn simple_upload_handler() -> axum::response::Response {
-    (axum::http::StatusCode::NOT_IMPLEMENTED, "Not implemented").into_response()
+#[axum::debug_handler]
+pub async fn simple_upload_handler(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
+    let ip = real_client_ip(&headers, &addr);
+    let mut ttl_code = "3d".to_string();
+    let mut files_to_process = Vec::new();
+
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        let name = if let Some(name) = field.name() {
+            name.to_string()
+        } else {
+            continue;
+        };
+
+        if name == "ttl" {
+            if let Ok(data) = field.bytes().await {
+                if let Ok(s) = std::str::from_utf8(&data) {
+                    ttl_code = s.to_string();
+                }
+            }
+            continue;
+        }
+
+        if name == "file" || name.starts_with("file") {
+            let original_name = field.file_name().map(|s| s.to_string());
+            if let Ok(data) = field.bytes().await {
+                if !data.is_empty() {
+                    files_to_process.push((original_name, data));
+                }
+            }
+        }
+    }
+
+    if files_to_process.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "no_files", "no files were uploaded");
+    }
+
+    let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
+    let mut saved_files = Vec::new();
+
+    for (original_name, data) in &files_to_process {
+        if data.len() as u64 > max_file_bytes() {
+            continue;
+        }
+        let storage_name = make_storage_name(original_name.as_deref());
+        if is_forbidden_extension(&storage_name) {
+            continue;
+        }
+        let path = state.upload_dir.join(&storage_name);
+        if fs::write(&path, data).await.is_ok() {
+            let meta = FileMeta {
+                owner: ip.clone(),
+                expires,
+                original: original_name.clone().unwrap_or_default(),
+            };
+            state.owners.write().await.insert(storage_name.clone(), meta);
+            saved_files.push(storage_name);
+        }
+    }
+
+    state.persist_owners().await;
+    spawn_integrity_check(state.clone());
+
+    let truncated = saved_files.len() < files_to_process.len();
+    let remaining = files_to_process.len() - saved_files.len();
+
+    // For the simple UI, redirect back to /simple with a message
+    let msg = if saved_files.is_empty() {
+        "No files uploaded."
+    } else if truncated {
+        "Some files were too large or invalid and were skipped."
+    } else {
+        "Upload successful!"
+    };
+    let url = format!("/simple?m={}", urlencoding::encode(msg));
+    (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
 }
 
 pub async fn simple_delete_handler() -> axum::response::Response {

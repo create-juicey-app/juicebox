@@ -1,8 +1,19 @@
 /* basic placeholder css */
 :root {
-  --accent: #ff8a00;
+  --accent: #ff9800;
+  --accent-rgb: 255 152 0;
   --bg: #0f141b;
+  --panel: #1d2733;
+  --panel-border: #2f3b4a;
   --fg: #e8edf2;
+  --text: #f2f6fb;
+  --text-subtle: #b5c0cc;
+  --text-muted: #9aa7b5;
+  --danger: #e53935;
+  --ok: #4caf50;
+  --radius: 14px;
+  --e-out: cubic-bezier(.16, .8, .3, 1);
+  --e-in: cubic-bezier(.5, .05, .2, .99);
   font-family: system-ui, sans-serif;
 }
 
@@ -724,10 +735,9 @@ footer {
   top: auto;
   width: 1px;
   height: 1px;
-  overflow: hidden
+  overflow: hidden;
 }
-
-.skip-link:focus {
+.skip-link:focus, .skip-link:active {
   left: 8px;
   top: 8px;
   width: auto;
@@ -736,7 +746,8 @@ footer {
   background: #ff9800;
   color: #111;
   border-radius: 8px;
-  z-index: 1000
+  z-index: 1000;
+  outline: 2px solid #fff;
 }
 
 .visually-hidden {
@@ -1315,10 +1326,10 @@ p.lead {
 }
 
 .upload fieldset {
-  border: 1px solid var(--panel-border);
-  background: var(--panel);
+  border: 2px solid #ff9800;
+  background: #232c3a;
   padding: 1rem;
-  border-radius: 10px;
+  border-radius: 12px;
 }
 
 .upload label {
@@ -1360,8 +1371,9 @@ select#ttl {
 
 .note-extra {
   font-size: .78rem;
-  opacity: .75;
-  color: var(--text-muted);
+  opacity: 1;
+  color: #ffd580;
+  font-weight: 600;
 }
 
 button.primary {
@@ -1415,16 +1427,79 @@ button.primary:active {
   font-size: .9rem;
 }
 
-.files-table thead th {
+.files-table th {
   font-weight: 700;
-  color: var(--text-muted);
-  font-size: .78rem;
+  color: #fff;
+  background: #181f2b;
 }
 
 .note {
   font-size: .85rem;
   color: var(--text-subtle);
   margin-top: .6rem;
+}
+
+/* Language selector form accessibility and contrast improvements */
+.lang-form {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.7em;
+  margin: 1.7rem auto 1.2rem auto;
+  padding: 0.7em 1.2em;
+  background: #181f2b;
+  border: 1px solid #232c3a;
+  border-radius: 13px;
+  box-shadow: 0 2px 10px #0002;
+  max-width: 340px;
+}
+.lang-label {
+  font-size: .98em;
+  opacity: .92;
+  display: flex;
+  align-items: center;
+  gap: .5em;
+  cursor: pointer;
+  margin: 0;
+}
+.lang-icon {
+  font-size: 1.25em;
+  filter: drop-shadow(0 1px 2px #0f141b33);
+}
+#langSelectSimple {
+  font-size: 1em;
+  padding: .45em 1.3em .45em .8em;
+  border-radius: 10px;
+  margin-left: .1em;
+  background: #232c3a;
+  color: #fff;
+  border: 2px solid #ff9800;
+  box-shadow: 0 1px 4px #0002;
+  appearance: none;
+  cursor: pointer;
+  transition: border .2s;
+  min-width: 120px;
+  min-height: 44px;
+}
+.lang-btn {
+  font-size: 1em;
+  padding: .45em 1.2em;
+  border-radius: 10px;
+  background: #ff9800;
+  color: #111;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  box-shadow: 0 1px 4px #0001;
+  transition: background .2s;
+  min-width: 44px;
+  min-height: 44px;
+  margin-left: .7em;
+}
+.lang-btn:focus-visible, #langSelectSimple:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+  border-color: #fff;
 }
 
 /* Make small screens comfortable */
