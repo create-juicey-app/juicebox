@@ -9,7 +9,7 @@ use crate::util::extract_client_ip;
 use crate::state::{AppState, FileMeta, ReportRecord, cleanup_expired, verify_user_entries_with_report, spawn_integrity_check, ReconcileReport};
 use tower_http::services::ServeDir;
 use time::{OffsetDateTime};
-use tera::{Tera, Context};
+use tera::Context;
 use std::collections::HashMap;
 
 // Email event for reports
@@ -371,8 +371,8 @@ pub async fn report_page_handler_i18n(State(state): State<AppState>, Query(query
 
 pub async fn simple_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
-    use axum::extract::ConnectInfo;
-    use axum::http::HeaderMap;
+    
+    
     // Try to get a message from query param
     let message = if let Some(_) = query.deleted {
         Some("File DEleted Successfully.".to_string())
