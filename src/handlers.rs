@@ -43,7 +43,12 @@ pub struct ReportRecordEmail {
 #[derive(Deserialize)] pub struct UnbanForm { pub ip: String }
 #[derive(Deserialize)] pub struct AdminFileDeleteForm { pub file: String }
 #[derive(Deserialize)] pub struct AdminReportDeleteForm { pub idx: usize }
-#[derive(Debug, Deserialize)] pub struct LangQuery { pub lang: Option<String> }
+#[derive(Debug, Deserialize)]
+pub struct LangQuery {
+    pub lang: Option<String>,
+    pub m: Option<String>,
+    pub deleted: Option<String>,
+}
 
 // Config response
 #[derive(Serialize)]
@@ -366,8 +371,64 @@ pub async fn report_page_handler_i18n(State(state): State<AppState>, Query(query
 
 pub async fn simple_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
-    // You may want to pass extra context for MESSAGE/ROWS if needed
-    render_tera_page(&state, "simple.html.tera", lang, None).await
+    use axum::extract::ConnectInfo;
+    use axum::http::HeaderMap;
+    // Try to get a message from query param
+    let message = if let Some(_) = query.deleted {
+        Some("File DEleted Successfully.".to_string())
+    } else {
+        query.m.clone()
+    };
+
+    // For simple UI, show files for the current IP (from request context)
+    // We'll use a fallback: if behind a proxy, this may not be accurate
+    // For now, just use 127.0.0.1 for local dev
+    let dummy_addr = std::net::SocketAddr::from(([127,0,0,1], 0));
+    let client_ip = "127.0.0.1".to_string();
+    let owners = state.owners.read().await;
+    let mut files: Vec<(String, u64, String)> = owners.iter()
+        .filter_map(|(f, m)| if m.owner == client_ip { Some((f.clone(), m.expires, m.original.clone())) } else { None })
+        .collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let now = now_secs();
+    let mut rows = String::new();
+    for (fname, expires, original) in &files {
+        let url = qualify_path(&state, &format!("f/{}", fname));
+        let expires_in = if *expires > now { *expires - now } else { 0 };
+        let human = if expires_in >= 86400 {
+            format!("{}d", expires_in / 86400)
+        } else if expires_in >= 3600 {
+            format!("{}h", expires_in / 3600)
+        } else if expires_in >= 60 {
+            format!("{}m", expires_in / 60)
+        } else {
+            format!("{}s", expires_in)
+        };
+        rows.push_str(&format!(
+            "<tr><td><a href=\"{}\">{}</a></td><td>{}</td><td><form method=post action=\"/simple/delete\"><input type=hidden name=f value=\"{}\"><button type=submit>Delete</button></form></td></tr>",
+            url,
+            htmlescape::encode_minimal(original),
+            human,
+            htmlescape::encode_minimal(fname)
+        ));
+    }
+    let mut ctx = tera::Context::new();
+    ctx.insert("lang", lang);
+    ctx.insert("ROWS", &rows);
+    if let Some(msg) = message {
+        ctx.insert("MESSAGE", &msg);
+    }
+    // Insert translation map
+    let t_map = load_translation_map(lang).await;
+    ctx.insert("t", &t_map);
+    let tera = &state.tera;
+    match tera.render("simple.html.tera", &ctx) {
+        Ok(rendered) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], rendered).into_response(),
+        Err(e) => {
+            eprintln!("[Tera] Error rendering template 'simple.html.tera': {e}\n{:#?}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {}", e)).into_response()
+        },
+    }
 }
 
 pub async fn banned_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
@@ -628,8 +689,34 @@ pub async fn simple_upload_handler(
     (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
 }
 
-pub async fn simple_delete_handler() -> axum::response::Response {
-    (axum::http::StatusCode::NOT_IMPLEMENTED, "Not implemented").into_response()
+pub async fn simple_delete_handler(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
+    Form(frm): Form<SimpleDeleteForm>,
+) -> Response {
+    let ip = real_client_ip(&headers, &addr);
+    let fname = frm.f.trim();
+    if fname.is_empty() || fname.contains('/') || fname.contains("..") || fname.contains('\\') {
+        let url = format!("/simple?m={}", urlencoding::encode("Invalid file name."));
+        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response();
+    }
+    // Only allow delete if file is owned by this IP
+    let mut owners = state.owners.write().await;
+    match owners.get(fname) {
+        Some(meta) if meta.owner == ip => {
+            owners.remove(fname);
+            let path = state.upload_dir.join(fname);
+            let _ = fs::remove_file(&path).await;
+            state.persist_owners().await;
+            let url = format!("/simple?m={}", urlencoding::encode("File deleted."));
+            (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
+        },
+        _ => {
+            let url = format!("/simple?m={}", urlencoding::encode("File not found or not owned by you."));
+            (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
+        }
+    }
 }
 
 // Add cache middleware for static asset dirs (css/js)
@@ -661,7 +748,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/simple", get(simple_handler))
         .route("/simple/upload", post(simple_upload_handler))
-        .route("/simple_delete", post(simple_delete_handler))
+    .route("/simple/delete", post(simple_delete_handler))
         .route("/auth", get(auth_get_handler).post(auth_post_handler))
         .route("/isadmin", get(is_admin_handler))
         .route("/debug-ip", get(debug_ip_handler))

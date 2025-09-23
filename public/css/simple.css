@@ -1,3 +1,4 @@
+.status-message{margin:.5em auto 1em auto;padding:.5em 1em;border-radius:8px;background:none;color:var(--accent);font-weight:600;font-size:.93em;text-align:center;box-shadow:none;letter-spacing:.2px;border:1.5px solid var(--accent);max-width:360px}
 :root{--bg:#0d1218;--panel:#1d2733;--panel-border:#2f3b4a;--accent:#ff9800;--accent-rgb:255 152 0;--text:#f2f6fb;--text-subtle:#b5c0cc;--text-muted:#9aa7b5;--danger:#e53935;--ok:#4caf50;--radius:14px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;--e-out:cubic-bezier(.16,.8,.3,1);--e-in:cubic-bezier(.5,.05,.2,.99)}
 a{color:var(--accent)}
 *{box-sizing:border-box}

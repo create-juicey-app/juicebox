@@ -16,9 +16,7 @@
     </nav>
     <h1 class="page-title">{{ t.simple_title | default(value='Orange JuiceBox') }}</h1>
     <p id="mainDesc" class="lead">{{ t.simple_lead }}</p>
-    {% if MESSAGE is defined %}
-      {{ MESSAGE }}
-    {% endif %}
+    
     <form method="get" action="/simple" aria-label="Language selector (no JavaScript)" class="lang-form">
       <label for="langSelectSimple" id="langLabelSimple" class="lang-label">
         <span aria-hidden="true" class="lang-icon">🌐</span>
@@ -31,6 +29,7 @@
       </label>
       <button type="submit" class="lang-btn">OK</button>
     </form>
+    
     <form
       id="mainContent"
       class="upload"
@@ -40,7 +39,29 @@
       aria-describedby="mainDesc"
       aria-label="{{ t.simple_form_aria }}"
     >
+    {% if MESSAGE is defined %}
+      <div class="status-message status-success" id="delete-success-msg">
+        {{ MESSAGE }}
+      </div>
+      <script>
+        // If this is a delete success, auto-refresh after 1.2s
+        if (window.location.search.includes('deleted=1')) {
+          setTimeout(() => {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('deleted');
+            window.location.replace(url.toString());
+          }, 1200);
+        }
+      </script>
+    {% endif %}
+/* Success message style */
+.status-success {
+  background: linear-gradient(90deg, #4caf50 60%, #81c784 100%) !important;
+  color: #fff !important;
+  border-color: #4caf50 !important;
+}
       <fieldset>
+        
         <label for="file">{{ t.simple_files_label }}</label>
         <input id="file" type="file" name="file" multiple required />
         <div class="ttl-box">
