@@ -104,7 +104,6 @@
       <h2 id="yourFiles" title="Files previously uploaded from this connection">{{ t.your_files | default(value="Your Files") }}</h2>
       <ul id="ownedList" title="List of files you have uploaded" role="list"></ul>
     <ul id="ownedList" title="List of files you have uploaded" role="list" aria-label="Your uploaded files"></ul>
-      <p class="site-note" title="Owned files note">{{ t.owned_note | default(value="These are files linked to your IP, They persist across refresh until deleted.") }}</p>
         <p class="site-note" title="Owned files note">{{ t.owned_note | default(value="These are files linked to your IP, They persist across refresh until deleted.") }}</p>
         <script>
         // Accessibility: add aria-label and autocomplete to .link-input fields after they are created
