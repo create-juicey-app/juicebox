@@ -28,7 +28,7 @@ export const ownedHandler = {
       const r = await fetch("/mine");
       if (!r.ok) return;
       const data = await r.json();
-      console.log('[owned.js] /mine response:', data);
+  if (window.DEBUG_LOGS) console.log('[owned.js] /mine response:', data);
       if (data && Array.isArray(data.files)) {
         data.files.forEach((f) => this.addOwned(f.replace(/^f\//, "")));
         if (Array.isArray(data.metas)) {
@@ -42,10 +42,10 @@ export const ownedHandler = {
             });
           });
         }
-        console.log('[owned.js] ownedMeta after /mine:', Array.from(this.ownedMeta.entries()));
+  if (window.DEBUG_LOGS) console.log('[owned.js] ownedMeta after /mine:', Array.from(this.ownedMeta.entries()));
         this.renderOwned();
       }
-    } catch (e) { console.error('[owned.js] loadExisting error:', e); }
+  } catch (e) { if (window.DEBUG_LOGS) console.error('[owned.js] loadExisting error:', e); }
   },
 
   renderOwned() {
@@ -68,10 +68,8 @@ export const ownedHandler = {
       return;
     }
     this.showOwnedPanel();
-  const nowSec = Date.now() / 1000;
-  console.log('[owned.js] renderOwned: nowSec (client time):', nowSec, 'Date:', new Date(nowSec * 1000).toISOString());
+    const nowSec = Date.now() / 1000;
     names.sort();
-    // Helper for formatting remaining time, matches other.js
     function formatRemain(sec) {
       if (sec <= 0) return "expired";
       if (sec < 60) return `${Math.floor(sec)}s`;
@@ -79,24 +77,26 @@ export const ownedHandler = {
       if (sec < 86400) return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
       return `${Math.floor(sec / 86400)}d ${Math.floor((sec % 86400) / 3600)}h`;
     }
+    // Batch DOM updates using DocumentFragment
+    let grid = ownedList.querySelector(".owned-grid");
+    if (!grid) {
+      grid = document.createElement("div");
+      grid.className = "owned-grid";
+      ownedList.appendChild(grid);
+    }
+    const frag = document.createDocumentFragment();
     names.forEach((n) => {
-      if (existing.has(n)) return; // Don't re-render existing, just update in countdown
+      if (existing.has(n)) return;
       const meta = this.ownedMeta.get(n) || {};
       const exp = meta.expires || -1;
       const remain = exp - nowSec;
-      console.log(`[owned.js] File: ${n}, meta:`, meta, 'expires:', exp, '(', new Date(exp * 1000).toISOString(), ')', 'remain:', remain);
-
       const chip = document.createElement("div");
       chip.className = "owned-chip";
       chip.dataset.name = n;
       if (exp >= 0) chip.dataset.exp = exp;
       if (meta.total) chip.dataset.total = meta.total;
-
       const displayName = meta.original?.trim() || n;
-
       const titleFull = displayName === n ? n : `${displayName} (${n})`;
-
-      // Calculate progress percent (100 = just uploaded, 0 = expired), always using (exp - set) as total duration
       let percent = 100;
       const set = typeof meta.set === 'number' ? meta.set : (meta.set ? Number(meta.set) : null);
       if (set !== null && !isNaN(set) && exp > set) {
@@ -105,17 +105,12 @@ export const ownedHandler = {
         percent = (remain / total) * 100;
         percent = Math.max(0, Math.min(100, percent));
         percent = Math.round(percent * 100) / 100;
-        console.log(`[owned.js] Progress DEBUG for ${n}: nowSec=${nowSec}, set=${set}, exp=${exp}, total=${total}, remain=${remain}, percent=${percent}`);
       } else if (remain <= 0) {
         percent = 0;
-        console.log(`[owned.js] Progress expired for ${n}: remain=${remain}, percent=${percent}`);
       }
-      console.log(`[owned.js] FINAL percent for ${n}:`, percent, 'set:', set, 'exp:', exp, 'nowSec:', nowSec);
       let barWidth = `${percent}%`;
       chip.innerHTML = `<div class="top"><div class="name" title="${escapeHtml(titleFull)}">${escapeHtml(displayName)}</div><div class="actions"></div></div><div class="ttl-row"><span class="ttl">${formatRemain(remain)}</span><span class="ttl-bar-wrap"><span class="ttl-bar" style="width:${barWidth};"></span></span></div>`;
       chip.style.position = "relative";
-
-      // Add input box with direct link
       const linkInput = document.createElement("input");
       linkInput.type = "text";
       linkInput.readOnly = true;
@@ -128,13 +123,11 @@ export const ownedHandler = {
         copyToClipboard(linkInput.value).then(() => flashCopied());
       });
       chip.appendChild(linkInput);
-
       const copyBtn = document.createElement("button");
       copyBtn.className = "small";
       copyBtn.textContent = "📋";
       copyBtn.title = "Copy direct link";
       copyBtn.addEventListener("click", () => copyToClipboard(`${location.origin}/f/${n}`).then(() => flashCopied()));
-
       const delBtn = document.createElement("button");
       delBtn.className = "small";
       delBtn.textContent = "❌";
@@ -149,13 +142,10 @@ export const ownedHandler = {
           }
         });
       });
-
       chip.querySelector(".actions").append(copyBtn, delBtn);
-      let grid = ownedList.querySelector(".owned-grid") || document.createElement("div");
-      grid.className = "owned-grid";
-      ownedList.appendChild(grid);
-      grid.appendChild(chip);
+      frag.appendChild(chip);
     });
+    grid.appendChild(frag);
     this.ownedInitialRender = true;
   },
 

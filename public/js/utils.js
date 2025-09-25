@@ -58,7 +58,7 @@ export function fmtBytes(b) {
  */
 export function showSnack(msg, opts) {
   opts = opts || {};
-  console.log("[showSnack]", msg, opts);
+  if (window.DEBUG_LOGS) console.log("[showSnack]", msg, opts);
   let sb = document.getElementById("snackbar");
   if (!sb) {
     sb = document.createElement("div");

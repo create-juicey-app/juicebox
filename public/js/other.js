@@ -64,6 +64,7 @@ export function applyother(uploadHandler, ownedHandler) {
       return `${Math.floor(sec / 86400)}d ${Math.floor((sec % 86400) / 3600)}h`;
     }
     setInterval(() => {
+      if (document.hidden) return;
       const now = Date.now() / 1000;
       document.querySelectorAll(".owned-chip[data-exp]").forEach((chip) => {
         const exp = parseFloat(chip.dataset.exp || "0");

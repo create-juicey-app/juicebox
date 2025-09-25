@@ -10,8 +10,10 @@ pub async fn checkhash_handler(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<CheckHashQuery>,
 ) -> Response {
-    let owners = state.owners.read().await;
-    let exists = owners.values().any(|meta| meta.hash == query.hash);
+    let exists = state
+        .owners
+        .iter()
+        .any(|entry| entry.value().hash == query.hash);
     Json(json!({ "exists": exists })).into_response()
 }
 use crate::state::{
@@ -219,17 +221,15 @@ pub async fn upload_handler(
         hasher.update(&data);
         let hash = format!("{:x}", hasher.finalize());
         // Check for duplicate in file_owners.json
-        let owners = state.owners.read().await;
-        if let Some((existing_file, meta)) = owners.iter().find(|(_, m)| m.hash == hash) {
+        if let Some(entry) = state.owners.iter().find(|entry| entry.value().hash == hash) {
             // Duplicate found, return info and skip upload
             duplicate_info = Some(json!({
                 "duplicate": true,
-                "file": existing_file,
-                "meta": meta
+                "file": entry.key(),
+                "meta": entry.value()
             }));
             break;
         }
-        drop(owners);
         let storage_name = make_storage_name(original_name.as_deref());
         if is_forbidden_extension(&storage_name) {
             continue;
@@ -243,11 +243,7 @@ pub async fn upload_handler(
                 created: now,
                 hash: hash.clone(),
             };
-            state
-                .owners
-                .write()
-                .await
-                .insert(storage_name.clone(), meta);
+            state.owners.insert(storage_name.clone(), meta);
             saved_files.push(storage_name);
         }
     }
@@ -287,14 +283,21 @@ pub async fn list_handler(
     let reconcile_report = verify_user_entries_with_report(&state, &client_ip).await;
     cleanup_expired(&state).await;
     crate::state::check_storage_integrity(&state).await;
-    let owners = state.owners.read().await;
-    let mut files: Vec<(String, u64, String, u64, u64)> = owners
+    let mut files: Vec<(String, u64, String, u64, u64)> = state
+        .owners
         .iter()
-        .filter_map(|(f, m)| {
+        .filter_map(|entry| {
+            let m = entry.value();
             if m.owner == client_ip {
                 let set = m.created;
                 let total = if m.expires > set { m.expires - set } else { 0 };
-                Some((f.clone(), m.expires, m.original.clone(), total, set))
+                Some((
+                    entry.key().clone(),
+                    m.expires,
+                    m.original.clone(),
+                    total,
+                    set,
+                ))
             } else {
                 None
             }
@@ -337,8 +340,8 @@ pub async fn fetch_file_handler(
     cleanup_expired(&state).await;
     let now = now_secs();
     let (exists, expired, meta_expires) = {
-        let owners = state.owners.read().await;
-        if let Some(m) = owners.get(&file) {
+        if let Some(m) = state.owners.get(&file) {
+            let m = m.value();
             (true, m.expires <= now, m.expires)
         } else {
             (false, true, 0)
@@ -397,17 +400,11 @@ pub async fn delete_handler(
         return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file name");
     }
     cleanup_expired(&state).await;
-    {
-        let owners = state.owners.read().await;
-        match owners.get(&file) {
-            Some(meta) if meta.owner == ip => {}
-            _ => return (StatusCode::NOT_FOUND, "not found").into_response(),
-        }
+    match state.owners.get(&file) {
+        Some(meta) if meta.value().owner == ip => {}
+        _ => return (StatusCode::NOT_FOUND, "not found").into_response(),
     }
-    {
-        let mut owners = state.owners.write().await;
-        owners.remove(&file);
-    }
+    state.owners.remove(&file);
     // Remove hash entry
     // No more file_hashes or persist_hashes; hashes are part of FileMeta now.
     let path = state.upload_dir.join(&file);
@@ -430,19 +427,26 @@ pub async fn report_handler(
     let now = now_secs();
     // Canonicalize file id: if exact not found and no extension supplied, try auto-matching stored file with extension.
     let mut file_name = form.file.trim().to_string();
-    {
-        let owners = state.owners.read().await; // read lock scope
-        if !owners.contains_key(&file_name) && !file_name.contains('.') {
-            // collect candidates that start with "{id}." (single extension segment)
-            let prefix = format!("{file_name}.");
-            let mut candidates: Vec<&String> =
-                owners.keys().filter(|k| k.starts_with(&prefix)).collect();
-            // deterministic selection: pick shortest name (i.e., shortest extension); then lexicographically
-            candidates.sort();
-            candidates.sort_by_key(|k| k.len());
-            if let Some(best) = candidates.first() {
-                file_name = (*best).clone();
-            }
+    if state.owners.get(&file_name).is_none() && !file_name.contains('.') {
+        // collect candidates that start with "{id}." (single extension segment)
+        let prefix = format!("{file_name}.");
+        let mut candidates: Vec<String> = state
+            .owners
+            .iter()
+            .filter_map(|entry| {
+                let k = entry.key();
+                if k.starts_with(&prefix) {
+                    Some(k.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // deterministic selection: pick shortest name (i.e., shortest extension); then lexicographically
+        candidates.sort();
+        candidates.sort_by_key(|k| k.len());
+        if let Some(best) = candidates.first() {
+            file_name = best.clone();
         }
     }
     let record = ReportRecord {
@@ -453,8 +457,8 @@ pub async fn report_handler(
         time: now,
     };
     let (owner_ip, original_name, expires, size) = {
-        let owners = state.owners.read().await;
-        if let Some(meta) = owners.get(&record.file) {
+        if let Some(meta) = state.owners.get(&record.file) {
+            let meta = meta.value();
             let path = state.upload_dir.join(&record.file);
             let sz = tokio::fs::metadata(&path)
                 .await
@@ -740,12 +744,13 @@ pub async fn simple_handler(
 
     // For simple UI, show files for the real client IP (from request context)
     let client_ip = crate::util::real_client_ip(&headers, &addr);
-    let owners = state.owners.read().await;
-    let mut files: Vec<(String, u64, String)> = owners
+    let mut files: Vec<(String, u64, String)> = state
+        .owners
         .iter()
-        .filter_map(|(f, m)| {
+        .filter_map(|entry| {
+            let m = entry.value();
             if m.owner == client_ip {
-                Some((f.clone(), m.expires, m.original.clone()))
+                Some((entry.key().clone(), m.expires, m.original.clone()))
             } else {
                 None
             }
@@ -1120,10 +1125,11 @@ pub async fn admin_files_handler(State(state): State<AppState>, headers: HeaderM
         return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
     }
     // Build table rows (file, owner, expires human, size)
-    let owners = state.owners.read().await.clone();
     let mut rows = String::new();
     let now = now_secs();
-    for (file, meta) in owners.iter() {
+    for entry in state.owners.iter() {
+        let file = entry.key();
+        let meta = entry.value();
         let path = state.upload_dir.join(file);
         let size = match fs::metadata(&path).await {
             Ok(md) => md.len(),
@@ -1182,10 +1188,7 @@ pub async fn admin_file_delete_handler(
     if file.is_empty() || file.contains('/') || file.contains('\\') {
         return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file");
     }
-    {
-        let mut owners = state.owners.write().await;
-        owners.remove(file);
-    }
+    state.owners.remove(file);
     let _ = fs::remove_file(state.upload_dir.join(file)).await;
     state.persist_owners().await;
     let hv = HeaderValue::from_static("/admin/files");
@@ -1333,11 +1336,7 @@ pub async fn simple_upload_handler(
                 created: now,
                 hash: hash.clone(),
             };
-            state
-                .owners
-                .write()
-                .await
-                .insert(storage_name.clone(), meta);
+            state.owners.insert(storage_name.clone(), meta);
             saved_files.push(storage_name);
         }
     }
@@ -1371,10 +1370,9 @@ pub async fn simple_delete_handler(
         return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response();
     }
     // Only allow delete if file is owned by this IP
-    let mut owners = state.owners.write().await;
-    match owners.get(fname) {
-        Some(meta) if meta.owner == ip => {
-            owners.remove(fname);
+    match state.owners.get(fname) {
+        Some(meta) if meta.value().owner == ip => {
+            state.owners.remove(fname);
             let path = state.upload_dir.join(fname);
             let _ = fs::remove_file(&path).await;
             state.persist_owners().await;

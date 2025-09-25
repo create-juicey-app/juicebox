@@ -19,6 +19,6 @@ export function fetchConfig() {
         window.MAX_FILE_SIZE_STR = cfg.max_file_size_str;
     })
     .catch(() => {
-      console.warn("Could not fetch dynamic config, using defaults.");
+  if (window.DEBUG_LOGS) console.warn("Could not fetch dynamic config, using defaults.");
     });
 }

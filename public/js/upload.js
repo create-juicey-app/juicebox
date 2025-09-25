@@ -62,6 +62,7 @@ export const uploadHandler = {
           requestAnimationFrame(() => li.classList.add("in"));
         }
         const filesWrap = batch.groupLi.querySelector(".group-files");
+        const frag = document.createDocumentFragment();
         batch.files.forEach((f) => {
           if (f.container) return;
           const entry = document.createElement("div");
@@ -85,11 +86,13 @@ export const uploadHandler = {
           f.bar = entry.querySelector(".bar");
           f.barSpan = f.bar.querySelector("span");
           f.container = entry;
-          filesWrap.appendChild(entry);
+          frag.appendChild(entry);
         });
+        filesWrap.appendChild(frag);
         return;
       }
       // Legacy single-file path
+      const frag = document.createDocumentFragment();
       batch.files.forEach((f) => {
         if (f.container) return;
         const li = document.createElement("li");
@@ -109,10 +112,11 @@ export const uploadHandler = {
         li.querySelector(".actions").appendChild(del);
         f.bar = li.querySelector(".bar");
         f.barSpan = f.bar.querySelector("span");
-        list.appendChild(li);
+        frag.appendChild(li);
         li.classList.add("adding");
         requestAnimationFrame(() => li.classList.add("in"));
       });
+      list.appendChild(frag);
     });
   },
 
@@ -173,7 +177,7 @@ export const uploadHandler = {
         }
       } catch (e) {
         // If hash fails, proceed with upload anyway
-        console.warn("Hash check failed, proceeding with upload", e);
+  if (window.DEBUG_LOGS) console.warn("Hash check failed, proceeding with upload", e);
       }
       await this.uploadOne(f, batch);
       await uploadNext();
@@ -193,12 +197,22 @@ export const uploadHandler = {
   },
 
   async calculateFileHash(file) {
-    // Returns a hex string of the SHA-256 hash of the file using Web Crypto API
-    const buffer = await file.arrayBuffer();
-    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-    // Convert buffer to hex string
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    // Use a Web Worker for hashing to avoid blocking the main thread
+    if (!window._fileHashWorker) {
+      window._fileHashWorker = new Worker('/js/file-hash-worker.js');
+      window._fileHashWorker._pending = [];
+      window._fileHashWorker.onmessage = function(e) {
+        const cb = window._fileHashWorker._pending.shift();
+        if (cb) cb(e.data);
+      };
+    }
+    return new Promise((resolve, reject) => {
+      window._fileHashWorker._pending.push((data) => {
+        if (data.hash) resolve(data.hash);
+        else reject(new Error(data.error || 'Hashing failed'));
+      });
+      window._fileHashWorker.postMessage(file);
+    });
   },
 
   async checkFileHash(hash) {

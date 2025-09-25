@@ -47,7 +47,16 @@ export function setupEventListeners() {
 
   // Paste support is in other.js
 
-  // Periodic refresh
-  setInterval(() => ownedHandler.refreshOwned(), 15000);
-  window.addEventListener("focus", () => ownedHandler.refreshOwned());
+  // Debounced/throttled periodic refresh
+  let lastRefresh = 0;
+  const MIN_REFRESH_INTERVAL = 10000; // 10s
+  function debouncedRefreshOwned() {
+    const now = Date.now();
+    if (now - lastRefresh < MIN_REFRESH_INTERVAL) return;
+    if (document.hidden) return;
+    lastRefresh = now;
+    ownedHandler.refreshOwned();
+  }
+  setInterval(debouncedRefreshOwned, 15000);
+  window.addEventListener("focus", debouncedRefreshOwned);
 }

@@ -1,4 +1,5 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc, net::SocketAddr, time::{Duration, SystemTime}};
+use dashmap::DashMap;
 use tokio::fs; use tokio::sync::{RwLock, Semaphore};
 use axum::{Router, middleware};
 use juicebox::state::{AppState, FileMeta, ReportRecord, cleanup_expired};
@@ -72,8 +73,8 @@ async fn main() -> anyhow::Result<()> {
     let mut state = AppState {
         upload_dir,
         static_dir,
-        metadata_path,
-        owners: Arc::new(RwLock::new(owners_map)),
+        owners: Arc::new(DashMap::from_iter(owners_map)),
+        metadata_path: metadata_path.clone(),
         upload_sem: Arc::new(Semaphore::new(UPLOAD_CONCURRENCY)),
         production,
         last_meta_mtime: Arc::new(RwLock::new(initial_mtime)),

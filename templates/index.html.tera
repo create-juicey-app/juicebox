@@ -103,7 +103,28 @@
     <div class="panel" id="ownedPanel" style="display:none"><section>
       <h2 id="yourFiles" title="Files previously uploaded from this connection">{{ t.your_files | default(value="Your Files") }}</h2>
       <ul id="ownedList" title="List of files you have uploaded" role="list"></ul>
+    <ul id="ownedList" title="List of files you have uploaded" role="list" aria-label="Your uploaded files"></ul>
       <p class="site-note" title="Owned files note">{{ t.owned_note | default(value="These are files linked to your IP, They persist across refresh until deleted.") }}</p>
+        <p class="site-note" title="Owned files note">{{ t.owned_note | default(value="These are files linked to your IP, They persist across refresh until deleted.") }}</p>
+        <script>
+        // Accessibility: add aria-label and autocomplete to .link-input fields after they are created
+        document.addEventListener('DOMContentLoaded', function() {
+          function enhanceLinkInputs() {
+            document.querySelectorAll('input.link-input').forEach(function(input) {
+              input.setAttribute('aria-label', 'File link');
+              input.setAttribute('autocomplete', 'off');
+              input.setAttribute('role', 'textbox');
+            });
+          }
+          // Run initially and after DOM changes (for dynamic lists)
+          enhanceLinkInputs();
+          const ownedList = document.getElementById('ownedList');
+          if (ownedList) {
+            const observer = new MutationObserver(enhanceLinkInputs);
+            observer.observe(ownedList, { childList: true, subtree: true });
+          }
+        });
+        </script>
     </section></div>
     <div class="panel"><section id="about">
       <h2 id="aboutHeading">{{ t.about_heading | default(value="What is JuiceBox?") }}</h2>

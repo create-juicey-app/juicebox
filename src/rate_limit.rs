@@ -129,5 +129,6 @@ where
 }
 
 pub fn build_rate_limiter() -> RateLimitLayer {
-    RateLimitLayer::new(60, 1)
+    // Less strict: allow 180 requests burst, refill 3 tokens/sec
+    RateLimitLayer::new(180, 3)
 }
