@@ -2,6 +2,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc, net::SocketAddr, time:
 use dashmap::DashMap;
 use tokio::fs; use tokio::sync::{RwLock, Semaphore};
 use axum::{Router, middleware};
+use tower_http::compression::CompressionLayer;
 use juicebox::state::{AppState, FileMeta, ReportRecord, cleanup_expired};
 use juicebox::util::{ttl_to_duration, now_secs, PROD_HOST, UPLOAD_CONCURRENCY};
 use juicebox::handlers::{build_router, add_security_headers, enforce_host, add_cache_headers};
@@ -220,6 +221,7 @@ async fn main() -> anyhow::Result<()> {
     let rate_layer = build_rate_limiter();
     let router = build_router(state.clone());
     let mut app: Router = router
+        .layer(CompressionLayer::new())
         .layer(middleware::from_fn(add_cache_headers))
         .layer(middleware::from_fn(add_security_headers))
         .layer(middleware::from_fn_with_state(state.clone(), ban_gate))

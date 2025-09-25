@@ -18,6 +18,27 @@ export function flashCopied(msg = "Link copied") {
   flashCopied._t = setTimeout(() => sb.classList.remove("show"), 1600);
 }
 
+// --- bfcache support utility ---
+// Ensures the app is bfcache-friendly by using pagehide/pageshow instead of unload
+// and provides hooks for state save/restore if needed.
+export function setupBfcacheSupport({ onSaveState, onRestoreState } = {}) {
+  // Warn if unload is used (bad for bfcache)
+  window.addEventListener('unload', () => {
+    if (window.DEBUG_LOGS) console.warn('Avoid using unload event for bfcache compatibility.');
+  });
+
+  // Save state before page is hidden (for bfcache or normal navigation)
+  window.addEventListener('pagehide', (e) => {
+    if (onSaveState) onSaveState(e);
+  });
+
+  // Restore state if coming back from bfcache
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted && onRestoreState) onRestoreState(e);
+  });
+}
+
+
 /**
  * Copies text to the user's clipboard.
  * @param {string} text - The text to copy.
