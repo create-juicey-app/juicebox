@@ -300,8 +300,14 @@
       </section>
       <section>
         <hr />
-        <p class="small">
-          {{ t.faq_feedback | default(value='Need something clarified? Open an issue / send feedback.') }}
+        <p class="note small">
+          <a
+            href="https://github.com/create-juicey-app/juicebox/issues/new/choose"
+            target="_blank"
+            rel="noopener"
+          >
+            {{ t.send_feedback | default(value="Open an issue / Send feedback") }}
+          </a>
         </p>
         <p class="small">
           <a href="/terms">{{ t.terms }}</a> • <a href="/">{{ t.home }}</a>
