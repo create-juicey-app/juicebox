@@ -72,7 +72,9 @@ export function setupUI() {
       } else if (!_dragSpecial) {
         iconEl.textContent = "📂";
       }
-    };
+    };    dropZone.addEventListener("mouseleave", () => setOpen(false));
+    dropZone.addEventListener("focusout", () => setOpen(false));
+
 
     ["dragenter", "dragover"].forEach((evt) => {
       dropZone.addEventListener(evt, (ev) => updateDragIcon(ev), true);

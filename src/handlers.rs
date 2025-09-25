@@ -1,16 +1,54 @@
-use axum::{extract::{State, Multipart, Path, ConnectInfo, Query, Form}, http::{StatusCode, HeaderMap, header::{CACHE_CONTROL, EXPIRES}, HeaderValue}, response::{IntoResponse, Response}, routing::{get, post, delete}, Json, Router, middleware::{Next}};
-use axum::http::Request;
-use axum::body::Body;
-use std::{net::SocketAddr as ClientAddr, time::{SystemTime, Duration}};
-use tokio::fs;
-use serde::{Serialize, Deserialize};
-use crate::util::{json_error, real_client_ip, is_forbidden_extension, make_storage_name, now_secs, ttl_to_duration, qualify_path, max_file_bytes, format_bytes, PROD_HOST, get_cookie, ADMIN_SESSION_TTL};
+// --- CheckHash API for client-side deduplication ---
+use axum::extract::Query as AxumQuery;
+
+#[derive(Deserialize)]
+pub struct CheckHashQuery {
+    pub hash: String,
+}
+
+pub async fn checkhash_handler(
+    State(state): State<AppState>,
+    AxumQuery(query): AxumQuery<CheckHashQuery>,
+) -> Response {
+    let owners = state.owners.read().await;
+    let exists = owners.values().any(|meta| meta.hash == query.hash);
+    Json(json!({ "exists": exists })).into_response()
+}
+use crate::state::{
+    cleanup_expired, spawn_integrity_check, verify_user_entries_with_report, AppState, FileMeta,
+    ReconcileReport, ReportRecord,
+};
 use crate::util::extract_client_ip;
-use crate::state::{AppState, FileMeta, ReportRecord, cleanup_expired, verify_user_entries_with_report, spawn_integrity_check, ReconcileReport};
-use tower_http::services::ServeDir;
-use time::{OffsetDateTime};
-use tera::Context;
+use crate::util::{
+    format_bytes, get_cookie, is_forbidden_extension, json_error, make_storage_name,
+    max_file_bytes, now_secs, qualify_path, real_client_ip, ttl_to_duration, ADMIN_SESSION_TTL,
+    PROD_HOST,
+};
+use axum::body::Body;
+use axum::http::Request;
+use axum::{
+    extract::{ConnectInfo, Form, Multipart, Path, Query, State},
+    http::{
+        header::{CACHE_CONTROL, EXPIRES},
+        HeaderMap, HeaderValue, StatusCode,
+    },
+    middleware::Next,
+    response::{IntoResponse, Response},
+    routing::{delete, get, post},
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::{
+    net::SocketAddr as ClientAddr,
+    time::{Duration, SystemTime},
+};
+use tera::Context;
+use time::OffsetDateTime;
+use tokio::fs;
+use tower_http::services::ServeDir;
 
 // Email event for reports
 #[derive(Clone, Debug)]
@@ -18,7 +56,7 @@ pub struct ReportRecordEmail {
     pub file: String,
     pub reason: String,
     pub details: String,
-    pub ip: String,          // reporter ip
+    pub ip: String, // reporter ip
     pub time: u64,
     pub iso_time: String,
     pub owner_ip: String,
@@ -31,18 +69,65 @@ pub struct ReportRecordEmail {
 }
 
 // Response structs
-#[derive(Serialize, Deserialize)] pub struct UploadResponse { pub files: Vec<String>, pub truncated: bool, pub remaining: usize }
-#[derive(Serialize)] pub struct ListResponse { pub files: Vec<String>, pub metas: Vec<FileMetaEntry>, pub reconcile: Option<ReconcileReport> }
-#[derive(Serialize)] pub struct FileMetaEntry { pub file: String, pub expires: u64, #[serde(skip_serializing_if="String::is_empty")] pub original: String }
+#[derive(Serialize, Deserialize)]
+pub struct UploadResponse {
+    pub files: Vec<String>,
+    pub truncated: bool,
+    pub remaining: usize,
+}
+#[derive(Serialize)]
+pub struct ListResponse {
+    pub files: Vec<String>,
+    pub metas: Vec<FileMetaEntry>,
+    pub reconcile: Option<ReconcileReport>,
+}
+#[derive(Serialize)]
+pub struct FileMetaEntry {
+    pub file: String,
+    pub expires: u64,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub original: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub set: Option<u64>,
+}
 
-#[derive(Deserialize)] pub struct ReportForm { pub file: String, pub reason: String, pub details: Option<String> }
-#[derive(Deserialize)] pub struct SimpleQuery { pub m: Option<String> }
-#[derive(Deserialize)] pub struct SimpleDeleteForm { pub f: String }
-#[derive(Deserialize)] pub struct AdminAuthForm { pub key: String }
-#[derive(Deserialize)] pub struct BanForm { pub ip: String, pub reason: Option<String> }
-#[derive(Deserialize)] pub struct UnbanForm { pub ip: String }
-#[derive(Deserialize)] pub struct AdminFileDeleteForm { pub file: String }
-#[derive(Deserialize)] pub struct AdminReportDeleteForm { pub idx: usize }
+#[derive(Deserialize)]
+pub struct ReportForm {
+    pub file: String,
+    pub reason: String,
+    pub details: Option<String>,
+}
+#[derive(Deserialize)]
+pub struct SimpleQuery {
+    pub m: Option<String>,
+}
+#[derive(Deserialize)]
+pub struct SimpleDeleteForm {
+    pub f: String,
+}
+#[derive(Deserialize)]
+pub struct AdminAuthForm {
+    pub key: String,
+}
+#[derive(Deserialize)]
+pub struct BanForm {
+    pub ip: String,
+    pub reason: Option<String>,
+}
+#[derive(Deserialize)]
+pub struct UnbanForm {
+    pub ip: String,
+}
+#[derive(Deserialize)]
+pub struct AdminFileDeleteForm {
+    pub file: String,
+}
+#[derive(Deserialize)]
+pub struct AdminReportDeleteForm {
+    pub idx: usize,
+}
 #[derive(Debug, Deserialize)]
 pub struct LangQuery {
     pub lang: Option<String>,
@@ -59,13 +144,26 @@ pub struct ConfigResponse {
 
 // Upload handler
 #[axum::debug_handler]
-pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, mut multipart: Multipart) -> Response {
-    if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
+pub async fn upload_handler(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
+    if state.is_banned(&real_client_ip(&headers, &addr)).await {
+        return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
+    }
     let ip = real_client_ip(&headers, &addr);
     let sem = state.upload_sem.clone();
     let _permit = match sem.try_acquire_owned() {
         Ok(p) => p,
-        Err(_) => return json_error(StatusCode::SERVICE_UNAVAILABLE, "busy", "server is busy, try again later"),
+        Err(_) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "busy",
+                "server is busy, try again later",
+            )
+        }
     };
 
     let mut ttl_code = "24h".to_string();
@@ -98,24 +196,58 @@ pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): Co
     }
 
     if files_to_process.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "no_files", "no files were uploaded");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "no_files",
+            "no files were uploaded",
+        );
     }
 
-    let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
+    let now = now_secs();
+    let ttl = ttl_to_duration(&ttl_code).as_secs();
+    let expires = now + ttl;
     let mut saved_files = Vec::new();
+    let mut duplicate_info = None;
 
     for (original_name, data) in &files_to_process {
+        let now = now_secs();
         if data.len() as u64 > max_file_bytes() {
             continue;
         }
+        // Compute SHA-256 hash
+        let mut hasher = Sha256::new();
+        hasher.update(&data);
+        let hash = format!("{:x}", hasher.finalize());
+        // Check for duplicate in file_owners.json
+        let owners = state.owners.read().await;
+        if let Some((existing_file, meta)) = owners.iter().find(|(_, m)| m.hash == hash) {
+            // Duplicate found, return info and skip upload
+            duplicate_info = Some(json!({
+                "duplicate": true,
+                "file": existing_file,
+                "meta": meta
+            }));
+            break;
+        }
+        drop(owners);
         let storage_name = make_storage_name(original_name.as_deref());
         if is_forbidden_extension(&storage_name) {
             continue;
         }
         let path = state.upload_dir.join(&storage_name);
         if fs::write(&path, data).await.is_ok() {
-            let meta = FileMeta { owner: ip.clone(), expires, original: original_name.clone().unwrap_or_default() };
-            state.owners.write().await.insert(storage_name.clone(), meta);
+            let meta = FileMeta {
+                owner: ip.clone(),
+                expires,
+                original: original_name.clone().unwrap_or_default(),
+                created: now,
+                hash: hash.clone(),
+            };
+            state
+                .owners
+                .write()
+                .await
+                .insert(storage_name.clone(), meta);
             saved_files.push(storage_name);
         }
     }
@@ -123,60 +255,177 @@ pub async fn upload_handler(State(state): State<AppState>, ConnectInfo(addr): Co
     state.persist_owners().await;
     spawn_integrity_check(state.clone());
 
+    if let Some(dup) = duplicate_info {
+        return (StatusCode::CONFLICT, Json(dup)).into_response();
+    }
+
     let truncated = saved_files.len() < files_to_process.len();
     let remaining = files_to_process.len() - saved_files.len();
 
-    (StatusCode::OK, Json(UploadResponse { files: saved_files, truncated, remaining })).into_response()
+    (
+        StatusCode::OK,
+        Json(UploadResponse {
+            files: saved_files,
+            truncated,
+            remaining,
+        }),
+    )
+        .into_response()
 }
 
 #[axum::debug_handler]
-pub async fn list_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap) -> Response {
-    if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
-    cleanup_expired(&state).await; let client_ip=real_client_ip(&headers, &addr); let reconcile_report=verify_user_entries_with_report(&state, &client_ip).await; cleanup_expired(&state).await; crate::state::check_storage_integrity(&state).await;
-    let owners=state.owners.read().await;
-    let mut files: Vec<(String,u64,String)>=owners.iter().filter_map(|(f,m)| if m.owner==client_ip { Some((f.clone(), m.expires, m.original.clone())) } else { None }).collect();
-    files.sort_by(|a,b| a.0.cmp(&b.0));
-    let only_names: Vec<String>=files.iter().map(|(n,_,_)| qualify_path(&state, &format!("f/{}", n))).collect();
-    let metas: Vec<FileMetaEntry>=files.into_iter().map(|(n,e,o)| FileMetaEntry{ file: qualify_path(&state, &format!("f/{}", n)), expires: e, original: o }).collect();
-    let body=Json(ListResponse{ files: only_names, metas, reconcile: reconcile_report });
-    let mut resp=body.into_response(); resp.headers_mut().insert(CACHE_CONTROL, "no-store".parse().unwrap()); resp }
+pub async fn list_handler(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if state.is_banned(&real_client_ip(&headers, &addr)).await {
+        return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
+    }
+    cleanup_expired(&state).await;
+    let client_ip = real_client_ip(&headers, &addr);
+    let reconcile_report = verify_user_entries_with_report(&state, &client_ip).await;
+    cleanup_expired(&state).await;
+    crate::state::check_storage_integrity(&state).await;
+    let owners = state.owners.read().await;
+    let mut files: Vec<(String, u64, String, u64, u64)> = owners
+        .iter()
+        .filter_map(|(f, m)| {
+            if m.owner == client_ip {
+                let set = m.created;
+                let total = if m.expires > set { m.expires - set } else { 0 };
+                Some((f.clone(), m.expires, m.original.clone(), total, set))
+            } else {
+                None
+            }
+        })
+        .collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let only_names: Vec<String> = files
+        .iter()
+        .map(|(n, _, _, _, _)| qualify_path(&state, &format!("f/{}", n)))
+        .collect();
+    let metas: Vec<FileMetaEntry> = files
+        .into_iter()
+        .map(|(n, e, o, t, s)| FileMetaEntry {
+            file: qualify_path(&state, &format!("f/{}", n)),
+            expires: e,
+            original: o,
+            total: Some(t),
+            set: Some(s),
+        })
+        .collect();
+    let body = Json(ListResponse {
+        files: only_names,
+        metas,
+        reconcile: reconcile_report,
+    });
+    let mut resp = body.into_response();
+    resp.headers_mut()
+        .insert(CACHE_CONTROL, "no-store".parse().unwrap());
+    resp
+}
 
 #[axum::debug_handler]
-pub async fn fetch_file_handler(State(state): State<AppState>, Path(file): Path<String>) -> Response {
-    if file.contains('/') { return (StatusCode::BAD_REQUEST, "bad file").into_response(); }
+pub async fn fetch_file_handler(
+    State(state): State<AppState>,
+    Path(file): Path<String>,
+) -> Response {
+    if file.contains('/') {
+        return (StatusCode::BAD_REQUEST, "bad file").into_response();
+    }
     cleanup_expired(&state).await;
     let now = now_secs();
     let (exists, expired, meta_expires) = {
         let owners = state.owners.read().await;
-        if let Some(m) = owners.get(&file) { (true, m.expires <= now, m.expires) } else { (false, true, 0) }
+        if let Some(m) = owners.get(&file) {
+            (true, m.expires <= now, m.expires)
+        } else {
+            (false, true, 0)
+        }
     };
-    if !exists || expired { return (StatusCode::NOT_FOUND, "not found").into_response(); }
+    if !exists || expired {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
     let file_path = state.upload_dir.join(&file);
-    if !file_path.exists() { return (StatusCode::NOT_FOUND, "not found").into_response(); }
+    if !file_path.exists() {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
     match fs::read(&file_path).await {
         Ok(bytes) => {
             let mime = mime_guess::from_path(&file_path).first_or_octet_stream();
             let mut headers = HeaderMap::new();
-            headers.insert(axum::http::header::CONTENT_TYPE, mime.as_ref().parse().unwrap());
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                mime.as_ref().parse().unwrap(),
+            );
             // derive remaining TTL for caching
             if meta_expires > now {
                 let remaining = meta_expires - now;
-                headers.insert(CACHE_CONTROL, HeaderValue::from_str(&format!("public, max-age={}", remaining)).unwrap());
+                headers.insert(
+                    CACHE_CONTROL,
+                    HeaderValue::from_str(&format!("public, max-age={}", remaining)).unwrap(),
+                );
                 let exp_time = SystemTime::UNIX_EPOCH + Duration::from_secs(meta_expires);
-                headers.insert(EXPIRES, HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap());
+                headers.insert(
+                    EXPIRES,
+                    HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap(),
+                );
             }
             (headers, bytes).into_response()
-        },
-        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "fs_error", "cant read file")
+        }
+        Err(_) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "fs_error",
+            "cant read file",
+        ),
     }
 }
 
 #[axum::debug_handler]
-pub async fn delete_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Path(file): Path<String>) -> Response { let ip=real_client_ip(&headers, &addr); if state.is_banned(&ip).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); } if file.contains('/') || file.contains("..") || file.contains('\\') { return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file name"); } cleanup_expired(&state).await; { let owners=state.owners.read().await; match owners.get(&file) { Some(meta) if meta.owner==ip => {}, _=> return (StatusCode::NOT_FOUND, "not found").into_response(), } } { let mut owners=state.owners.write().await; owners.remove(&file); } let path=state.upload_dir.join(&file); let _=fs::remove_file(&path).await; state.persist_owners().await; (StatusCode::NO_CONTENT, ()).into_response() }
+pub async fn delete_handler(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
+    Path(file): Path<String>,
+) -> Response {
+    let ip = real_client_ip(&headers, &addr);
+    if state.is_banned(&ip).await {
+        return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
+    }
+    if file.contains('/') || file.contains("..") || file.contains('\\') {
+        return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file name");
+    }
+    cleanup_expired(&state).await;
+    {
+        let owners = state.owners.read().await;
+        match owners.get(&file) {
+            Some(meta) if meta.owner == ip => {}
+            _ => return (StatusCode::NOT_FOUND, "not found").into_response(),
+        }
+    }
+    {
+        let mut owners = state.owners.write().await;
+        owners.remove(&file);
+    }
+    // Remove hash entry
+    // No more file_hashes or persist_hashes; hashes are part of FileMeta now.
+    let path = state.upload_dir.join(&file);
+    let _ = fs::remove_file(&path).await;
+    state.persist_owners().await;
+    (StatusCode::NO_CONTENT, ()).into_response()
+}
 
 #[axum::debug_handler]
-pub async fn report_handler(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap, Form(form): Form<ReportForm>) -> Response {
-    if state.is_banned(&real_client_ip(&headers,&addr)).await { return json_error(StatusCode::FORBIDDEN, "banned", "ip banned"); }
+pub async fn report_handler(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
+    Form(form): Form<ReportForm>,
+) -> Response {
+    if state.is_banned(&real_client_ip(&headers, &addr)).await {
+        return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
+    }
     let ip = real_client_ip(&headers, &addr);
     let now = now_secs();
     // Canonicalize file id: if exact not found and no extension supplied, try auto-matching stored file with extension.
@@ -186,21 +435,35 @@ pub async fn report_handler(State(state): State<AppState>, ConnectInfo(addr): Co
         if !owners.contains_key(&file_name) && !file_name.contains('.') {
             // collect candidates that start with "{id}." (single extension segment)
             let prefix = format!("{file_name}.");
-            let mut candidates: Vec<&String> = owners.keys().filter(|k| k.starts_with(&prefix)).collect();
+            let mut candidates: Vec<&String> =
+                owners.keys().filter(|k| k.starts_with(&prefix)).collect();
             // deterministic selection: pick shortest name (i.e., shortest extension); then lexicographically
             candidates.sort();
             candidates.sort_by_key(|k| k.len());
-            if let Some(best) = candidates.first() { file_name = (*best).clone(); }
+            if let Some(best) = candidates.first() {
+                file_name = (*best).clone();
+            }
         }
     }
-    let record = ReportRecord { file: file_name.clone(), reason: form.reason.clone(), details: form.details.clone().unwrap_or_default(), ip: ip.clone(), time: now };
+    let record = ReportRecord {
+        file: file_name.clone(),
+        reason: form.reason.clone(),
+        details: form.details.clone().unwrap_or_default(),
+        ip: ip.clone(),
+        time: now,
+    };
     let (owner_ip, original_name, expires, size) = {
         let owners = state.owners.read().await;
         if let Some(meta) = owners.get(&record.file) {
             let path = state.upload_dir.join(&record.file);
-            let sz = tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0);
+            let sz = tokio::fs::metadata(&path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
             (meta.owner.clone(), meta.original.clone(), meta.expires, sz)
-        } else { (String::new(), String::new(), 0u64, 0u64) }
+        } else {
+            (String::new(), String::new(), 0u64, 0u64)
+        }
     };
     let (report_index, total_reports_for_file, total_reports) = {
         let mut reports = state.reports.write().await;
@@ -212,22 +475,29 @@ pub async fn report_handler(State(state): State<AppState>, ConnectInfo(addr): Co
     };
     state.persist_reports().await;
     if let Some(tx) = &state.email_tx {
-        let iso = OffsetDateTime::from_unix_timestamp(now as i64).map(|t| t.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()).unwrap_or_default();
-        let _ = tx.send(ReportRecordEmail {
-            file: record.file.clone(),
-            reason: record.reason.clone(),
-            details: record.details.clone(),
-            ip: record.ip.clone(),
-            time: record.time,
-            iso_time: iso,
-            owner_ip,
-            original_name,
-            expires,
-            size,
-            report_index,
-            total_reports_for_file,
-            total_reports,
-        }).await;
+        let iso = OffsetDateTime::from_unix_timestamp(now as i64)
+            .map(|t| {
+                t.format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        let _ = tx
+            .send(ReportRecordEmail {
+                file: record.file.clone(),
+                reason: record.reason.clone(),
+                details: record.details.clone(),
+                ip: record.ip.clone(),
+                time: record.time,
+                iso_time: iso,
+                owner_ip,
+                original_name,
+                expires,
+                size,
+                report_index,
+                total_reports_for_file,
+                total_reports,
+            })
+            .await;
     }
     (StatusCode::NO_CONTENT, ()).into_response()
 }
@@ -235,37 +505,70 @@ pub async fn report_handler(State(state): State<AppState>, ConnectInfo(addr): Co
 pub async fn file_handler(State(state): State<AppState>, Path(path): Path<String>) -> Response {
     // normalize and security checks + extensionless .html support
     let rel = path.trim_start_matches('/');
-    if rel.contains("..") || rel.contains('\\') { return (StatusCode::BAD_REQUEST, "bad path").into_response(); }
+    if rel.contains("..") || rel.contains('\\') {
+        return (StatusCode::BAD_REQUEST, "bad path").into_response();
+    }
     let mut candidate = state.static_dir.join(rel);
     if !candidate.exists() {
         // try mapping extensionless request to .html file
         if !rel.is_empty() && !rel.contains('.') {
             let alt = state.static_dir.join(format!("{}.html", rel));
-            if alt.exists() { candidate = alt; } else { return (StatusCode::NOT_FOUND, "not found").into_response(); }
-        } else { return (StatusCode::NOT_FOUND, "not found").into_response(); }
+            if alt.exists() {
+                candidate = alt;
+            } else {
+                return (StatusCode::NOT_FOUND, "not found").into_response();
+            }
+        } else {
+            return (StatusCode::NOT_FOUND, "not found").into_response();
+        }
     }
     match fs::read(&candidate).await {
         Ok(bytes) => {
             let mime = mime_guess::from_path(&candidate).first_or_octet_stream();
             let mut headers = HeaderMap::new();
-            headers.insert(axum::http::header::CONTENT_TYPE, mime.as_ref().parse().unwrap());
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                mime.as_ref().parse().unwrap(),
+            );
             // apply cache policy based on extension
             if let Some(ext) = candidate.extension().and_then(|e| e.to_str()) {
-                let cacheable = matches!(ext.to_ascii_lowercase().as_str(), "css"|"js"|"webp"|"png"|"jpg"|"jpeg"|"gif"|"svg"|"ico"|"woff"|"woff2");
+                let cacheable = matches!(
+                    ext.to_ascii_lowercase().as_str(),
+                    "css"
+                        | "js"
+                        | "webp"
+                        | "png"
+                        | "jpg"
+                        | "jpeg"
+                        | "gif"
+                        | "svg"
+                        | "ico"
+                        | "woff"
+                        | "woff2"
+                );
                 if cacheable {
                     let max_age = 86400; // 1 day
-                    headers.insert(CACHE_CONTROL, HeaderValue::from_str(&format!("public, max-age={max_age}")).unwrap());
+                    headers.insert(
+                        CACHE_CONTROL,
+                        HeaderValue::from_str(&format!("public, max-age={max_age}")).unwrap(),
+                    );
                     let exp_time = SystemTime::now() + Duration::from_secs(max_age);
-                    headers.insert(EXPIRES, HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap());
+                    headers.insert(
+                        EXPIRES,
+                        HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap(),
+                    );
                 }
             }
             (headers, bytes).into_response()
-        },
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "cant read file").into_response()
+        }
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "cant read file").into_response(),
     }
 }
 
-pub async fn root_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+pub async fn root_handler(
+    State(state): State<AppState>,
+    Query(query): Query<LangQuery>,
+) -> Response {
     // Determine language (default to en)
     let lang = query.lang.as_deref().unwrap_or("en");
     let lang_file = format!("translations/lang_{}.toml", lang);
@@ -287,19 +590,40 @@ pub async fn root_handler(State(state): State<AppState>, Query(query): Query<Lan
     ctx.insert("max_file_size_str", &format_bytes(max_file_bytes()));
     let tera = &state.tera;
     match tera.render("index.html.tera", &ctx) {
-        Ok(rendered) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], rendered).into_response(),
+        Ok(rendered) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "text/html")],
+            rendered,
+        )
+            .into_response(),
         Err(e) => {
-            eprintln!("[Tera] Error rendering template 'index.html.tera': {e}\n{:#?}", e);
+            eprintln!(
+                "[Tera] Error rendering template 'index.html.tera': {e}\n{:#?}",
+                e
+            );
             // Tera::Error no longer exposes line information directly.
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {}", e)).into_response()
-        },
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("template error: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
-pub async fn debug_ip_handler(ConnectInfo(addr): ConnectInfo<ClientAddr>, headers: HeaderMap) -> Response {
+pub async fn debug_ip_handler(
+    ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
+) -> Response {
     let edge = addr.ip().to_string();
-    let cf = headers.get("CF-Connecting-IP").and_then(|v| v.to_str().ok()).unwrap_or("-");
-    let xff = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok()).unwrap_or("-");
+    let cf = headers
+        .get("CF-Connecting-IP")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-");
+    let xff = headers
+        .get("X-Forwarded-For")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-");
     Json(serde_json::json!({"edge": edge, "cf": cf, "xff": xff})).into_response()
 }
 
@@ -311,23 +635,26 @@ async fn load_translation_map(lang: &str) -> HashMap<String, String> {
         Ok(s) => {
             println!("[i18n] Loaded file: {}", lang_file);
             s
-        },
+        }
         Err(e) => {
-            println!("[i18n] Failed to load {}: {}. Falling back to lang_en.toml", lang_file, e);
+            println!(
+                "[i18n] Failed to load {}: {}. Falling back to lang_en.toml",
+                lang_file, e
+            );
             match fs::read_to_string("translations/lang_en.toml").await {
                 Ok(s) => s,
                 Err(e2) => {
                     println!("[i18n] Failed to load fallback lang_en.toml: {}", e2);
                     String::new()
-                },
+                }
             }
-        },
+        }
     };
     match toml::from_str::<HashMap<String, String>>(&content) {
         Ok(map) => {
             println!("[i18n] Loaded {} keys for lang {}", map.len(), lang);
             map
-        },
+        }
         Err(e) => {
             println!("[i18n] Failed to parse TOML for lang {}: {}", lang, e);
             HashMap::new()
@@ -335,7 +662,12 @@ async fn load_translation_map(lang: &str) -> HashMap<String, String> {
     }
 }
 
-async fn render_tera_page(state: &AppState, template: &str, lang: &str, extra: Option<(&str, &tera::Value)>) -> Response {
+async fn render_tera_page(
+    state: &AppState,
+    template: &str,
+    lang: &str,
+    extra: Option<(&str, &tera::Value)>,
+) -> Response {
     let t_map = load_translation_map(lang).await;
     let mut ctx = Context::new();
     ctx.insert("lang", lang);
@@ -345,34 +677,60 @@ async fn render_tera_page(state: &AppState, template: &str, lang: &str, extra: O
     }
     let tera = &state.tera;
     match tera.render(template, &ctx) {
-        Ok(rendered) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], rendered).into_response(),
+        Ok(rendered) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "text/html")],
+            rendered,
+        )
+            .into_response(),
         Err(e) => {
-            eprintln!("[Tera] Error rendering template '{}': {e}\n{:#?}", template, e);
+            eprintln!(
+                "[Tera] Error rendering template '{}': {e}\n{:#?}",
+                template, e
+            );
             // Tera::Error no longer exposes line information directly.
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {}", e)).into_response()
-        },
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("template error: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
-pub async fn faq_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+pub async fn faq_handler(
+    State(state): State<AppState>,
+    Query(query): Query<LangQuery>,
+) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
     render_tera_page(&state, "faq.html.tera", lang, None).await
 }
 
-pub async fn terms_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+pub async fn terms_handler(
+    State(state): State<AppState>,
+    Query(query): Query<LangQuery>,
+) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
     render_tera_page(&state, "terms.html.tera", lang, None).await
 }
 
-pub async fn report_page_handler_i18n(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+pub async fn report_page_handler_i18n(
+    State(state): State<AppState>,
+    Query(query): Query<LangQuery>,
+) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
     render_tera_page(&state, "report.html.tera", lang, None).await
 }
 
-pub async fn simple_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+use std::net::SocketAddr;
+pub async fn simple_handler(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<LangQuery>,
+) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
-    
-    
+
     // Try to get a message from query param
     let message = if let Some(_) = query.deleted {
         Some("File DEleted Successfully.".to_string())
@@ -380,22 +738,29 @@ pub async fn simple_handler(State(state): State<AppState>, Query(query): Query<L
         query.m.clone()
     };
 
-    // For simple UI, show files for the current IP (from request context)
-    // We'll use a fallback: if behind a proxy, this may not be accurate
-    // For now, just use 127.0.0.1 for local dev
-    let dummy_addr = std::net::SocketAddr::from(([127,0,0,1], 0));
-    let client_ip = "127.0.0.1".to_string();
+    // For simple UI, show files for the real client IP (from request context)
+    let client_ip = crate::util::real_client_ip(&headers, &addr);
     let owners = state.owners.read().await;
-    let mut files: Vec<(String, u64, String)> = owners.iter()
-        .filter_map(|(f, m)| if m.owner == client_ip { Some((f.clone(), m.expires, m.original.clone())) } else { None })
+    let mut files: Vec<(String, u64, String)> = owners
+        .iter()
+        .filter_map(|(f, m)| {
+            if m.owner == client_ip {
+                Some((f.clone(), m.expires, m.original.clone()))
+            } else {
+                None
+            }
+        })
         .collect();
     files.sort_by(|a, b| a.0.cmp(&b.0));
     let now = now_secs();
     let mut rows = String::new();
     for (fname, expires, original) in &files {
         let url = qualify_path(&state, &format!("f/{}", fname));
+        let expired = now >= *expires;
         let expires_in = if *expires > now { *expires - now } else { 0 };
-        let human = if expires_in >= 86400 {
+        let human = if expired {
+            "expired".to_string()
+        } else if expires_in >= 86400 {
             format!("{}d", expires_in / 86400)
         } else if expires_in >= 3600 {
             format!("{}h", expires_in / 3600)
@@ -405,7 +770,7 @@ pub async fn simple_handler(State(state): State<AppState>, Query(query): Query<L
             format!("{}s", expires_in)
         };
         rows.push_str(&format!(
-            "<tr><td><a href=\"{}\">{}</a></td><td>{}</td><td><form method=post action=\"/simple/delete\"><input type=hidden name=f value=\"{}\"><button type=submit>Delete</button></form></td></tr>",
+            "<tr><td><a href=\"{}\">{}</a></td><td>{}</td><td><a href=\"/simple/delete?f={}\" class=delete-link>Delete</a></td></tr>",
             url,
             htmlescape::encode_minimal(original),
             human,
@@ -423,22 +788,44 @@ pub async fn simple_handler(State(state): State<AppState>, Query(query): Query<L
     ctx.insert("t", &t_map);
     let tera = &state.tera;
     match tera.render("simple.html.tera", &ctx) {
-        Ok(rendered) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], rendered).into_response(),
+        Ok(rendered) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "text/html")],
+            rendered,
+        )
+            .into_response(),
         Err(e) => {
-            eprintln!("[Tera] Error rendering template 'simple.html.tera': {e}\n{:#?}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("template error: {}", e)).into_response()
-        },
+            eprintln!(
+                "[Tera] Error rendering template 'simple.html.tera': {e}\n{:#?}",
+                e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("template error: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
-pub async fn banned_handler(State(state): State<AppState>, Query(query): Query<LangQuery>) -> Response {
+pub async fn banned_handler(
+    State(state): State<AppState>,
+    Query(query): Query<LangQuery>,
+) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
     render_tera_page(&state, "banned.html.tera", lang, None).await
 }
 
 pub async fn ban_page_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
     // admin gate
-    if let Some(tok)=get_cookie(&headers, "adm") { if state.is_admin(&tok).await { } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); }
+    if let Some(tok) = get_cookie(&headers, "adm") {
+        if state.is_admin(&tok).await {
+        } else {
+            return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+        }
+    } else {
+        return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+    }
     let bans = state.bans.read().await.clone();
     // Updated: include action (unban) column
     let rows: String = bans.iter().map(|b| {
@@ -451,30 +838,101 @@ pub async fn ban_page_handler(State(state): State<AppState>, headers: HeaderMap)
         Ok(bytes) => {
             let mut body = String::from_utf8_lossy(&bytes).into_owned();
             body = body.replace("{{ROWS}}", &rows);
-            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], body).into_response()
-        },
-        Err(_) => json_error(StatusCode::NOT_FOUND, "missing_template", "ban template missing")
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "text/html")],
+                body,
+            )
+                .into_response()
+        }
+        Err(_) => json_error(
+            StatusCode::NOT_FOUND,
+            "missing_template",
+            "ban template missing",
+        ),
     }
 }
 
 #[axum::debug_handler]
-pub async fn ban_post_handler(State(state): State<AppState>, headers: HeaderMap, Form(frm): Form<BanForm>) -> Response { if let Some(tok)=get_cookie(&headers, "adm") { if !state.is_admin(&tok).await { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } let ip = frm.ip.trim(); if ip.is_empty() { return json_error(StatusCode::BAD_REQUEST, "missing", "missing ip"); } state.add_ban(ip.to_string(), frm.reason.unwrap_or_default()).await; state.persist_bans().await; (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, HeaderValue::from_static("/admin/ban"))]).into_response() }
+pub async fn ban_post_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(frm): Form<BanForm>,
+) -> Response {
+    if let Some(tok) = get_cookie(&headers, "adm") {
+        if !state.is_admin(&tok).await {
+            return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+        }
+    } else {
+        return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+    }
+    let ip = frm.ip.trim();
+    if ip.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "missing", "missing ip");
+    }
+    state
+        .add_ban(ip.to_string(), frm.reason.unwrap_or_default())
+        .await;
+    state.persist_bans().await;
+    (
+        StatusCode::SEE_OTHER,
+        [(
+            axum::http::header::LOCATION,
+            HeaderValue::from_static("/admin/ban"),
+        )],
+    )
+        .into_response()
+}
 
 #[axum::debug_handler]
-pub async fn unban_post_handler(State(state): State<AppState>, headers: HeaderMap, Form(frm): Form<UnbanForm>) -> Response {
-    if let Some(tok)=get_cookie(&headers, "adm") { if !state.is_admin(&tok).await { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); }
+pub async fn unban_post_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(frm): Form<UnbanForm>,
+) -> Response {
+    if let Some(tok) = get_cookie(&headers, "adm") {
+        if !state.is_admin(&tok).await {
+            return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+        }
+    } else {
+        return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+    }
     let ip = frm.ip.trim();
-    if ip.is_empty() { return json_error(StatusCode::BAD_REQUEST, "missing", "missing ip"); }
-    state.remove_ban(ip).await; state.persist_bans().await;
-    (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, HeaderValue::from_static("/admin/ban"))]).into_response()
+    if ip.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "missing", "missing ip");
+    }
+    state.remove_ban(ip).await;
+    state.persist_bans().await;
+    (
+        StatusCode::SEE_OTHER,
+        [(
+            axum::http::header::LOCATION,
+            HeaderValue::from_static("/admin/ban"),
+        )],
+    )
+        .into_response()
 }
 
 pub async fn auth_get_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Some(tok) = get_cookie(&headers, "adm") { if state.is_admin(&tok).await {
-        let already_path = state.static_dir.join("admin_already.html");
-        if let Ok(bytes)=fs::read(&already_path).await { return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], bytes).into_response(); }
-        return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], "<html><body><p>Already admin.</p><a href=/isadmin>Check</a></body></html>").into_response();
-    } }
+    if let Some(tok) = get_cookie(&headers, "adm") {
+        if state.is_admin(&tok).await {
+            let already_path = state.static_dir.join("admin_already.html");
+            if let Ok(bytes) = fs::read(&already_path).await {
+                return (
+                    StatusCode::OK,
+                    [(axum::http::header::CONTENT_TYPE, "text/html")],
+                    bytes,
+                )
+                    .into_response();
+            }
+            return (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "text/html")],
+                "<html><body><p>Already admin.</p><a href=/isadmin>Check</a></body></html>",
+            )
+                .into_response();
+        }
+    }
     let tpl_path = state.static_dir.join("admin_auth.html");
     match fs::read(&tpl_path).await {
         Ok(bytes) => (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], bytes).into_response(),
@@ -482,84 +940,248 @@ pub async fn auth_get_handler(State(state): State<AppState>, headers: HeaderMap)
     }
 }
 
-pub async fn auth_post_handler(State(state): State<AppState>, _headers: HeaderMap, Form(frm): Form<AdminAuthForm>) -> Response {
+pub async fn auth_post_handler(
+    State(state): State<AppState>,
+    _headers: HeaderMap,
+    Form(frm): Form<AdminAuthForm>,
+) -> Response {
     let submitted = frm.key.trim();
-    if submitted.is_empty() { return json_error(StatusCode::BAD_REQUEST, "missing", "missing key"); }
+    if submitted.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "missing", "missing key");
+    }
     // read current key from state
     let current_key = { state.admin_key.read().await.clone() };
-    if current_key.is_empty() { return json_error(StatusCode::INTERNAL_SERVER_ERROR, "no_key", "admin key unavailable"); }
+    if current_key.is_empty() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "no_key",
+            "admin key unavailable",
+        );
+    }
     if subtle_equals(submitted.as_bytes(), current_key.as_bytes()) {
         let token = crate::util::new_id();
         state.create_admin_session(token.clone()).await;
         state.persist_admin_sessions().await;
-        let cookie = format!("adm={}; Path=/; HttpOnly; Max-Age={}; SameSite=Strict", token, ADMIN_SESSION_TTL);
-        let mut resp = (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, HeaderValue::from_static("/"))]).into_response();
-        resp.headers_mut().append(axum::http::header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+        let cookie = format!(
+            "adm={}; Path=/; HttpOnly; Max-Age={}; SameSite=Strict",
+            token, ADMIN_SESSION_TTL
+        );
+        let mut resp = (
+            StatusCode::SEE_OTHER,
+            [(axum::http::header::LOCATION, HeaderValue::from_static("/"))],
+        )
+            .into_response();
+        resp.headers_mut().append(
+            axum::http::header::SET_COOKIE,
+            HeaderValue::from_str(&cookie).unwrap(),
+        );
         return resp;
     }
     json_error(StatusCode::UNAUTHORIZED, "invalid_key", "invalid key")
 }
 
 pub async fn is_admin_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Some(tok) = get_cookie(&headers, "adm") { if state.is_admin(&tok).await { return (StatusCode::OK, Json(serde_json::json!({"admin": true}))).into_response(); } }
+    if let Some(tok) = get_cookie(&headers, "adm") {
+        if state.is_admin(&tok).await {
+            return (StatusCode::OK, Json(serde_json::json!({"admin": true}))).into_response();
+        }
+    }
     (StatusCode::OK, Json(serde_json::json!({"admin": false}))).into_response()
 }
 
-fn subtle_equals(a: &[u8], b: &[u8]) -> bool { if a.len()!=b.len() { return false; } let mut diff: u8 = 0; for i in 0..a.len() { diff |= a[i] ^ b[i]; } diff == 0 }
-
-pub async fn add_security_headers(req: axum::http::Request<Body>, next: Next) -> Response { let mut resp=next.run(req).await; let h=resp.headers_mut(); if !h.contains_key("X-Content-Type-Options") { h.insert("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:".parse().unwrap()); } if !h.contains_key("Permissions-Policy") { h.insert("Permissions-Policy", "camera=(), microphone=(), geolocation=(), fullscreen=(), payment=()".parse().unwrap()); }
-  // Ensure charset is specified for HTML responses
-  if let Some(ct_val) = h.get(axum::http::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()) {
-    let ct_lower = ct_val.to_ascii_lowercase();
-    if ct_lower.starts_with("text/html") && !ct_lower.contains("charset=") {
-      h.insert(axum::http::header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
+fn subtle_equals(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
     }
-  }
-  resp }
+    let mut diff: u8 = 0;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
 
-pub async fn enforce_host(req: axum::http::Request<Body>, next: Next) -> Response { let host = req.headers().get("host").and_then(|h| h.to_str().ok()).unwrap_or_default(); if host == PROD_HOST { next.run(req).await } else { let uri = format!("https://{}{}", PROD_HOST, req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("/")); let hv = HeaderValue::from_str(&uri).unwrap(); (StatusCode::MOVED_PERMANENTLY, [(axum::http::header::LOCATION, hv)]).into_response() } }
+pub async fn add_security_headers(req: axum::http::Request<Body>, next: Next) -> Response {
+    let mut resp = next.run(req).await;
+    let h = resp.headers_mut();
+    if !h.contains_key("X-Content-Type-Options") {
+        h.insert("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:".parse().unwrap());
+    }
+    if !h.contains_key("Permissions-Policy") {
+        h.insert(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=(), fullscreen=(), payment=()"
+                .parse()
+                .unwrap(),
+        );
+    }
+    // Ensure charset is specified for HTML responses
+    if let Some(ct_val) = h
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+    {
+        let ct_lower = ct_val.to_ascii_lowercase();
+        if ct_lower.starts_with("text/html") && !ct_lower.contains("charset=") {
+            h.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            );
+        }
+    }
+    resp
+}
+
+pub async fn enforce_host(req: axum::http::Request<Body>, next: Next) -> Response {
+    let host = req
+        .headers()
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or_default();
+    if host == PROD_HOST {
+        next.run(req).await
+    } else {
+        let uri = format!(
+            "https://{}{}",
+            PROD_HOST,
+            req.uri()
+                .path_and_query()
+                .map(|pq| pq.as_str())
+                .unwrap_or("/")
+        );
+        let hv = HeaderValue::from_str(&uri).unwrap();
+        (
+            StatusCode::MOVED_PERMANENTLY,
+            [(axum::http::header::LOCATION, hv)],
+        )
+            .into_response()
+    }
+}
 
 // Global middleware: if IP banned, immediately return a themed banned page.
-pub async fn ban_gate(State(state): State<AppState>, ConnectInfo(addr): ConnectInfo<ClientAddr>, req: Request<Body>, _next: Next) -> Response {
+pub async fn ban_gate(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    req: Request<Body>,
+    _next: Next,
+) -> Response {
     let path = req.uri().path();
-    if path.starts_with("/css/") || path.starts_with("/js/") { return _next.run(req).await; }
-    let ip = extract_client_ip(req.headers(), Some(addr.ip()));
-    if !state.is_banned(&ip).await { return _next.run(req).await; }
-    let (reason,time) = { let bans=state.bans.read().await; if let Some(b)=bans.iter().find(|b| b.ip==ip) { (b.reason.clone(), b.time) } else { (String::new(), 0) } };
-    let safe_reason = htmlescape::encode_minimal(&reason);
-    let time_line = if time>0 { format!("<br><span class=code>Time: {time}</span>") } else { String::new() };
-    let tpl_path = state.static_dir.join("banned.html");
-    if let Ok(bytes)=fs::read(&tpl_path).await {
-        let mut body = String::from_utf8_lossy(&bytes).into_owned();
-        body = body.replace("{{REASON}}", &safe_reason).replace("{{IP}}", &ip).replace("{{TIME_LINE}}", &time_line);
-        return (StatusCode::FORBIDDEN, [(axum::http::header::CONTENT_TYPE, "text/html")], body).into_response();
+    if path.starts_with("/css/") || path.starts_with("/js/") {
+        return _next.run(req).await;
     }
-    let fallback = format!("<html><body><h1>Banned</h1><p>{}</p><p>{}</p></body></html>", safe_reason, ip);
-    (StatusCode::FORBIDDEN, [(axum::http::header::CONTENT_TYPE, "text/html")], fallback).into_response()
+    let ip = extract_client_ip(req.headers(), Some(addr.ip()));
+    if !state.is_banned(&ip).await {
+        return _next.run(req).await;
+    }
+    let (reason, time) = {
+        let bans = state.bans.read().await;
+        if let Some(b) = bans.iter().find(|b| b.ip == ip) {
+            (b.reason.clone(), b.time)
+        } else {
+            (String::new(), 0)
+        }
+    };
+    let safe_reason = htmlescape::encode_minimal(&reason);
+    let time_line = if time > 0 {
+        format!("<br><span class=code>Time: {time}</span>")
+    } else {
+        String::new()
+    };
+    let tpl_path = state.static_dir.join("banned.html");
+    if let Ok(bytes) = fs::read(&tpl_path).await {
+        let mut body = String::from_utf8_lossy(&bytes).into_owned();
+        body = body
+            .replace("{{REASON}}", &safe_reason)
+            .replace("{{IP}}", &ip)
+            .replace("{{TIME_LINE}}", &time_line);
+        return (
+            StatusCode::FORBIDDEN,
+            [(axum::http::header::CONTENT_TYPE, "text/html")],
+            body,
+        )
+            .into_response();
+    }
+    let fallback = format!(
+        "<html><body><h1>Banned</h1><p>{}</p><p>{}</p></body></html>",
+        safe_reason, ip
+    );
+    (
+        StatusCode::FORBIDDEN,
+        [(axum::http::header::CONTENT_TYPE, "text/html")],
+        fallback,
+    )
+        .into_response()
 }
 
 pub async fn admin_files_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Some(tok)=get_cookie(&headers, "adm") { if !state.is_admin(&tok).await { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); }
+    if let Some(tok) = get_cookie(&headers, "adm") {
+        if !state.is_admin(&tok).await {
+            return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+        }
+    } else {
+        return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+    }
     // Build table rows (file, owner, expires human, size)
     let owners = state.owners.read().await.clone();
     let mut rows = String::new();
     let now = now_secs();
     for (file, meta) in owners.iter() {
         let path = state.upload_dir.join(file);
-        let size = match fs::metadata(&path).await { Ok(md)=> md.len(), Err(_)=>0 };
-        let remain = if meta.expires>now { meta.expires - now } else { 0 };
-        let human = if remain >= 86400 { format!("{}d", remain/86400) } else if remain >= 3600 { format!("{}h", remain/3600) } else if remain >= 60 { format!("{}m", remain/60) } else { format!("{}s", remain) };
+        let size = match fs::metadata(&path).await {
+            Ok(md) => md.len(),
+            Err(_) => 0,
+        };
+        let remain = if meta.expires > now {
+            meta.expires - now
+        } else {
+            0
+        };
+        let human = if remain >= 86400 {
+            format!("{}d", remain / 86400)
+        } else if remain >= 3600 {
+            format!("{}h", remain / 3600)
+        } else if remain >= 60 {
+            format!("{}m", remain / 60)
+        } else {
+            format!("{}s", remain)
+        };
         rows.push_str(&format!("<tr><td><a href=\"/f/{f}\" target=_blank rel=noopener>{f}</a></td><td>{o}</td><td data-exp=\"{exp}\">{human}</td><td>{size}</td><td><form method=post action=/admin/files style=margin:0><input type=hidden name=file value=\"{f}\"><button type=submit class=del data-file=\"{f}\">Delete</button></form></td></tr>", f=file, o=&meta.owner, exp=meta.expires, human=human, size=size));
     }
     let tpl_path = state.static_dir.join("admin_files.html");
-    match fs::read(&tpl_path).await { Ok(bytes)=> { let mut body=String::from_utf8_lossy(&bytes).into_owned(); body = body.replace("{{FILE_ROWS}}", &rows); (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], body).into_response() }, Err(_)=> json_error(StatusCode::NOT_FOUND, "missing_template", "admin files template missing") }
+    match fs::read(&tpl_path).await {
+        Ok(bytes) => {
+            let mut body = String::from_utf8_lossy(&bytes).into_owned();
+            body = body.replace("{{FILE_ROWS}}", &rows);
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "text/html")],
+                body,
+            )
+                .into_response()
+        }
+        Err(_) => json_error(
+            StatusCode::NOT_FOUND,
+            "missing_template",
+            "admin files template missing",
+        ),
+    }
 }
 
 #[axum::debug_handler]
-pub async fn admin_file_delete_handler(State(state): State<AppState>, headers: HeaderMap, Form(frm): Form<AdminFileDeleteForm>) -> Response {
-    if let Some(tok)=get_cookie(&headers, "adm") { if !state.is_admin(&tok).await { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); }
+pub async fn admin_file_delete_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(frm): Form<AdminFileDeleteForm>,
+) -> Response {
+    if let Some(tok) = get_cookie(&headers, "adm") {
+        if !state.is_admin(&tok).await {
+            return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+        }
+    } else {
+        return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+    }
     let file = frm.file.trim();
-    if file.is_empty() || file.contains('/') || file.contains('\\') { return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file"); }
+    if file.is_empty() || file.contains('/') || file.contains('\\') {
+        return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file");
+    }
     {
         let mut owners = state.owners.write().await;
         owners.remove(file);
@@ -571,23 +1193,57 @@ pub async fn admin_file_delete_handler(State(state): State<AppState>, headers: H
 }
 
 pub async fn admin_reports_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Some(tok)=get_cookie(&headers, "adm") { if !state.is_admin(&tok).await { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); }
+    if let Some(tok) = get_cookie(&headers, "adm") {
+        if !state.is_admin(&tok).await {
+            return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+        }
+    } else {
+        return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+    }
     let reports = state.reports.read().await.clone();
     let mut rows = String::new();
     for (idx, r) in reports.iter().enumerate() {
         rows.push_str(&format!("<tr><td><a href=\"/{file}\" target=_blank rel=noopener>{file}</a></td><td>{reason}</td><td>{details}</td><td>{ip}</td><td>{time}</td><td><form method=post action=/admin/reports style=margin:0><input type=hidden name=idx value=\"{idx}\"><button type=submit class=del data-idx=\"{idx}\">Remove</button></form></td></tr>", file=htmlescape::encode_minimal(&r.file), reason=htmlescape::encode_minimal(&r.reason), details=htmlescape::encode_minimal(&r.details), ip=htmlescape::encode_minimal(&r.ip), time=r.time, idx=idx));
     }
     let tpl_path = state.static_dir.join("admin_reports.html");
-    match fs::read(&tpl_path).await { Ok(bytes)=> { let mut body=String::from_utf8_lossy(&bytes).into_owned(); body=body.replace("{{REPORT_ROWS}}", &rows); (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html")], body).into_response() }, Err(_)=> json_error(StatusCode::NOT_FOUND, "missing_template", "admin reports template missing") }
+    match fs::read(&tpl_path).await {
+        Ok(bytes) => {
+            let mut body = String::from_utf8_lossy(&bytes).into_owned();
+            body = body.replace("{{REPORT_ROWS}}", &rows);
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "text/html")],
+                body,
+            )
+                .into_response()
+        }
+        Err(_) => json_error(
+            StatusCode::NOT_FOUND,
+            "missing_template",
+            "admin reports template missing",
+        ),
+    }
 }
 
 #[axum::debug_handler]
-pub async fn admin_report_delete_handler(State(state): State<AppState>, headers: HeaderMap, Form(frm): Form<AdminReportDeleteForm>) -> Response {
-    if let Some(tok)=get_cookie(&headers, "adm") { if !state.is_admin(&tok).await { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); } } else { return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required"); }
+pub async fn admin_report_delete_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(frm): Form<AdminReportDeleteForm>,
+) -> Response {
+    if let Some(tok) = get_cookie(&headers, "adm") {
+        if !state.is_admin(&tok).await {
+            return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+        }
+    } else {
+        return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
+    }
     let idx = frm.idx;
     {
         let mut reports = state.reports.write().await;
-        if idx < reports.len() { reports.remove(idx); }
+        if idx < reports.len() {
+            reports.remove(idx);
+        }
     }
     state.persist_reports().await;
     let hv = HeaderValue::from_static("/admin/reports");
@@ -645,16 +1301,25 @@ pub async fn simple_upload_handler(
     }
 
     if files_to_process.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "no_files", "no files were uploaded");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "no_files",
+            "no files were uploaded",
+        );
     }
 
     let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
     let mut saved_files = Vec::new();
 
     for (original_name, data) in &files_to_process {
+        let now = now_secs();
         if data.len() as u64 > max_file_bytes() {
             continue;
         }
+        // Compute SHA-256 hash
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(&data);
+        let hash = format!("{:x}", hasher.finalize());
         let storage_name = make_storage_name(original_name.as_deref());
         if is_forbidden_extension(&storage_name) {
             continue;
@@ -665,8 +1330,14 @@ pub async fn simple_upload_handler(
                 owner: ip.clone(),
                 expires,
                 original: original_name.clone().unwrap_or_default(),
+                created: now,
+                hash: hash.clone(),
             };
-            state.owners.write().await.insert(storage_name.clone(), meta);
+            state
+                .owners
+                .write()
+                .await
+                .insert(storage_name.clone(), meta);
             saved_files.push(storage_name);
         }
     }
@@ -675,8 +1346,6 @@ pub async fn simple_upload_handler(
     spawn_integrity_check(state.clone());
 
     let truncated = saved_files.len() < files_to_process.len();
-    let remaining = files_to_process.len() - saved_files.len();
-
     // For the simple UI, redirect back to /simple with a message
     let msg = if saved_files.is_empty() {
         "No files uploaded."
@@ -693,7 +1362,7 @@ pub async fn simple_delete_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<ClientAddr>,
     headers: HeaderMap,
-    Form(frm): Form<SimpleDeleteForm>,
+    Query(frm): Query<SimpleDeleteForm>,
 ) -> Response {
     let ip = real_client_ip(&headers, &addr);
     let fname = frm.f.trim();
@@ -709,11 +1378,17 @@ pub async fn simple_delete_handler(
             let path = state.upload_dir.join(fname);
             let _ = fs::remove_file(&path).await;
             state.persist_owners().await;
-            let url = format!("/simple?m={}", urlencoding::encode("File deleted."));
+            let url = format!(
+                "/simple?m={}",
+                urlencoding::encode("File Deleted Successfully.")
+            );
             (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
-        },
+        }
         _ => {
-            let url = format!("/simple?m={}", urlencoding::encode("File not found or not owned by you."));
+            let url = format!(
+                "/simple?m={}",
+                urlencoding::encode("File not found or not owned by you.")
+            );
             (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
         }
     }
@@ -726,9 +1401,15 @@ pub async fn add_cache_headers(req: axum::http::Request<Body>, next: Next) -> Re
     if (path.starts_with("/css/") || path.starts_with("/js/")) && !path.contains("../") {
         let headers = resp.headers_mut();
         let max_age = 86400; // 1 day (filenames not fingerprinted)
-        headers.insert(CACHE_CONTROL, HeaderValue::from_str(&format!("public, max-age={max_age}")).unwrap());
+        headers.insert(
+            CACHE_CONTROL,
+            HeaderValue::from_str(&format!("public, max-age={max_age}")).unwrap(),
+        );
         let exp_time = SystemTime::now() + Duration::from_secs(max_age as u64);
-        headers.insert(EXPIRES, HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap());
+        headers.insert(
+            EXPIRES,
+            HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap(),
+        );
     }
     resp
 }
@@ -738,23 +1419,33 @@ pub fn build_router(state: AppState) -> Router {
     let css_service = ServeDir::new(static_root.join("css"));
     let js_service = ServeDir::new(static_root.join("js"));
     Router::new()
+        .route("/checkhash", get(checkhash_handler))
         .route("/upload", post(upload_handler))
         .route("/list", get(list_handler))
         .route("/mine", get(list_handler))
         .route("/f/{file}", get(fetch_file_handler).delete(delete_handler))
         .route("/d/{file}", delete(delete_handler))
-        .route("/report", get(report_page_handler_i18n).post(report_handler))
+        .route(
+            "/report",
+            get(report_page_handler_i18n).post(report_handler),
+        )
         .route("/unban", post(unban_post_handler))
         .route("/healthz", get(|| async { "ok" }))
         .route("/simple", get(simple_handler))
         .route("/simple/upload", post(simple_upload_handler))
-    .route("/simple/delete", post(simple_delete_handler))
+        .route("/simple/delete", get(simple_delete_handler))
         .route("/auth", get(auth_get_handler).post(auth_post_handler))
         .route("/isadmin", get(is_admin_handler))
         .route("/debug-ip", get(debug_ip_handler))
         .route("/admin/ban", get(ban_page_handler).post(ban_post_handler))
-        .route("/admin/files", get(admin_files_handler).post(admin_file_delete_handler))
-        .route("/admin/reports", get(admin_reports_handler).post(admin_report_delete_handler))
+        .route(
+            "/admin/files",
+            get(admin_files_handler).post(admin_file_delete_handler),
+        )
+        .route(
+            "/admin/reports",
+            get(admin_reports_handler).post(admin_report_delete_handler),
+        )
         .route("/faq", get(faq_handler))
         .route("/terms", get(terms_handler))
         .route("/api/config", get(config_handler))

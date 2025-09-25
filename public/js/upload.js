@@ -1,5 +1,6 @@
 // js/upload.js
 
+
 import { list } from './ui.js';
 import { fmtBytes, showSnack, copyToClipboard, flashCopied, ttlCodeSeconds } from './utils.js';
 import { getTTL } from './ui.js';
@@ -135,19 +136,81 @@ export const uploadHandler = {
     return inp;
   },
 
-  async uploadSequential() {
+
+  // --- Concurrency Patch ---
+  async uploadConcurrent(concurrency = 4) {
     if (this.uploading) return;
     this.uploading = true;
+    const allFiles = [];
     for (const batch of this.batches) {
-      for (let i = 0; i < batch.files.length; i++) {
-        const f = batch.files[i];
-        if (!f || f.removed || f.done || f.deleting) continue;
-        await this.uploadOne(f, batch);
+      for (const f of batch.files) {
+        if (!f.removed && !f.done && !f.deleting) {
+          allFiles.push({ f, batch });
+        }
       }
+    }
+    let idx = 0;
+    const uploadNext = async () => {
+      if (idx >= allFiles.length) return;
+      const { f, batch } = allFiles[idx++];
+      // Calculate hash and check with server before uploading
+      try {
+        f.hash = await this.calculateFileHash(f.file);
+        const exists = await this.checkFileHash(f.hash);
+        if (exists) {
+          showSnack("Duplicate file: already uploaded.");
+          f.done = true;
+          f.removed = true;
+          if (f.container) {
+            f.container.classList.add("dupe-remove");
+            setTimeout(() => {
+              if (f.container && f.container.parentNode) {
+                f.container.parentNode.removeChild(f.container);
+              }
+            }, 400);
+          }
+          return uploadNext();
+        }
+      } catch (e) {
+        // If hash fails, proceed with upload anyway
+        console.warn("Hash check failed, proceeding with upload", e);
+      }
+      await this.uploadOne(f, batch);
+      await uploadNext();
+    };
+    // Start N concurrent uploads
+    const workers = [];
+    for (let i = 0; i < concurrency; i++) {
+      workers.push(uploadNext());
+    }
+    await Promise.all(workers);
+    // Clean up removed files and empty batches
+    for (const batch of this.batches) {
       batch.files = batch.files.filter((f) => !f.removed);
     }
     this.batches = this.batches.filter((b) => b.files.length);
     this.uploading = false;
+  },
+
+  async calculateFileHash(file) {
+    // Returns a hex string of the SHA-256 hash of the file using Web Crypto API
+    const buffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    // Convert buffer to hex string
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  },
+
+  async checkFileHash(hash) {
+    // Returns true if file with this hash exists on server
+    try {
+      const resp = await fetch(`/checkhash?hash=${encodeURIComponent(hash)}`);
+      if (!resp.ok) return false;
+      const data = await resp.json();
+      return !!data.exists;
+    } catch {
+      return false;
+    }
   },
 
   uploadOne(f, batch) {
@@ -172,6 +235,60 @@ export const uploadHandler = {
       xhr.onload = () => {
         if (finished || f.canceled) return resolve();
         finished = true;
+        // Handle 409 Conflict (duplicate file hash)
+        if (xhr.status === 409) {
+          try {
+            showSnack("Duplicate file: already uploaded.");
+          } catch {}
+          // Try to get the original file hash from response
+          let origHash = null;
+          try {
+            const data = xhr.response || JSON.parse(xhr.responseText || "{}{}");
+            origHash = data.hash || data.file_hash || (data.files && data.files[0]);
+          } catch {}
+          // Highlight the original file in the list if possible
+          if (origHash) {
+            // Try to find a file entry in any batch with this hash as remoteName
+            let found = null;
+            for (const b of this.batches) {
+              for (const fileObj of b.files) {
+                if (fileObj.remoteName === origHash) {
+                  found = fileObj;
+                  break;
+                }
+              }
+              if (found) break;
+            }
+            if (found && found.container) {
+              found.container.classList.add("dupe-highlight");
+              setTimeout(() => found.container.classList.remove("dupe-highlight"), 1800);
+            }
+          }
+          // Animate removal of this file from the list
+          if (f.container) {
+            f.container.classList.add("dupe-remove");
+            setTimeout(() => {
+              if (f.container && f.container.parentNode) {
+                f.container.parentNode.removeChild(f.container);
+              }
+              f.removed = true;
+              // Remove from batch.files
+              batch.files = batch.files.filter(x => x !== f);
+              // If group batch and now empty, remove groupLi
+              if (batch.isGroup && batch.files.length === 0 && batch.groupLi) {
+                batch.groupLi.classList.add("dupe-remove");
+                setTimeout(() => {
+                  batch.groupLi?.parentNode?.removeChild(batch.groupLi);
+                }, 400);
+              }
+            }, 400);
+          } else {
+            f.removed = true;
+            batch.files = batch.files.filter(x => x !== f);
+          }
+          deleteHandler.updateDeleteButton(f);
+          return resolve();
+        }
         const ok = xhr.status >= 200 && xhr.status < 300;
         if (ok) {
           if (f.barSpan) {
@@ -183,19 +300,12 @@ export const uploadHandler = {
           }
           let rel = null;
           try {
-            const data = xhr.response || JSON.parse(xhr.responseText || "{}");
+            const data = xhr.response || JSON.parse(xhr.responseText || "{}{}");
             rel = data.files && data.files[0];
           } catch {}
           if (rel) {
             f.remoteName = rel.startsWith("f/") ? rel.slice(2) : rel;
             ownedHandler.addOwned(f.remoteName); // Add to owned list
-            const ttlSeconds = ttlCodeSeconds(ttlVal);
-            const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
-            ownedHandler.ownedMeta.set(f.remoteName, {
-              expires: exp,
-              total: ttlSeconds,
-              original: f.file?.name || "",
-            });
           }
           f.done = true;
           deleteHandler.updateDeleteButton(f);
@@ -234,6 +344,7 @@ export const uploadHandler = {
   },
 
   autoUpload() {
-    this.uploadSequential();
+    // Use concurrent upload with a limit (e.g., 4)
+    this.uploadConcurrent(4);
   },
 };

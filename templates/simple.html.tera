@@ -5,12 +5,21 @@
 <html lang="{{ lang | default(value='en') }}">
   <head>
     <meta charset="utf-8" />
+    {% if query.m is defined and query.m == "File Deleted Successfully." %}
+      <meta http-equiv="refresh" content="1.2;url=/simple">
+    {% endif %}
+
     <title>{{ t.simple_title | default(value='Orange JuiceBox') }}</title>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <link rel="stylesheet" href="/css/simple.css" />
     <link rel="icon" href="/img/favicon.webp" type="image/webp" />
   </head>
   <body>
+    {% if query.m is defined and query.m == "File Deleted Successfully." %}
+      <div class="status-message status-success" id="delete-success-msg">
+        {{ t.simple_delete_success | default(value="File successfully deleted.") }}
+      </div>
+    {% endif %}
     <nav class="skip-links" aria-label="Skip links">
       <a href="#mainContent" class="skip-link">{{ t.skip_main | default(value="Skip to main content") }}</a>
     </nav>
@@ -43,16 +52,6 @@
       <div class="status-message status-success" id="delete-success-msg">
         {{ MESSAGE }}
       </div>
-      <script>
-        // If this is a delete success, auto-refresh after 1.2s
-        if (window.location.search.includes('deleted=1')) {
-          setTimeout(() => {
-            const url = new URL(window.location.href);
-            url.searchParams.delete('deleted');
-            window.location.replace(url.toString());
-          }, 1200);
-        }
-      </script>
     {% endif %}
 
       <fieldset>

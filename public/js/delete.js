@@ -12,11 +12,11 @@ export const deleteHandler = {
       f.deleteBtn.textContent = "…";
       f.deleteBtn.title = "Deleting...";
     } else if (!f.remoteName) {
-      f.deleteBtn.textContent = "x";
+      f.deleteBtn.textContent = "❌";
       f.deleteBtn.disabled = false;
       f.deleteBtn.title = "Remove (not uploaded)";
     } else {
-      f.deleteBtn.textContent = "❌";
+      f.deleteBtn.textContent = "🗑️";
       f.deleteBtn.disabled = false;
       f.deleteBtn.title = "Delete from server";
     }

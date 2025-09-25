@@ -33,11 +33,18 @@ async fn main() -> anyhow::Result<()> {
     let owners_map: HashMap<String, FileMeta> = match fs::read(&*metadata_path).await {
         Ok(data) => {
             if let Ok(old_map) = serde_json::from_slice::<HashMap<String,String>>(&data) {
-                old_map.into_iter().map(|(k,v)| (k, FileMeta { owner: v, expires: now_secs() + ttl_to_duration("3d").as_secs(), original: String::new() })).collect()
+                old_map.into_iter().map(|(k,v)| (k, FileMeta {
+                    owner: v,
+                    expires: now_secs() + ttl_to_duration("3d").as_secs(),
+                    original: String::new(),
+                    created: now_secs(),
+                    hash: String::new(), // legacy files have no hash, so set empty
+                })).collect()
             } else { serde_json::from_slice(&data).unwrap_or_default() }
         }
         Err(_) => HashMap::new(),
     };
+
 
     let reports_vec: Vec<ReportRecord> = match fs::read(&*reports_path).await {
         Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),

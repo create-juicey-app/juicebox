@@ -1,3 +1,26 @@
+/* Highlight for duplicate file (409) */
+.dupe-highlight {
+  animation: dupeHighlight 1.2s cubic-bezier(.4,1.6,.4,1) 1;
+  background: linear-gradient(90deg, #ffb347 0%, #ffcc80 100%) !important;
+  box-shadow: 0 0 0 2px #ff9800, 0 2px 12px #ff980055;
+}
+@keyframes dupeHighlight {
+  0% { background: #fffbe6; box-shadow: 0 0 0 0 #ff9800; }
+  30% { background: #ffb347; box-shadow: 0 0 0 4px #ff9800; }
+  70% { background: #ffcc80; box-shadow: 0 0 0 2px #ff9800; }
+  100% { background: inherit; box-shadow: none; }
+}
+
+/* Animate removal for duplicate file (409) */
+.dupe-remove {
+  animation: dupeRemove .4s cubic-bezier(.4,1.6,.4,1) forwards;
+  opacity: 1;
+}
+@keyframes dupeRemove {
+  0% { opacity: 1; transform: scale(1) translateX(0); }
+  60% { opacity: .5; transform: scale(.98) translateX(8px); }
+  100% { opacity: 0; transform: scale(.95) translateX(40px); height: 0; margin: 0; padding: 0; }
+}
 /* basic placeholder css */
 :root {
   --accent: #ff9800;
@@ -1534,3 +1557,8 @@ button.primary:active {
 @media (max-width: 600px) {
   #langForm { margin:1rem 0 0 0; }
 }
+
+.ttl-row { display: flex; align-items: center; gap: 0.5em; position: relative; }
+.ttl-bar-wrap { position: absolute; right: 0; top: 50%; transform: translateY(-50%); height: 4px; background: #332822; border-radius: 2px; overflow: hidden; width: 80px; z-index: 2; }
+.ttl-bar { display: block; height: 100%; background: #ff9800; border-radius: 2px; transition: width 0.5s cubic-bezier(.4,2,.6,1); min-width: 0; }
+.ttl-row .ttl { z-index: 1; }

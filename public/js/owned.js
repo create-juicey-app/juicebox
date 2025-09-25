@@ -6,6 +6,19 @@ import { copyToClipboard, flashCopied } from './utils.js';
 import { deleteHandler } from './delete.js';
 
 export const ownedHandler = {
+  /**
+   * Highlights an owned file chip by name (adds a CSS class for a moment)
+   * @param {string} name
+   */
+  highlightOwned(name) {
+    if (!name) return;
+    const chip = ownedList && ownedList.querySelector(`.owned-chip[data-name="${name}"]`);
+    if (chip) {
+      chip.classList.add("highlight");
+      setTimeout(() => chip.classList.remove("highlight"), 1800);
+      chip.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  },
   ownedMeta: new Map(),
   ownedCache: new Set(),
   ownedInitialRender: false,
@@ -15,6 +28,7 @@ export const ownedHandler = {
       const r = await fetch("/mine");
       if (!r.ok) return;
       const data = await r.json();
+      console.log('[owned.js] /mine response:', data);
       if (data && Array.isArray(data.files)) {
         data.files.forEach((f) => this.addOwned(f.replace(/^f\//, "")));
         if (Array.isArray(data.metas)) {
@@ -23,12 +37,15 @@ export const ownedHandler = {
             this.ownedMeta.set(name, {
               expires: m.expires,
               original: m.original || "",
+              total: m.total,
+              set: m.set,
             });
           });
         }
+        console.log('[owned.js] ownedMeta after /mine:', Array.from(this.ownedMeta.entries()));
         this.renderOwned();
       }
-    } catch {}
+    } catch (e) { console.error('[owned.js] loadExisting error:', e); }
   },
 
   renderOwned() {
@@ -51,32 +68,73 @@ export const ownedHandler = {
       return;
     }
     this.showOwnedPanel();
-    const nowSec = Date.now() / 1000;
+  const nowSec = Date.now() / 1000;
+  console.log('[owned.js] renderOwned: nowSec (client time):', nowSec, 'Date:', new Date(nowSec * 1000).toISOString());
     names.sort();
+    // Helper for formatting remaining time, matches other.js
+    function formatRemain(sec) {
+      if (sec <= 0) return "expired";
+      if (sec < 60) return `${Math.floor(sec)}s`;
+      if (sec < 3600) return `${Math.floor(sec / 60)}m ${Math.floor(sec % 60)}s`;
+      if (sec < 86400) return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+      return `${Math.floor(sec / 86400)}d ${Math.floor((sec % 86400) / 3600)}h`;
+    }
     names.forEach((n) => {
       if (existing.has(n)) return; // Don't re-render existing, just update in countdown
       const meta = this.ownedMeta.get(n) || {};
       const exp = meta.expires || -1;
       const remain = exp - nowSec;
-      const fmtRemain = (sec) => (sec <= 0 ? "expired" : "...");
+      console.log(`[owned.js] File: ${n}, meta:`, meta, 'expires:', exp, '(', new Date(exp * 1000).toISOString(), ')', 'remain:', remain);
 
       const chip = document.createElement("div");
       chip.className = "owned-chip";
       chip.dataset.name = n;
       if (exp >= 0) chip.dataset.exp = exp;
       if (meta.total) chip.dataset.total = meta.total;
-      
+
       const displayName = meta.original?.trim() || n;
+
       const titleFull = displayName === n ? n : `${displayName} (${n})`;
 
-      chip.innerHTML = `<div class="top"><div class="name" title="${escapeHtml(titleFull)}">${escapeHtml(displayName)}</div><div class="actions"></div></div><div class="ttl">${fmtRemain(remain)}</div>`;
-      
+      // Calculate progress percent (100 = just uploaded, 0 = expired), always using (exp - set) as total duration
+      let percent = 100;
+      const set = typeof meta.set === 'number' ? meta.set : (meta.set ? Number(meta.set) : null);
+      if (set !== null && !isNaN(set) && exp > set) {
+        const total = exp - set;
+        const remain = exp - nowSec;
+        percent = (remain / total) * 100;
+        percent = Math.max(0, Math.min(100, percent));
+        percent = Math.round(percent * 100) / 100;
+        console.log(`[owned.js] Progress DEBUG for ${n}: nowSec=${nowSec}, set=${set}, exp=${exp}, total=${total}, remain=${remain}, percent=${percent}`);
+      } else if (remain <= 0) {
+        percent = 0;
+        console.log(`[owned.js] Progress expired for ${n}: remain=${remain}, percent=${percent}`);
+      }
+      console.log(`[owned.js] FINAL percent for ${n}:`, percent, 'set:', set, 'exp:', exp, 'nowSec:', nowSec);
+      let barWidth = `${percent}%`;
+      chip.innerHTML = `<div class="top"><div class="name" title="${escapeHtml(titleFull)}">${escapeHtml(displayName)}</div><div class="actions"></div></div><div class="ttl-row"><span class="ttl">${formatRemain(remain)}</span><span class="ttl-bar-wrap"><span class="ttl-bar" style="width:${barWidth};"></span></span></div>`;
+      chip.style.position = "relative";
+
+      // Add input box with direct link
+      const linkInput = document.createElement("input");
+      linkInput.type = "text";
+      linkInput.readOnly = true;
+      linkInput.className = "link-input";
+      linkInput.value = `${location.origin}/f/${n}`;
+      linkInput.title = "Click to copy direct link";
+      linkInput.setAttribute("aria-label", "Direct file link (click to copy)");
+      linkInput.addEventListener("click", () => {
+        linkInput.select();
+        copyToClipboard(linkInput.value).then(() => flashCopied());
+      });
+      chip.appendChild(linkInput);
+
       const copyBtn = document.createElement("button");
       copyBtn.className = "small";
       copyBtn.textContent = "📋";
       copyBtn.title = "Copy direct link";
       copyBtn.addEventListener("click", () => copyToClipboard(`${location.origin}/f/${n}`).then(() => flashCopied()));
-      
+
       const delBtn = document.createElement("button");
       delBtn.className = "small";
       delBtn.textContent = "❌";
@@ -130,6 +188,8 @@ export const ownedHandler = {
             this.ownedMeta.set(m.file.replace(/^f\//, ""), {
               expires: m.expires,
               original: m.original || "",
+              total: m.total,
+              set: m.set,
             })
           );
         }
@@ -139,8 +199,9 @@ export const ownedHandler = {
   },
 
   addOwned(remoteName) {
-    if (!remoteName || this.ownedCache.has(remoteName)) return;
-    this.ownedCache.add(remoteName);
-    this.renderOwned();
+  if (!remoteName || this.ownedCache.has(remoteName)) return;
+  this.ownedCache.add(remoteName);
+  // Only refresh from server to get canonical expiration (and render)
+  this.refreshOwned();
   },
 };
