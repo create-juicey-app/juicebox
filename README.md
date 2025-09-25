@@ -6,17 +6,6 @@ Juicebox is a lightweight, high-speed file hosting and sharing service inspired 
 
 ---
 
-## Features
-
-- 🚀 **Fast Uploads**: Optimized for speed and performance.
-- 🔗 **Direct Hotlinking**: Instantly share files with direct links.
-- 🗂️ **Multiple File Types**: Supports images, videos, documents, and more.
-- 🔒 **Privacy-Oriented**: Minimal tracking, no analytics by default.
-- 🖥️ **Simple Web UI**: Everything is served and managed by the backend.
-- ⚡ **API Support**: Easily integrate file upload and sharing via API.
-
----
-
 ## Getting Started
 
 ### Prerequisites
