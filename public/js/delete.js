@@ -1,8 +1,8 @@
 // js/delete.js
 
-import { animateRemove } from './utils.js';
-import { uploadHandler } from './upload.js';
-import { ownedHandler } from './owned.js';
+import { animateRemove } from "./utils.js";
+import { uploadHandler } from "./upload.js";
+import { ownedHandler } from "./owned.js";
 
 export const deleteHandler = {
   updateDeleteButton(f) {
@@ -23,15 +23,16 @@ export const deleteHandler = {
   },
 
   removeGroupedEntry(batch, f) {
-    f.removed = true;
+    // Remove file from batch.files directly
+    batch.files = batch.files.filter((x) => x !== f);
     const finalize = () => {
-      batch.files = batch.files.filter((x) => !x.removed);
       if (!batch.files.length) {
-        // markGroupEmpty(batch); // This function is complex, simplified for now
         animateRemove(batch.groupLi);
-        uploadHandler.batches = uploadHandler.batches.filter(b => b !== batch);
+        uploadHandler.batches = uploadHandler.batches.filter(
+          (b) => b !== batch
+        );
       } else {
-        // updateGroupHeader(batch);
+        // Optionally update group header/UI here if needed
       }
     };
     if (f.container) {
@@ -44,13 +45,17 @@ export const deleteHandler = {
     if (!f.remoteName) {
       if (f.xhr) {
         f.canceled = true;
-        try { f.xhr.abort(); } catch {}
+        try {
+          f.xhr.abort();
+        } catch {}
       }
       if (f.container) {
         animateRemove(f.container, () => {
           batch.files = batch.files.filter((x) => x !== f);
           if (!batch.files.length) {
-            uploadHandler.batches = uploadHandler.batches.filter((b) => b !== batch);
+            uploadHandler.batches = uploadHandler.batches.filter(
+              (b) => b !== batch
+            );
           }
         });
       }
@@ -69,11 +74,17 @@ export const deleteHandler = {
           ownedHandler.ownedCache.delete(f.remoteName);
           ownedHandler.ownedMeta.delete(f.remoteName);
           ownedHandler.renderOwned();
-          if (f.container) {
+          this.removeFromUploads(f.remoteName); // <-- Ensure removal from upload section
+          // Always use removeGroupedEntry if batch and groupLi exist
+          if (batch && batch.groupLi) {
+            this.removeGroupedEntry(batch, f);
+          } else if (f.container) {
             animateRemove(f.container, () => {
               batch.files = batch.files.filter((x) => x !== f);
               if (!batch.files.length) {
-                uploadHandler.batches = uploadHandler.batches.filter((b) => b !== batch);
+                uploadHandler.batches = uploadHandler.batches.filter(
+                  (b) => b !== batch
+                );
               }
             });
           }
@@ -104,7 +115,9 @@ export const deleteHandler = {
             animateRemove(f.container, () => {
               batch.files = batch.files.filter((x) => x !== f);
               if (!batch.files.length) {
-                uploadHandler.batches = uploadHandler.batches.filter((b) => b !== batch);
+                uploadHandler.batches = uploadHandler.batches.filter(
+                  (b) => b !== batch
+                );
               }
             });
           }
