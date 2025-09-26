@@ -338,6 +338,13 @@ export const uploadHandler = {
             }
           }
         } else {
+          // Show error message from server if available
+          let msg = "Upload failed.";
+          try {
+            const err = xhr.response || JSON.parse(xhr.responseText || "{}{}");
+            if (err && err.message) msg = err.message;
+          } catch {}
+          showSnack(msg);
           f.container?.classList.add("error");
           deleteHandler.updateDeleteButton(f);
         }

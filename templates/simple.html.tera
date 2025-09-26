@@ -9,10 +9,11 @@
       <meta http-equiv="refresh" content="1.2;url=/simple">
     {% endif %}
 
-    <title>{{ t.simple_title | default(value='Orange JuiceBox') }}</title>
+  <title>{{ t.simple_title | default(value='Orange JuiceBox') }}</title>
+  <meta name="description" content="{{ t.simple_meta_description | default(value='Simple, high-speed file uploader and sharing service. No account required. Secure, fast, and easy file hosting.') }}" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <link rel="stylesheet" href="/css/simple.css" />
-    <link rel="icon" href="/img/favicon.webp" type="image/webp" />
+    <link rel="icon" href="/img/favicon.png" type="image/png" />
   </head>
   <body>
     {% if query.m is defined and query.m == "File Deleted Successfully." %}
@@ -24,8 +25,9 @@
       <a href="#mainContent" class="skip-link">{{ t.skip_main | default(value="Skip to main content") }}</a>
     </nav>
     <h1 class="page-title">{{ t.simple_title | default(value='Orange JuiceBox') }}</h1>
+    <hr>
     <p id="mainDesc" class="lead">{{ t.simple_lead }}</p>
-    
+    <br>
     <form method="get" action="/simple" aria-label="Language selector (no JavaScript)" class="lang-form">
       <label for="langSelectSimple" id="langLabelSimple" class="lang-label">
         <span aria-hidden="true" class="lang-icon">🌐</span>
@@ -38,9 +40,9 @@
       </label>
       <button type="submit" class="lang-btn">OK</button>
     </form>
-    
+    <hr>
+    <h2 id="mainContent">{{ t.simple_upload_heading | default(value="Upload Files") }}</h2>
     <form
-      id="mainContent"
       class="upload"
       method="post"
       enctype="multipart/form-data"
@@ -53,11 +55,10 @@
         {{ MESSAGE }}
       </div>
     {% endif %}
-
       <fieldset>
-        
-        <label for="file">{{ t.simple_files_label }}</label>
-        <input id="file" type="file" name="file" multiple required />
+        <legend>{{ t.simple_upload_legend | default(value="Select files to upload") }}</legend>
+        <label for="file">{{ t.simple_files_label }}</label><br>
+        <input id="file" type="file" name="file" multiple required /><br>
         <div class="ttl-box">
           <label for="ttl" class="ttl-label">{{ t.retention }}</label>
           <select name="ttl" id="ttl">
@@ -71,16 +72,14 @@
           </select>
           <span class="note-extra">{{ t.auto_delete }}</span>
         </div>
+        <br>
         <button class="primary" type="submit">{{ t.simple_upload_btn }}</button>
       </fieldset>
     </form>
-    <div
-      class="files-panel"
-      role="region"
-      aria-label="{{ t.simple_files_panel_aria }}"
-    >
+    <hr>
+    <div class="files-panel" role="region" aria-label="{{ t.simple_files_panel_aria }}">
       <h2 class="files-heading">{{ t.your_files }}</h2>
-      <table class="files-table" role="table" aria-describedby="tableNote">
+      <table class="files-table" role="table" aria-describedby="tableNote" border="1" cellpadding="2" cellspacing="0" style="border-collapse:collapse;">
         <thead>
           <tr>
             <th>{{ t.simple_table_name }}</th>
@@ -94,9 +93,11 @@
           {% endif %}
         </tbody>
       </table>
+      <br>
       <p class="note" id="tableNote">{{ t.simple_table_note }}</p>
       <p class="note">{{ t.privacy_note }}</p>
     </div>
+    <hr>
     <p class="note">{{ t.simple_return | safe }}</p>
 
     <footer

@@ -1,5 +1,6 @@
 // --- CheckHash API for client-side deduplication ---
 use axum::extract::Query as AxumQuery;
+use mime_guess::mime;
 
 #[derive(Deserialize)]
 pub struct CheckHashQuery {
@@ -169,7 +170,10 @@ pub async fn upload_handler(
     };
 
     let mut ttl_code = "24h".to_string();
+    // --- forbidden file check and file collection ---
     let mut files_to_process = Vec::new();
+    let mut pending_files = Vec::new();
+    let mut forbidden_error: Option<String> = None;
 
     while let Some(field) = multipart.next_field().await.unwrap() {
         let name = if let Some(name) = field.name() {
@@ -177,7 +181,6 @@ pub async fn upload_handler(
         } else {
             continue;
         };
-
         if name == "ttl" {
             if let Ok(data) = field.bytes().await {
                 if let Ok(s) = std::str::from_utf8(&data) {
@@ -186,15 +189,66 @@ pub async fn upload_handler(
             }
             continue;
         }
-
         if name.starts_with("file") {
             let original_name = field.file_name().map(|s| s.to_string());
+            let content_type = field.content_type().map(|m| m.to_string());
             if let Ok(data) = field.bytes().await {
                 if !data.is_empty() {
-                    files_to_process.push((original_name, data));
+                    pending_files.push((original_name, content_type, data));
                 }
             }
         }
+    }
+
+    let mut has_forbidden = false;
+    for (original_name, _content_type, data) in &pending_files {
+        // Check forbidden by extension (filename)
+        if let Some(orig) = original_name {
+            if is_forbidden_extension(orig) {
+                tracing::warn!(?original_name, "Upload rejected: forbidden file extension");
+                forbidden_error = Some("File type not allowed (forbidden extension)".to_string());
+                has_forbidden = true;
+                break;
+            }
+        }
+        // Check forbidden by content (infer)
+        let is_forbidden_content = if let Some(kind) = infer::get(&data) {
+            let ext = kind.extension();
+            crate::util::FORBIDDEN_EXTENSIONS.contains(&ext)
+        } else {
+            false
+        };
+        if is_forbidden_content {
+            tracing::warn!(
+                ?original_name,
+                "Upload rejected: forbidden file content detected by infer"
+            );
+            forbidden_error = Some("File type not allowed (forbidden content)".to_string());
+            has_forbidden = true;
+            break;
+        }
+    }
+
+    for (original_name, _content_type, data) in pending_files {
+        files_to_process.push((original_name, data));
+    }
+
+    // Priority: forbidden filetype error > no files error
+    if has_forbidden {
+        let msg = forbidden_error.unwrap_or_else(|| "File type not allowed".to_string());
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "bad_filetype",
+            match msg.as_str() {
+                "File type not allowed (forbidden content)" => {
+                    "File type not allowed (forbidden content)"
+                }
+                "File type not allowed (forbidden MIME type)" => {
+                    "File type not allowed (forbidden MIME type)"
+                }
+                _ => "File type not allowed",
+            },
+        );
     }
 
     if files_to_process.is_empty() {
@@ -205,6 +259,7 @@ pub async fn upload_handler(
         );
     }
 
+    // --- file saving and duplicate detection ---
     let now = now_secs();
     let ttl = ttl_to_duration(&ttl_code).as_secs();
     let expires = now + ttl;
@@ -212,8 +267,8 @@ pub async fn upload_handler(
     let mut duplicate_info = None;
 
     for (original_name, data) in &files_to_process {
-        let now = now_secs();
         if data.len() as u64 > max_file_bytes() {
+            tracing::warn!(ip = %ip, ?original_name, size = data.len(), "Upload rejected: file too large");
             continue;
         }
         // Compute SHA-256 hash
@@ -222,29 +277,33 @@ pub async fn upload_handler(
         let hash = format!("{:x}", hasher.finalize());
         // Check for duplicate in file_owners.json
         if let Some(entry) = state.owners.iter().find(|entry| entry.value().hash == hash) {
-            // Duplicate found, return info and skip upload
-            duplicate_info = Some(json!({
+            tracing::info!(ip = %ip, ?original_name, file = %entry.key(), "Duplicate upload detected");
+            duplicate_info = Some(serde_json::json!({
                 "duplicate": true,
                 "file": entry.key(),
                 "meta": entry.value()
             }));
-            break;
+            continue;
         }
         let storage_name = make_storage_name(original_name.as_deref());
         if is_forbidden_extension(&storage_name) {
+            tracing::warn!(ip = %ip, ?original_name, file = %storage_name, "Upload rejected: forbidden extension");
             continue;
         }
         let path = state.upload_dir.join(&storage_name);
         if fs::write(&path, data).await.is_ok() {
             let meta = FileMeta {
-                owner: ip.clone(),
-                expires,
-                original: original_name.clone().unwrap_or_default(),
-                created: now,
                 hash: hash.clone(),
+                created: now,
+                expires,
+                owner: ip.clone(),
+                original: original_name.clone().unwrap_or_default(),
             };
             state.owners.insert(storage_name.clone(), meta);
+            tracing::info!(ip = %ip, file = %storage_name, size = data.len(), "File uploaded successfully");
             saved_files.push(storage_name);
+        } else {
+            tracing::error!(ip = %ip, file = %storage_name, "Failed to write uploaded file");
         }
     }
 
@@ -1276,6 +1335,8 @@ pub async fn simple_upload_handler(
     let ip = real_client_ip(&headers, &addr);
     let mut ttl_code = "3d".to_string();
     let mut files_to_process = Vec::new();
+    let mut forbidden_error: Option<String> = None;
+    let mut has_forbidden = false;
 
     while let Some(field) = multipart.next_field().await.unwrap() {
         let name = if let Some(name) = field.name() {
@@ -1295,12 +1356,73 @@ pub async fn simple_upload_handler(
 
         if name == "file" || name.starts_with("file") {
             let original_name = field.file_name().map(|s| s.to_string());
+            let content_type = field.content_type().map(|m| m.to_string());
             if let Ok(data) = field.bytes().await {
                 if !data.is_empty() {
+                    // MIME type check against all forbidden extensions
+                    let forbidden_mimes: Vec<mime::Mime> = crate::util::FORBIDDEN_EXTENSIONS
+                        .iter()
+                        .flat_map(|ext| {
+                            mime_guess::from_ext(ext)
+                                .iter()
+                                .filter_map(|m| m.essence_str().parse().ok())
+                        })
+                        .collect();
+                    let mime_type = if let Some(ref ct) = content_type {
+                        ct.parse::<mime::Mime>().ok()
+                    } else if let Some(ref orig) = original_name {
+                        mime_guess::from_path(orig)
+                            .first_raw()
+                            .and_then(|m| m.parse().ok())
+                    } else {
+                        None
+                    };
+                    // Content-based detection using infer
+                    let is_forbidden_content = if let Some(kind) = infer::get(&data) {
+                        let ext = kind.extension();
+                        crate::util::FORBIDDEN_EXTENSIONS.contains(&ext)
+                    } else {
+                        false
+                    };
+                    if is_forbidden_content {
+                        tracing::warn!(
+                            ?original_name,
+                            "Simple upload rejected: forbidden file content detected by infer"
+                        );
+                        forbidden_error = Some("File type not allowed (forbidden content)".to_string());
+                        has_forbidden = true;
+                        break;
+                    }
+                    if let Some(mime) = &mime_type {
+                        if forbidden_mimes.iter().any(|forb| forb == mime) {
+                            tracing::warn!(?original_name, mime = %mime, "Simple upload rejected: forbidden MIME type");
+                            forbidden_error = Some("File type not allowed (forbidden MIME type)".to_string());
+                            has_forbidden = true;
+                            break;
+                        }
+                    }
                     files_to_process.push((original_name, data));
                 }
             }
         }
+    }
+
+    // Priority: forbidden filetype error > no files error
+    if has_forbidden {
+        let msg = forbidden_error.unwrap_or_else(|| "File type not allowed".to_string());
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "bad_filetype",
+            match msg.as_str() {
+                "File type not allowed (forbidden content)" => {
+                    "File type not allowed (forbidden content)"
+                }
+                "File type not allowed (forbidden MIME type)" => {
+                    "File type not allowed (forbidden MIME type)"
+                }
+                _ => "File type not allowed",
+            },
+        );
     }
 
     if files_to_process.is_empty() {
@@ -1317,6 +1439,7 @@ pub async fn simple_upload_handler(
     for (original_name, data) in &files_to_process {
         let now = now_secs();
         if data.len() as u64 > max_file_bytes() {
+            tracing::warn!(ip = %ip, ?original_name, size = data.len(), "Simple upload rejected: file too large");
             continue;
         }
         // Compute SHA-256 hash
@@ -1325,6 +1448,7 @@ pub async fn simple_upload_handler(
         let hash = format!("{:x}", hasher.finalize());
         let storage_name = make_storage_name(original_name.as_deref());
         if is_forbidden_extension(&storage_name) {
+            tracing::warn!(ip = %ip, ?original_name, file = %storage_name, "Simple upload rejected: forbidden extension");
             continue;
         }
         let path = state.upload_dir.join(&storage_name);
@@ -1337,7 +1461,10 @@ pub async fn simple_upload_handler(
                 hash: hash.clone(),
             };
             state.owners.insert(storage_name.clone(), meta);
+            tracing::info!(ip = %ip, file = %storage_name, size = data.len(), "Simple file uploaded successfully");
             saved_files.push(storage_name);
+        } else {
+            tracing::error!(ip = %ip, file = %storage_name, "Failed to write simple uploaded file");
         }
     }
 

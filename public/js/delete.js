@@ -64,7 +64,7 @@ export const deleteHandler = {
     f.deleting = true;
     this.updateDeleteButton(f);
     fetch("/d/" + encodeURIComponent(f.remoteName), { method: "DELETE" })
-      .then((r) => {
+      .then(async (r) => {
         if (r.ok) {
           ownedHandler.ownedCache.delete(f.remoteName);
           ownedHandler.ownedMeta.delete(f.remoteName);
@@ -78,11 +78,18 @@ export const deleteHandler = {
             });
           }
         } else {
+          let msg = "Delete failed.";
+          try {
+            const err = await r.json();
+            if (err && err.message) msg = err.message;
+          } catch {}
+          showSnack(msg);
           f.deleting = false;
           this.updateDeleteButton(f);
         }
       })
       .catch(() => {
+        showSnack("Delete failed.");
         f.deleting = false;
         this.updateDeleteButton(f);
       });

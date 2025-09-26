@@ -12,6 +12,8 @@ use tera::Tera;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialize tracing subscriber for logging
+    tracing_subscriber::fmt::init();
     // load env (non-fatal)
     let _ = dotenvy::dotenv();
     let production = std::env::var("APP_ENV").map(|v| v.eq_ignore_ascii_case("production")).unwrap_or(false);

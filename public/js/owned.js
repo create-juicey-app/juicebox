@@ -133,12 +133,19 @@ export const ownedHandler = {
       delBtn.textContent = "❌";
       delBtn.title = "Delete file from server";
       delBtn.addEventListener("click", () => {
-        fetch(`/d/${encodeURIComponent(n)}`, { method: "DELETE" }).then((r) => {
+        fetch(`/d/${encodeURIComponent(n)}`, { method: "DELETE" }).then(async (r) => {
           if (r.ok) {
             this.ownedCache.delete(n);
             this.ownedMeta.delete(n);
             deleteHandler.removeFromUploads(n);
             this.renderOwned();
+          } else {
+            let msg = "Delete failed.";
+            try {
+              const err = await r.json();
+              if (err && err.message) msg = err.message;
+            } catch {}
+            showSnack(msg);
           }
         });
       });

@@ -39,7 +39,12 @@ pub struct ErrorBody {
 
 pub fn json_error(status: StatusCode, code: &'static str, message: &'static str) -> Response {
     let body = Json(ErrorBody { code, message });
-    (status, body).into_response()
+    let mut resp = (status, body).into_response();
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    resp
 }
 
 // New ID generator using CUID v2 (fast, shorter) fallback to v1 on error

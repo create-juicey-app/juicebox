@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+infer = "0.15"
+tracing = "0.1"
+tracing-subscriber = "0.3"
 axum = { version = "0.8", features = ["multipart", "macros", "json"] }
 axum-server = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "full", "macros", "fs"] }
