@@ -1,11 +1,10 @@
-mod common {
-}
+mod common {}
 
-use std::{collections::HashMap, sync::Arc, time::SystemTime};
-use tokio::sync::{RwLock, Semaphore};
-use juicebox::state::{AppState, FileMeta, ReportRecord};
+use juicebox::state::{AppState, ReportRecord};
 use juicebox::util::UPLOAD_CONCURRENCY;
+use std::{collections::HashMap, sync::Arc, time::SystemTime};
 use tempfile::TempDir;
+use tokio::sync::{RwLock, Semaphore};
 
 pub fn setup_test_app() -> (AppState, TempDir) {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -30,22 +29,26 @@ pub fn setup_test_app() -> (AppState, TempDir) {
     let mailgun_domain = Some("test.mailgun.org".to_string());
     let report_email_to = Some("to@example.com".to_string());
     let report_email_from = Some("from@example.com".to_string());
-    let (email_tx, _email_rx) = tokio::sync::mpsc::channel::<juicebox::handlers::ReportRecordEmail>(1);
+    let (email_tx, _email_rx) =
+        tokio::sync::mpsc::channel::<juicebox::handlers::ReportRecordEmail>(1);
     let email_tx = Some(email_tx);
-    let tera = Arc::new(tera::Tera::default());
+    // Load templates from the actual templates directory for tests
+    let tera = Arc::new(
+        tera::Tera::new("templates/**/*.tera").expect("Failed to load templates for tests"),
+    );
 
     let state = AppState {
         upload_dir,
         static_dir,
-        metadata_path,
-        owners: Arc::new(RwLock::new(HashMap::<String, FileMeta>::new())),
+        metadata_path: metadata_path.clone(),
+        owners: Arc::new(dashmap::DashMap::new()),
         upload_sem: Arc::new(Semaphore::new(UPLOAD_CONCURRENCY)),
         production: false,
         last_meta_mtime: Arc::new(RwLock::new(SystemTime::UNIX_EPOCH)),
         reports_path,
         reports: Arc::new(RwLock::new(Vec::<ReportRecord>::new())),
         admin_sessions_path,
-        admin_sessions: Arc::new(RwLock::new(HashMap::<String,u64>::new())),
+        admin_sessions: Arc::new(RwLock::new(HashMap::<String, u64>::new())),
         admin_key_path,
         admin_key,
         bans_path,

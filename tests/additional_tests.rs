@@ -1,4 +1,3 @@
-// filepath: /home/juiceydev/juicebox/tests/additional_tests.rs
 mod common;
 
 use axum::{
@@ -109,9 +108,8 @@ async fn test_simple_list_and_delete_flow() {
     let list_html = to_bytes(list_resp.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(list_html.to_vec()).unwrap();
     assert!(html.contains(fname));
-    // delete via simple_delete
     let form = format!("f={}", fname);
-    let del_req = with_conn_ip(Request::builder().method(Method::POST).uri("/simple_delete").header(header::CONTENT_TYPE, "application/x-www-form-urlencoded").body(Body::from(form)).unwrap(), [127,0,0,1], 4000);
+    let del_req = with_conn_ip(Request::builder().method(Method::POST).uri("/simple/delete").header(header::CONTENT_TYPE, "application/x-www-form-urlencoded").body(Body::from(form)).unwrap(), [127,0,0,1], 4000);
     let del_resp = app.clone().oneshot(del_req).await.unwrap();
     assert_eq!(del_resp.status(), StatusCode::SEE_OTHER);
     let loc = del_resp.headers().get(header::LOCATION).unwrap().to_str().unwrap();

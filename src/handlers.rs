@@ -1357,38 +1357,77 @@ pub async fn simple_upload_handler(
     (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
 }
 
+// Accepts query param for GET
 pub async fn simple_delete_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<ClientAddr>,
     headers: HeaderMap,
     Query(frm): Query<SimpleDeleteForm>,
 ) -> Response {
+    handle_simple_delete(state, addr, headers, frm.f).await
+}
+
+// Accepts form data for POST
+#[axum::debug_handler]
+pub async fn simple_delete_post_handler(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
+    Form(frm): Form<SimpleDeleteForm>,
+) -> Response {
+    handle_simple_delete(state, addr, headers, frm.f).await
+}
+
+async fn handle_simple_delete(
+    state: AppState,
+    addr: ClientAddr,
+    headers: HeaderMap,
+    f: String,
+) -> Response {
+    println!("[DEBUG] handle_simple_delete: called with f='{}'", f);
     let ip = real_client_ip(&headers, &addr);
-    let fname = frm.f.trim();
+    println!("[DEBUG] handle_simple_delete: real_client_ip='{}'", ip);
+    let fname = f.trim();
     if fname.is_empty() || fname.contains('/') || fname.contains("..") || fname.contains('\\') {
+        println!(
+            "[DEBUG] handle_simple_delete: invalid file name '{}', returning error",
+            fname
+        );
         let url = format!("/simple?m={}", urlencoding::encode("Invalid file name."));
         return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response();
     }
     // Only allow delete if file is owned by this IP
-    match state.owners.get(fname) {
-        Some(meta) if meta.value().owner == ip => {
-            state.owners.remove(fname);
-            let path = state.upload_dir.join(fname);
-            let _ = fs::remove_file(&path).await;
-            state.persist_owners().await;
-            let url = format!(
-                "/simple?m={}",
-                urlencoding::encode("File Deleted Successfully.")
-            );
-            (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
-        }
-        _ => {
-            let url = format!(
-                "/simple?m={}",
-                urlencoding::encode("File not found or not owned by you.")
-            );
-            (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
-        }
+    let can_delete = match state.owners.get(fname) {
+        Some(meta) if meta.value().owner == ip => true,
+        _ => false,
+    };
+    if can_delete {
+        println!(
+            "[DEBUG] handle_simple_delete: found file '{}' owned by '{}', deleting",
+            fname, ip
+        );
+        state.owners.remove(fname);
+        let path = state.upload_dir.join(fname);
+        let _ = fs::remove_file(&path).await;
+        println!(
+            "[DEBUG] handle_simple_delete: file '{}' removed from disk (if existed)",
+            fname
+        );
+        state.persist_owners().await;
+        println!("[DEBUG] handle_simple_delete: owners persisted");
+        let url = format!(
+            "/simple?m={}",
+            urlencoding::encode("File Deleted Successfully.")
+        );
+        println!("[DEBUG] handle_simple_delete: returning success redirect");
+        (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
+    } else {
+        println!("[DEBUG] handle_simple_delete: file '{}' not found or not owned by '{}', returning error", fname, ip);
+        let url = format!(
+            "/simple?m={}",
+            urlencoding::encode("File not found or not owned by you.")
+        );
+        (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
     }
 }
 
@@ -1431,7 +1470,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/simple", get(simple_handler))
         .route("/simple/upload", post(simple_upload_handler))
-        .route("/simple/delete", get(simple_delete_handler))
+        .route(
+            "/simple/delete",
+            get(simple_delete_handler).post(simple_delete_post_handler),
+        )
         .route("/auth", get(auth_get_handler).post(auth_post_handler))
         .route("/isadmin", get(is_admin_handler))
         .route("/debug-ip", get(debug_ip_handler))
