@@ -1,6 +1,7 @@
-use crate::util::{new_id, now_secs, ttl_to_duration, ADMIN_KEY_TTL, ADMIN_SESSION_TTL};
+use crate::util::{ADMIN_KEY_TTL, ADMIN_SESSION_TTL, new_id, now_secs, ttl_to_duration};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::SystemTime};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -36,6 +37,39 @@ pub struct IpBan {
     pub time: u64,
 }
 
+#[derive(Debug)]
+pub struct ChunkSession {
+    pub owner: String,
+    pub original_name: String,
+    pub storage_name: String,
+    pub ttl_code: String,
+    pub expires: u64,
+    pub total_bytes: u64,
+    pub chunk_size: u64,
+    pub total_chunks: u32,
+    pub hash: Option<String>,
+    pub storage_dir: Arc<PathBuf>,
+    pub created: u64,
+    pub received: RwLock<Vec<bool>>,
+    pub completed: AtomicBool,
+    pub last_update: AtomicU64,
+}
+
+impl ChunkSession {
+    pub fn touch(&self) {
+        self.last_update.store(now_secs(), Ordering::Relaxed);
+    }
+
+    pub fn mark_completed(&self) {
+        self.completed.store(true, Ordering::Relaxed);
+        self.touch();
+    }
+
+    pub fn is_completed(&self) -> bool {
+        self.completed.load(Ordering::Relaxed)
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub upload_dir: Arc<PathBuf>,
@@ -60,6 +94,8 @@ pub struct AppState {
     pub report_email_from: Option<String>,
     pub email_tx: Option<tokio::sync::mpsc::Sender<crate::handlers::ReportRecordEmail>>, // channel to worker
     pub tera: std::sync::Arc<tera::Tera>,
+    pub chunk_dir: Arc<PathBuf>,
+    pub chunk_sessions: Arc<DashMap<String, Arc<ChunkSession>>>,
 }
 
 impl AppState {
@@ -177,6 +213,34 @@ impl AppState {
     pub async fn remove_ban(&self, ip: &str) {
         let mut bans = self.bans.write().await;
         bans.retain(|b| b.ip != ip);
+    }
+
+    pub async fn remove_chunk_session(&self, id: &str) {
+        if let Some((_, session)) = self.chunk_sessions.remove(id) {
+            let dir = session.storage_dir.clone();
+            let _ = fs::remove_dir_all(&*dir).await;
+        }
+    }
+
+    pub async fn cleanup_chunk_sessions(&self) {
+        const STALE_GRACE: u64 = 30 * 60; // 30 minutes
+        let now = now_secs();
+        let mut expired_ids = Vec::new();
+        for entry in self.chunk_sessions.iter() {
+            let session = entry.value();
+            let expired = session.expires <= now;
+            let idle = session
+                .last_update
+                .load(Ordering::Relaxed)
+                .saturating_add(STALE_GRACE)
+                <= now;
+            if expired || idle {
+                expired_ids.push(entry.key().clone());
+            }
+        }
+        for id in expired_ids {
+            self.remove_chunk_session(&id).await;
+        }
     }
 }
 

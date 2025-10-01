@@ -5,7 +5,7 @@
   <title>{{ t.title | default(value='JuiceBox - Fast Temporary File Host') }}</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <!-- Social & SEO meta additions -->
-  <meta name="description" content="{{ t.meta_description | default(value='JuiceBox is an open-source and simple high-speed temporary file host with hotlinking. Click, upload, share lightweight expiring links with selectable file retention up to 500mb.') }}" />
+  <meta name="description" content="{{ t.meta_description | default(value='JuiceBox is an open-source and simple high-speed temporary file host with hotlinking. Click, upload, share lightweight expiring links with selectable file retention up to ' ~ max_file_size_str ~ '.') }}" />
   <link rel="canonical" href="https://box.juicey.dev/" />
   <meta name="keywords" content="file upload, temporary file host, share files, expiring links, quick file sharing" />
   <meta name="author" content="JuiceBox" />
@@ -17,7 +17,7 @@
   <!-- Open Graph -->
   <meta property="og:type" content="website" />
   <meta property="og:title" content="{{ t.og_title | default(value='JuiceBox – Fast Temporary File Host') }}" />
-  <meta property="og:description" content="{{ t.og_description | default(value='Upload files up to 500MB and share instant expiring links (1h–14d retention).') }}" />
+  <meta property="og:description" content="{{ t.og_description | default(value='Upload files up to ' ~ max_file_size_str ~ ' and share instant expiring links (1h–14d retention).') }}" />
   <meta property="og:url" content="https://box.juicey.dev/" />
   <meta property="og:site_name" content="JuiceBox" />
   <meta property="og:image" content="https://box.juicey.dev/silly.gif" />
@@ -26,7 +26,7 @@
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="{{ t.twitter_title | default(value='JuiceBox – Fast Temporary File Host') }}" />
-  <meta name="twitter:description" content="{{ t.twitter_description | default(value='Upload files (≤500MB) and share expiring links with selectable retention.') }}" />
+  <meta name="twitter:description" content="{{ t.twitter_description | default(value='Upload files (≤' ~ max_file_size_str ~ ') and share expiring links with selectable retention.') }}" />
   <meta name="twitter:image" content="https://box.juicey.dev/silly.gif" />
   <meta name="twitter:image:alt" content="JuiceBox, Temporary File Host, the silly file share." />
   <!-- End social meta -->
@@ -127,7 +127,7 @@
     </section></div>
     <div class="panel"><section id="about">
       <h2 id="aboutHeading">{{ t.about_heading | default(value="What is JuiceBox?") }}</h2>
-      <p>{{ t.about_1 | default(value="JuiceBox Temporary File Host is a fast, simple way to share files without creating an account. Pick a retention period from 1 hour up to 14 days, upload files up to 500 MB, and instantly share lightweight expiring links. When the timer ends, files are automatically deleted. It’s perfect for quick hand‑offs, code snippets, screenshots, small archives, and any content you don’t want to keep online forever.") }}</p>
+  <p>{{ t.about_1 | default(value="JuiceBox Temporary File Host is a fast, simple way to share files without creating an account. Pick a retention period from 1 hour up to 14 days, upload files up to " ~ max_file_size_str ~ ", and instantly share lightweight expiring links. When the timer ends, files are automatically deleted. It’s perfect for quick hand‑offs, code snippets, screenshots, small archives, and any content you don’t want to keep online forever.") }}</p>
       <p>{{ t.about_2 | default(value="How it works: drag and drop or click to select files, choose a retention window, then copy the link once each upload completes. We limit each IP to a small number of active files to prevent abuse; delete an older item to free a slot. For a minimal experience, try the <a href='/simple'>no‑script uploader</a>. For details about limits, retention, thumbnails and moderation, read the <a href='/faq'>Frequently Asked Questions</a>. Our focus is speed, privacy and ease: no tracking pixels, no social logins, and no permanent storage, just quick, disposable sharing.") }}</p>
       <p>{{ t.about_3 | default(value="Privacy and safety: your IP is used only to associate uploads, enforce rate limits and handle abuse reports, and it is removed after related files expire. To report prohibited content or request removal, visit the <a href='/report'>Report form</a> page. Use of the service implies acceptance of our <a href='/terms'>Terms of Service</a>. If you prefer to browse a simple landing link to share with others, you can point them to the home page or the <a href='/faq'>FAQ guide</a> for guidance.") }}</p>
       <p class="inspired-note">{{ t.inspired | default(value="Inspired by") }} <a href="https://catbox.moe" target="_blank" rel="noopener nofollow">Catbox</a></p>
@@ -147,7 +147,7 @@
       "url": "https://box.juicey.dev/",
       "applicationCategory": "Utility",
       "operatingSystem": "All",
-      "description": "Fast temporary file host to upload and share expiring links (1h–14d retention, up to 500MB).",
+  "description": "Fast temporary file host to upload and share expiring links (1h–14d retention, up to {{ max_file_size_str }}).",
       "offers": {}
     }
     </script>
@@ -191,6 +191,6 @@
     }).catch(()=>{ note.textContent='Your IP is weird btw.'; });
   });
   </script>
-  <script type="module" src="/js/app.js" defer></script>
+  <script type="module" src="{{ app_bundle | default(value='/dist/app.js') }}" defer></script>
 </body>
 </html>

@@ -418,6 +418,27 @@ ul#fileList li.removing {
   position: relative;
 }
 
+.status-note {
+  margin-top: .4rem;
+  color: var(--text-subtle);
+  font-size: .7rem;
+  letter-spacing: .35px;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  opacity: .9;
+  transition: opacity .35s ease, transform .35s var(--e-out);
+}
+
+.status-note::before {
+  content: "";
+  width: .55rem;
+  height: .55rem;
+  border-radius: 999px;
+  background: rgba(var(--accent-rgb)/.7);
+  box-shadow: 0 0 8px rgba(var(--accent-rgb)/.3);
+}
+
 .bar span:not(.complete)::after {
   content: "";
   position: absolute;
@@ -525,6 +546,30 @@ button.icon-trash svg {
   font-family: monospace;
   letter-spacing: .4px;
   cursor: pointer;
+}
+
+.link-input.pending {
+  border-style: dashed;
+  border-color: rgba(var(--accent-rgb)/.55);
+  background: #151f29;
+  color: var(--text-subtle);
+  cursor: wait;
+}
+
+.link-input.ready-flash {
+  animation: linkReady .65s var(--e-out);
+}
+
+@keyframes linkReady {
+  0% {
+    box-shadow: 0 0 0 0 rgba(var(--accent-rgb)/.45);
+  }
+  60% {
+    box-shadow: 0 0 0 8px rgba(var(--accent-rgb)/0);
+  }
+  100% {
+    box-shadow: none;
+  }
 }
 
 .link-input:focus {
@@ -1277,11 +1322,6 @@ ul#fileList li.group-batch .group-empty-msg {
 
 .brand-link {
   position: relative;
-}
-
-.brand-link .visually-hidden+span,
-.brand-link span.visually-hidden {
-  /* no change, just placeholder if needed */
 }
 
 /* Adjust heading font metrics to center with icon */

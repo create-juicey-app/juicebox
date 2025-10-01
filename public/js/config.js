@@ -3,6 +3,7 @@
 // Default values
 window.MAX_FILE_BYTES = 500 * 1024 * 1024;
 window.MAX_FILE_SIZE_STR = "500MB";
+window.ENABLE_STREAMING_UPLOADS = false;
 
 /**
  * Fetches dynamic configuration from the server and updates global settings.
@@ -17,6 +18,8 @@ export function fetchConfig() {
         window.MAX_FILE_BYTES = cfg.max_file_bytes;
       if (cfg && typeof cfg.max_file_size_str === "string")
         window.MAX_FILE_SIZE_STR = cfg.max_file_size_str;
+      if (cfg && typeof cfg.enable_streaming_uploads === "boolean")
+        window.ENABLE_STREAMING_UPLOADS = cfg.enable_streaming_uploads;
     })
     .catch(() => {
   if (window.DEBUG_LOGS) console.warn("Could not fetch dynamic config, using defaults.");

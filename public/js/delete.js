@@ -43,12 +43,7 @@ export const deleteHandler = {
   handleDeleteClick(f, batch) {
     if (f.deleting) return;
     if (!f.remoteName) {
-      if (f.xhr) {
-        f.canceled = true;
-        try {
-          f.xhr.abort();
-        } catch {}
-      }
+      uploadHandler.cancelPendingUpload(f);
       if (f.container) {
         animateRemove(f.container, () => {
           batch.files = batch.files.filter((x) => x !== f);

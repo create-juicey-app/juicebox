@@ -11,6 +11,7 @@ Juicebox is a lightweight, high-speed file hosting and sharing service inspired 
 ### Prerequisites
 
 - **Rust** (for building and running Juicebox)
+- **Node.js 20+** (for bundling frontend assets and running Jest tests)
 
 ### Installation
 
@@ -29,6 +30,32 @@ cargo run --release
 ```
 
 By default, Juicebox will start its backend server, which serves both the frontend web UI and the API.
+
+#### Frontend assets & tests
+
+Install the JavaScript toolchain once:
+
+```bash
+npm install
+```
+
+Bundle the frontend (output is written to `public/dist/`):
+
+```bash
+npm run build
+```
+
+For active development you can watch for changes:
+
+```bash
+npm run build:watch
+```
+
+Run the Jest unit tests that cover shared frontend utilities:
+
+```bash
+npm test
+```
 
 ---
 

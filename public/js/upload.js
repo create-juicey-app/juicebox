@@ -2,14 +2,46 @@
 
 
 import { list } from './ui.js';
-import { fmtBytes, showSnack, copyToClipboard, flashCopied, ttlCodeSeconds } from './utils.js';
+import { fmtBytes, showSnack, copyToClipboard, flashCopied } from './utils.js';
 import { getTTL } from './ui.js';
 import { ownedHandler } from './owned.js';
 import { deleteHandler } from './delete.js';
 
+const MIN_CHUNK_SIZE = 64 * 1024; // 64 KiB (backend minimum)
+const MAX_CHUNK_SIZE = 32 * 1024 * 1024; // 32 MiB (backend maximum)
+const DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024; // 8 MiB (backend default)
+const DEFAULT_CHUNK_THRESHOLD = 128 * 1024 * 1024; // 128 MiB
+const MAX_TOTAL_CHUNKS = 20_000;
+const STREAMING_OPT_IN =
+  typeof window !== "undefined" && window.ENABLE_STREAMING_UPLOADS === true;
+
+export function shouldUseChunk(file) {
+  if (!file) return false;
+  const override = window.CHUNK_THRESHOLD_BYTES;
+  const threshold =
+    typeof override === "number" && override > 0 ? override : DEFAULT_CHUNK_THRESHOLD;
+  if (window.MAX_FILE_BYTES && file.size > window.MAX_FILE_BYTES) {
+    return true;
+  }
+  return file.size >= threshold;
+}
+
+export function selectChunkSize(fileSize) {
+  const override = window.PREFERRED_CHUNK_SIZE_BYTES;
+  let chunkSize =
+    typeof override === "number" && override > 0 ? override : DEFAULT_CHUNK_SIZE;
+  chunkSize = Math.max(MIN_CHUNK_SIZE, Math.min(MAX_CHUNK_SIZE, chunkSize));
+  const minChunk = Math.ceil(fileSize / MAX_TOTAL_CHUNKS);
+  if (minChunk > chunkSize) {
+    chunkSize = Math.min(MAX_CHUNK_SIZE, Math.max(MIN_CHUNK_SIZE, minChunk));
+  }
+  return chunkSize;
+}
+
 export const uploadHandler = {
   batches: [],
   uploading: false,
+  streamingAllowed: STREAMING_OPT_IN,
 
   addBatch(fileList) {
     if (!fileList || !fileList.length) return;
@@ -39,6 +71,13 @@ export const uploadHandler = {
         container: null,
         linksBox: null,
         xhr: null,
+        abortController: null,
+        chunkSessionId: null,
+        chunkSize: null,
+        totalChunks: null,
+        uploadedBytes: 0,
+        hash: null,
+        statusEl: null,
       })),
       isGroup: cleaned.length > 1,
     };
@@ -120,7 +159,9 @@ export const uploadHandler = {
     });
   },
 
-  makeLinkInput(rel, autoCopy = true) {
+  makeLinkInput(rel, opts = {}) {
+    const options = typeof opts === "boolean" ? { autoCopy: opts } : opts;
+    const { autoCopy = true, pending = false } = options;
     const full = location.origin + "/" + rel;
     const inp = document.createElement("input");
     inp.type = "text";
@@ -129,7 +170,13 @@ export const uploadHandler = {
     inp.className = "link-input";
     inp.title = "Click to copy direct download link";
     inp.setAttribute("aria-label", "Download link (click to copy)");
-    if (autoCopy) {
+    if (pending) {
+      inp.classList.add("pending");
+      inp.dataset.status = "pending";
+      inp.title = "Finalizing upload… link may briefly be unavailable";
+      inp.setAttribute("aria-live", "polite");
+    }
+    if (autoCopy && !pending) {
       copyToClipboard(full).then(() => flashCopied());
     }
     inp.addEventListener("click", () => {
@@ -138,6 +185,84 @@ export const uploadHandler = {
     });
     // The patch for addOwned will be applied in enhancements.js
     return inp;
+  },
+
+  ensureLinkContainer(f, batch) {
+    if (!f?.container) return null;
+    if (batch?.isGroup) {
+      let linksRow = f.container.querySelector(".links");
+      if (!linksRow) {
+        linksRow = document.createElement("div");
+        linksRow.className = "links";
+        f.container.appendChild(linksRow);
+      }
+      f.linkContainer = linksRow;
+      return linksRow;
+    }
+    if (!f.linkContainer || !f.linkContainer.isConnected) {
+      const links = document.createElement("div");
+      links.className = "links";
+      f.container.appendChild(links);
+      f.linkContainer = links;
+    }
+    return f.linkContainer;
+  },
+
+  ensureLinkInput(f, batch, options = {}) {
+    if (!f || !f.remoteName) return null;
+    const rel = f.remoteName.startsWith("f/") ? f.remoteName : `f/${f.remoteName}`;
+    const container = this.ensureLinkContainer(f, batch);
+    if (!container) return null;
+    const pending = !!options.pending;
+    const autoCopy = !!options.autoCopy;
+    const highlight = !!options.highlight;
+
+    if (!f.linkInput || !f.linkInput.isConnected) {
+      f.linkInput = this.makeLinkInput(rel, { autoCopy: autoCopy && !pending, pending });
+      container.appendChild(f.linkInput);
+      f.linkAutoCopied = autoCopy && !pending;
+      if (!pending) {
+        f.linkInput.dataset.status = "ready";
+      }
+    } else {
+      f.linkInput.value = location.origin + "/" + rel;
+      f.linkInput.classList.toggle("pending", pending);
+      f.linkInput.dataset.status = pending ? "pending" : "ready";
+      f.linkInput.title = pending
+        ? "Finalizing upload… link may briefly be unavailable"
+        : "Click to copy direct download link";
+      if (pending) {
+        f.linkInput.setAttribute("aria-live", "polite");
+        f.linkAutoCopied = false;
+      } else {
+        f.linkInput.removeAttribute("aria-live");
+        if (autoCopy && !f.linkAutoCopied) {
+          copyToClipboard(f.linkInput.value).then(() => flashCopied());
+          f.linkAutoCopied = true;
+        }
+      }
+    }
+
+    if (!pending && highlight) {
+      f.linkInput.classList.add("ready-flash");
+      setTimeout(() => f.linkInput?.classList.remove("ready-flash"), 800);
+    }
+
+    return f.linkInput;
+  },
+
+  removeLinkForFile(f) {
+    if (f?.linkInput) {
+      f.linkInput.remove();
+      f.linkInput = null;
+    }
+    if (f?.linkContainer && f.linkContainer.childElementCount === 0) {
+      f.linkContainer.parentNode?.removeChild(f.linkContainer);
+      f.linkContainer = null;
+    }
+    if (f) {
+      f.linkAutoCopied = false;
+    }
   },
 
 
@@ -157,27 +282,31 @@ export const uploadHandler = {
     const uploadNext = async () => {
       if (idx >= allFiles.length) return;
       const { f, batch } = allFiles[idx++];
-      // Calculate hash and check with server before uploading
+      // Calculate hash and check with server before uploading for non-chunked files
       try {
-        f.hash = await this.calculateFileHash(f.file);
-        const exists = await this.checkFileHash(f.hash);
-        if (exists) {
-          showSnack("Duplicate file: already uploaded.");
-          f.done = true;
-          f.removed = true;
-          if (f.container) {
-            f.container.classList.add("dupe-remove");
-            setTimeout(() => {
-              if (f.container && f.container.parentNode) {
-                f.container.parentNode.removeChild(f.container);
-              }
-            }, 400);
+        if (this.shouldUseChunk(f.file)) {
+          f.hash = null;
+        } else {
+          f.hash = await this.calculateFileHash(f.file);
+          const exists = await this.checkFileHash(f.hash);
+          if (exists) {
+            showSnack("Duplicate file: already uploaded.");
+            f.done = true;
+            f.removed = true;
+            if (f.container) {
+              f.container.classList.add("dupe-remove");
+              setTimeout(() => {
+                if (f.container && f.container.parentNode) {
+                  f.container.parentNode.removeChild(f.container);
+                }
+              }, 400);
+            }
+            return uploadNext();
           }
-          return uploadNext();
         }
       } catch (e) {
         // If hash fails, proceed with upload anyway
-  if (window.DEBUG_LOGS) console.warn("Hash check failed, proceeding with upload", e);
+        if (window.DEBUG_LOGS) console.warn("Hash check failed, proceeding with upload", e);
       }
       await this.uploadOne(f, batch);
       await uploadNext();
@@ -227,10 +356,53 @@ export const uploadHandler = {
     }
   },
 
-  uploadOne(f, batch) {
+  async uploadOne(f, batch) {
+    f.errorMessage = null;
+    const ttlVal = getTTL();
+    try {
+      if (this.shouldUseChunk(f.file)) {
+        await this.uploadChunked(f, batch, ttlVal);
+      } else {
+        await this.uploadMultipart(f, batch, ttlVal);
+      }
+    } catch (err) {
+      if (err?.name === "AbortError" || f.canceled) {
+        return;
+      }
+      if (window.DEBUG_LOGS) console.error("Upload failed", err);
+    }
+  },
+
+  shouldUseChunk,
+
+  selectChunkSize,
+
+  updateProgressBar(f, loaded, total) {
+    if (!f.barSpan || !total) return;
+    const pct = Math.min(100, Math.max(0, (loaded / total) * 100));
+    f.barSpan.style.width = pct.toFixed(2) + "%";
+  },
+
+  setStatusMessage(f, message) {
+    if (!f.container) return;
+    if (message) {
+      if (!f.statusEl) {
+        const el = document.createElement("div");
+        el.className = "status-note";
+        f.container.appendChild(el);
+        f.statusEl = el;
+      }
+      f.statusEl.textContent = message;
+      f.statusEl.style.display = "block";
+    } else if (f.statusEl) {
+      f.statusEl.remove();
+      f.statusEl = null;
+    }
+  },
+
+  async uploadMultipart(f, batch, ttlVal) {
     return new Promise((resolve) => {
       const fd = new FormData();
-      const ttlVal = getTTL();
       fd.append("ttl", ttlVal);
       fd.append("file", f.file, f.file.name);
       const xhr = new XMLHttpRequest();
@@ -240,110 +412,30 @@ export const uploadHandler = {
       let finished = false;
 
       xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && f.barSpan) {
-          const pct = (e.loaded / f.file.size) * 100;
-          f.barSpan.style.width = pct.toFixed(2) + "%";
+        if (e.lengthComputable) {
+          this.updateProgressBar(f, e.loaded, e.total || f.file.size);
         }
       };
 
       xhr.onload = () => {
         if (finished || f.canceled) return resolve();
         finished = true;
-        // Handle 409 Conflict (duplicate file hash)
+        let payload = xhr.response;
+        if (!payload) {
+          try {
+            payload = JSON.parse(xhr.responseText || "{}");
+          } catch {
+            payload = {};
+          }
+        }
         if (xhr.status === 409) {
-          try {
-            showSnack("Duplicate file: already uploaded.");
-          } catch {}
-          // Try to get the original file hash from response
-          let origHash = null;
-          try {
-            const data = xhr.response || JSON.parse(xhr.responseText || "{}{}");
-            origHash = data.hash || data.file_hash || (data.files && data.files[0]);
-          } catch {}
-          // Highlight the original file in the list if possible
-          if (origHash) {
-            // Try to find a file entry in any batch with this hash as remoteName
-            let found = null;
-            for (const b of this.batches) {
-              for (const fileObj of b.files) {
-                if (fileObj.remoteName === origHash) {
-                  found = fileObj;
-                  break;
-                }
-              }
-              if (found) break;
-            }
-            if (found && found.container) {
-              found.container.classList.add("dupe-highlight");
-              setTimeout(() => found.container.classList.remove("dupe-highlight"), 1800);
-            }
-          }
-          // Animate removal of this file from the list
-          if (f.container) {
-            f.container.classList.add("dupe-remove");
-            setTimeout(() => {
-              if (f.container && f.container.parentNode) {
-                f.container.parentNode.removeChild(f.container);
-              }
-              f.removed = true;
-              // Remove from batch.files
-              batch.files = batch.files.filter(x => x !== f);
-              // If group batch and now empty, remove groupLi
-              if (batch.isGroup && batch.files.length === 0 && batch.groupLi) {
-                batch.groupLi.classList.add("dupe-remove");
-                setTimeout(() => {
-                  batch.groupLi?.parentNode?.removeChild(batch.groupLi);
-                }, 400);
-              }
-            }, 400);
-          } else {
-            f.removed = true;
-            batch.files = batch.files.filter(x => x !== f);
-          }
-          deleteHandler.updateDeleteButton(f);
+          this.markFileDuplicate(f, batch, payload);
           return resolve();
         }
-        const ok = xhr.status >= 200 && xhr.status < 300;
-        if (ok) {
-          if (f.barSpan) {
-            f.barSpan.style.width = "100%";
-            requestAnimationFrame(() => {
-              f.barSpan.classList.add("complete");
-              setTimeout(() => f.bar?.classList.add("divider"), 1000);
-            });
-          }
-          let rel = null;
-          try {
-            const data = xhr.response || JSON.parse(xhr.responseText || "{}{}");
-            rel = data.files && data.files[0];
-          } catch {}
-          if (rel) {
-            f.remoteName = rel.startsWith("f/") ? rel.slice(2) : rel;
-            ownedHandler.addOwned(f.remoteName); // Add to owned list
-          }
-          f.done = true;
-          deleteHandler.updateDeleteButton(f);
-          if (f.remoteName) {
-            const input = this.makeLinkInput("f/" + f.remoteName, !batch.files.some((x) => !x.done));
-            if (batch.isGroup) {
-                let linksRow = f.container.querySelector(".links") || document.createElement("div");
-                linksRow.className = "links";
-                f.container.appendChild(linksRow);
-                linksRow.appendChild(input);
-            } else {
-                const links = document.createElement("div");
-                links.className = "links";
-                links.appendChild(input);
-                f.container.appendChild(links);
-            }
-          }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          this.handleUploadSuccess(f, batch, payload);
         } else {
-          // Show error message from server if available
-          let msg = "Upload failed.";
-          try {
-            const err = xhr.response || JSON.parse(xhr.responseText || "{}{}");
-            if (err && err.message) msg = err.message;
-          } catch {}
+          const msg = (payload && payload.message) || "Upload failed.";
           showSnack(msg);
           f.container?.classList.add("error");
           deleteHandler.updateDeleteButton(f);
@@ -361,6 +453,333 @@ export const uploadHandler = {
 
       xhr.send(fd);
       deleteHandler.updateDeleteButton(f);
+    });
+  },
+
+  async uploadChunked(f, batch, ttlVal) {
+    const abort = new AbortController();
+    f.abortController = abort;
+    this.setStatusMessage(f, "Preparing...");
+    const chunkSize = this.selectChunkSize(f.file.size);
+    const initPayload = {
+      filename: f.file.name,
+      size: f.file.size,
+      ttl: ttlVal,
+      chunk_size: chunkSize,
+    };
+    if (f.hash) {
+      initPayload.hash = f.hash;
+    }
+
+    let initResponse;
+    try {
+      initResponse = await fetch("/chunk/init", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(initPayload),
+        signal: abort.signal,
+      });
+    } catch (err) {
+      if (err?.name === "AbortError") throw err;
+      showSnack("Failed to start chunked upload.");
+      f.container?.classList.add("error");
+      throw err;
+    }
+
+    if (initResponse.status === 409) {
+      const dupPayload = await initResponse.json().catch(() => ({}));
+      this.setStatusMessage(f, "");
+      this.markFileDuplicate(f, batch, dupPayload);
+      return;
+    }
+
+    if (!initResponse.ok) {
+      const message = await this.extractError(initResponse, "Failed to start chunked upload.");
+      showSnack(message);
+      f.container?.classList.add("error");
+      this.setStatusMessage(f, "");
+      throw new Error(message);
+    }
+
+    const initData = await initResponse.json().catch(() => ({}));
+    f.chunkSessionId = initData.session_id;
+    if (!f.chunkSessionId) {
+      showSnack("Server did not return an upload session.");
+      throw new Error("Missing chunk session id");
+    }
+    if (initData.storage_name) {
+      f.remoteName = initData.storage_name.startsWith("f/")
+        ? initData.storage_name.slice(2)
+        : initData.storage_name;
+    }
+    f.chunkSize = initData.chunk_size || chunkSize;
+    f.totalChunks = initData.total_chunks || Math.ceil(f.file.size / f.chunkSize);
+    f.uploadedBytes = 0;
+
+    try {
+      await this.uploadChunksSequentially(f, abort);
+    } catch (err) {
+      if (err?.name !== "AbortError") {
+        const message = err.message || "Chunk upload failed.";
+        showSnack(message);
+        f.container?.classList.add("error");
+      }
+      this.setStatusMessage(f, "");
+      this.removeLinkForFile(f);
+      await this.cancelChunkSession(f);
+      throw err;
+    }
+
+    if (f.remoteName) {
+      this.ensureLinkInput(f, batch, { pending: true, autoCopy: false });
+    }
+    this.setStatusMessage(f, "Finalizing...");
+
+    let completeResponse;
+    try {
+      completeResponse = await fetch(`/chunk/${encodeURIComponent(f.chunkSessionId)}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hash: f.hash || null }),
+        signal: abort.signal,
+      });
+    } catch (err) {
+      if (err?.name === "AbortError") {
+        this.setStatusMessage(f, "");
+        await this.cancelChunkSession(f);
+        throw err;
+      }
+      showSnack("Failed to finalize upload.");
+      f.container?.classList.add("error");
+      await this.cancelChunkSession(f);
+      this.setStatusMessage(f, "");
+      this.removeLinkForFile(f);
+      throw err;
+    }
+
+    if (completeResponse.status === 409) {
+      const dupPayload = await completeResponse.json().catch(() => ({}));
+      await this.cancelChunkSession(f);
+      this.setStatusMessage(f, "");
+      this.removeLinkForFile(f);
+      this.markFileDuplicate(f, batch, dupPayload);
+      return;
+    }
+
+    if (!completeResponse.ok) {
+      const message = await this.extractError(completeResponse, "Upload failed.");
+      showSnack(message);
+      f.container?.classList.add("error");
+      await this.cancelChunkSession(f);
+      this.setStatusMessage(f, "");
+      this.removeLinkForFile(f);
+      throw new Error(message);
+    }
+
+    const payload = await completeResponse.json().catch(() => ({}));
+    this.handleUploadSuccess(f, batch, payload);
+    f.chunkSessionId = null;
+    f.abortController = null;
+  },
+
+  async uploadChunksSequentially(f, abort) {
+    const sessionId = encodeURIComponent(f.chunkSessionId);
+    const chunkBytes = f.chunkSize || this.selectChunkSize(f.file.size);
+    const totalChunks = f.totalChunks || Math.ceil(f.file.size / chunkBytes);
+    for (let index = 0; index < totalChunks; index++) {
+      if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const start = index * chunkBytes;
+      const end = Math.min(start + chunkBytes, f.file.size);
+      const slice = f.file.slice(start, end);
+      const send = async (useStream) => {
+        const body = useStream && typeof slice.stream === "function" ? slice.stream() : slice;
+        const options = {
+          method: "PUT",
+          headers: { "Content-Type": "application/octet-stream" },
+          body,
+          signal: abort.signal,
+        };
+        if (useStream && body && typeof body === "object" && typeof body.getReader === "function") {
+          options.duplex = "half";
+        }
+        return fetch(`/chunk/${sessionId}/${index}`, options);
+      };
+
+      const canStream = this.streamingAllowed && typeof slice.stream === "function";
+      let response = null;
+      let streamError = null;
+
+      if (canStream) {
+        try {
+          response = await send(true);
+        } catch (err) {
+          streamError = err;
+          this.streamingAllowed = false;
+          if (typeof window !== "undefined") {
+            window.ENABLE_STREAMING_UPLOADS = false;
+          }
+          if (window.DEBUG_LOGS) {
+            console.warn("Streaming chunk upload failed, falling back to buffered mode", err);
+          }
+        }
+      }
+
+      if (response && !response.ok && canStream && response.status === 400) {
+        this.streamingAllowed = false;
+        if (typeof window !== "undefined") {
+          window.ENABLE_STREAMING_UPLOADS = false;
+        }
+        if (window.DEBUG_LOGS) {
+          console.warn("Chunk upload returned 400 with streaming body; retrying without streaming");
+        }
+        response = null;
+      }
+
+      if (!response) {
+        try {
+          response = await send(false);
+        } catch (err) {
+          throw streamError || err;
+        }
+      }
+
+      if (!response.ok) {
+        const message = await this.extractError(response, "Chunk upload failed.");
+        throw new Error(message);
+      }
+      f.uploadedBytes = end;
+      this.updateProgressBar(f, f.uploadedBytes, f.file.size);
+    }
+  },
+
+  async extractError(response, fallback) {
+    try {
+      const data = await response.json();
+      if (data && data.message) return data.message;
+    } catch {
+      // ignore JSON errors
+    }
+    return fallback;
+  },
+
+  findFileEntryByRemoteName(remoteName) {
+    if (!remoteName) return null;
+    for (const batch of this.batches) {
+      for (const fileEntry of batch.files) {
+        if (fileEntry.remoteName === remoteName) {
+          return { file: fileEntry, batch };
+        }
+      }
+    }
+    return null;
+  },
+
+  async cancelChunkSession(f) {
+    if (!f.chunkSessionId) {
+      f.abortController = null;
+      return;
+    }
+    const sessionId = f.chunkSessionId;
+    f.chunkSessionId = null;
+    try {
+      await fetch(`/chunk/${encodeURIComponent(sessionId)}/cancel`, { method: "DELETE" });
+    } catch {
+      // ignore network errors on cancel
+    } finally {
+      f.abortController = null;
+    }
+  },
+
+  cancelPendingUpload(f) {
+    f.canceled = true;
+    if (f.xhr) {
+      try {
+        f.xhr.abort();
+      } catch {
+        // ignore
+      }
+    }
+    if (f.abortController) {
+      try {
+        f.abortController.abort();
+      } catch {
+        // ignore
+      }
+    }
+    this.removeLinkForFile(f);
+    return this.cancelChunkSession(f);
+  },
+
+  extractUploadedPath(payload) {
+    if (!payload) return null;
+    if (Array.isArray(payload.files) && payload.files.length) {
+      return payload.files[0];
+    }
+    if (payload.file) return payload.file;
+    if (payload.meta && payload.meta.file) return payload.meta.file;
+    return null;
+  },
+
+  markFileDuplicate(f, batch, payload) {
+    this.setStatusMessage(f, "");
+    this.removeLinkForFile(f);
+    try {
+      showSnack("Duplicate file: already uploaded.");
+    } catch {}
+    const rel = this.extractUploadedPath(payload);
+    if (rel) {
+      const name = rel.startsWith("f/") ? rel.slice(2) : rel;
+      if (ownedHandler.highlightOwned) ownedHandler.highlightOwned(name);
+      const existing = this.findFileEntryByRemoteName(name);
+      if (existing && existing.file && existing.file.container) {
+        existing.file.container.classList.add("dupe-highlight");
+        setTimeout(() => {
+          existing.file.container?.classList.remove("dupe-highlight");
+        }, 1800);
+      }
+    }
+    f.removed = true;
+    if (f.container) {
+      f.container.classList.add("dupe-remove");
+      setTimeout(() => {
+        f.container?.parentNode?.removeChild(f.container);
+      }, 400);
+    }
+    batch.files = batch.files.filter((x) => x !== f);
+    if (batch.isGroup && batch.files.length === 0 && batch.groupLi) {
+      batch.groupLi.classList.add("dupe-remove");
+      setTimeout(() => batch.groupLi?.parentNode?.removeChild(batch.groupLi), 400);
+    }
+    if (!batch.files.length) {
+      this.batches = this.batches.filter((b) => b !== batch);
+    }
+    deleteHandler.updateDeleteButton(f);
+  },
+
+  handleUploadSuccess(f, batch, payload) {
+    this.setStatusMessage(f, "");
+    f.uploadedBytes = f.file.size;
+    if (f.barSpan) {
+      f.barSpan.style.width = "100%";
+      requestAnimationFrame(() => {
+        f.barSpan.classList.add("complete");
+        setTimeout(() => f.bar?.classList.add("divider"), 1000);
+      });
+    }
+    const rel = this.extractUploadedPath(payload);
+    if (rel) {
+      const remote = rel.startsWith("f/") ? rel.slice(2) : rel;
+      f.remoteName = remote;
+      ownedHandler.addOwned(remote);
+    }
+    f.done = true;
+    deleteHandler.updateDeleteButton(f);
+    if (!f.remoteName) return;
+    const autoCopy = !batch.files.some((x) => !x.done);
+    this.ensureLinkInput(f, batch, {
+      autoCopy,
+      pending: false,
+      highlight: true,
     });
   },
 

@@ -65,5 +65,5 @@ linear-gradient(90deg,#ffa200 2px,#1b232c 2px) -1px 0/32px 32px #1b232c;opacity:
   <video id="animPreview" autoplay loop muted playsinline style="display:none"></video>
   <div class="note">Animation is exported as WebM (VP8) for broad modern support & smooth looping. Use a CLI like: <code style='background:#121b24;border:1px solid #2b394a;padding:2px 4px;border-radius:4px'>ffmpeg -i anim.webm -loop 0 -c:v libwebp -lossless 0 -q:v 75 animated.webp</code> to convert to animated WebP if required by a platform.<br/><span class="small">Quality slider only affects WebP still capture. PNG is always lossless. Animation uses real-time drawing at selected FPS & duration. Loop count 0 = infinite.</span></div>
 </div>
-<script src="/js/thumbgen.js" defer></script>
+<script src="/dist/thumbgen.js" defer></script>
 </body></html>

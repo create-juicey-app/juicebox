@@ -5,3 +5,6 @@ Cargo.lock
 .env
 .vscode/
 .DS_Store
+node_modules/
+public/dist/
+package-lock.json

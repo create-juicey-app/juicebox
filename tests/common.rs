@@ -16,10 +16,12 @@ pub fn setup_test_app() -> (AppState, TempDir) {
     let metadata_path = Arc::new(data_dir.join("file_owners.json"));
     let reports_path = Arc::new(data_dir.join("reports.json"));
     let admin_sessions_path = Arc::new(data_dir.join("admin_sessions.json"));
+    let chunk_dir = Arc::new(data_dir.join("chunks"));
 
     std::fs::create_dir_all(&*static_dir).unwrap();
     std::fs::create_dir_all(&*upload_dir).unwrap();
     std::fs::create_dir_all(&*data_dir).unwrap();
+    std::fs::create_dir_all(&*chunk_dir).unwrap();
 
     let admin_key_path = Arc::new(data_dir.join("admin_key.json"));
     let bans_path = Arc::new(data_dir.join("ip_bans.json"));
@@ -59,6 +61,8 @@ pub fn setup_test_app() -> (AppState, TempDir) {
         report_email_from,
         email_tx,
         tera,
+        chunk_dir,
+        chunk_sessions: Arc::new(dashmap::DashMap::new()),
     };
 
     (state, temp_dir)
