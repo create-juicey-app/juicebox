@@ -263,6 +263,26 @@ pub fn real_client_ip(headers: &HeaderMap, fallback: &std::net::SocketAddr) -> S
     extract_client_ip(headers, Some(fallback.ip()))
 }
 
+/// Return whether forwarded headers from the provided `headers` should be trusted
+/// for a connection that arrived from `fallback` (the socket peer IP).
+pub fn headers_trusted(_headers: &HeaderMap, fallback: Option<IpAddr>) -> bool {
+    let cfg = TRUSTED_PROXY_CONFIG
+        .read()
+        .expect("trusted proxy configuration poisoned");
+    if !cfg.allow_headers {
+        return false;
+    }
+    if let Some(source_ip) = fallback {
+        let proxy_trusted = cfg.trusted_proxies.is_empty()
+            || cfg
+                .trusted_proxies
+                .iter()
+                .any(|cidr| ip_in_cidr(source_ip, cidr));
+        return proxy_trusted;
+    }
+    false
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn set_trusted_proxy_config_for_tests(allow_headers: bool, cidrs: Vec<String>) {
     if let Ok(mut cfg) = TRUSTED_PROXY_CONFIG.write() {

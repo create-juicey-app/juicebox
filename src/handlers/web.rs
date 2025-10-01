@@ -89,6 +89,41 @@ pub async fn debug_ip_handler(
     Json(json!({"edge": edge, "cf": cf, "xff": xff})).into_response()
 }
 
+pub async fn trusted_handler(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    use crate::util::headers_trusted;
+    let edge = addr.ip().to_string();
+    let trusted = headers_trusted(&headers, Some(addr.ip()));
+    if trusted {
+        Json(json!({"trusted": true, "message": "HEADERS TRUSTED"})).into_response()
+    } else {
+        // return simple HTML with silly red message when untrusted
+        let body = format!(
+            "<html><body><h1 style=\"color:red\">ENDPOINT IS UNTRUSTED AND THE EDGE IP WILL BE USED</h1><p>edge: {}</p><p>cf: {}</p><p>xff: {}</p></body></html>",
+            edge,
+            headers
+                .get("CF-Connecting-IP")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("-"),
+            headers
+                .get("X-Forwarded-For")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("-")
+        );
+        (
+            axum::http::StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("text/html"),
+            )],
+            body,
+        )
+            .into_response()
+    }
+}
+
 pub async fn faq_handler(
     State(state): State<AppState>,
     Query(query): Query<LangQuery>,
