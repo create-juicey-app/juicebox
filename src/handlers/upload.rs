@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::state::{
     AppState, ChunkSession, FileMeta, ReconcileReport, check_storage_integrity, cleanup_expired,
@@ -223,8 +223,23 @@ pub async fn init_chunk_upload_handler(
         received: RwLock::new(vec![false; total_chunks as usize]),
         completed: AtomicBool::new(false),
         last_update: AtomicU64::new(now),
+        persist_lock: Mutex::new(()),
     });
-    state.chunk_sessions.insert(session_id.clone(), session);
+    state
+        .chunk_sessions
+        .insert(session_id.clone(), session.clone());
+    if let Err(err) = state
+        .persist_chunk_session(&session_id, session.as_ref())
+        .await
+    {
+        tracing::error!(?err, session_id = %session_id, "failed to persist chunk session metadata");
+        state.remove_chunk_session(&session_id).await;
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "chunk_dir",
+            "failed to initialize chunk upload",
+        );
+    }
 
     Json(ChunkInitResponse {
         session_id,
@@ -306,6 +321,12 @@ pub async fn upload_chunk_part_handler(
         if let Some(entry) = received.get_mut(params.index as usize) {
             *entry = true;
         }
+    }
+    if let Err(err) = state
+        .persist_chunk_session(&params.id, session.as_ref())
+        .await
+    {
+        tracing::warn!(?err, session_id = %params.id, "failed to persist chunk session after part");
     }
     Response::builder()
         .status(StatusCode::NO_CONTENT)
@@ -490,6 +511,12 @@ pub async fn complete_chunk_upload_handler(
         hash: digest.clone(),
     };
     session.mark_completed();
+    if let Err(err) = state
+        .persist_chunk_session(&path.id, session.as_ref())
+        .await
+    {
+        tracing::warn!(?err, session_id = %path.id, "failed to persist completed chunk session before cleanup");
+    }
     state.owners.insert(storage_name.clone(), meta);
     state.persist_owners().await;
     state.remove_chunk_session(&path.id).await;

@@ -1,8 +1,9 @@
 use axum::{Router, middleware};
+use axum_server::Handle;
 use dashmap::DashMap;
 use juicebox::handlers::ban_gate;
 use juicebox::handlers::{add_cache_headers, add_security_headers, build_router, enforce_host};
-use juicebox::rate_limit::build_rate_limiter;
+use juicebox::rate_limit::{RateLimiterInner, build_rate_limiter};
 use juicebox::state::{AppState, FileMeta, ReportRecord, cleanup_expired};
 use juicebox::util::{PROD_HOST, UPLOAD_CONCURRENCY, now_secs, ttl_to_duration};
 use std::{
@@ -14,7 +15,10 @@ use std::{
 };
 use tera::Tera;
 use tokio::fs;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::signal::ctrl_c;
+#[cfg(unix)]
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::{Notify, RwLock, Semaphore};
 use tower_http::compression::CompressionLayer;
 
 #[tokio::main]
@@ -130,6 +134,10 @@ async fn main() -> anyhow::Result<()> {
         chunk_sessions: Arc::new(DashMap::new()),
     };
 
+    if let Err(err) = state.load_chunk_sessions_from_disk().await {
+        tracing::warn!(?err, "failed to restore chunk upload sessions from disk");
+    }
+
     // Load or create admin key after state so helper can use now_secs etc
     let key_file = state.load_or_create_admin_key(&admin_key_path).await?;
     {
@@ -137,19 +145,32 @@ async fn main() -> anyhow::Result<()> {
         *k = key_file.key.clone();
     }
 
+    let shutdown_notify = Arc::new(Notify::new());
+    let (rate_layer, rate_handle) = build_rate_limiter();
+
     // periodic cleanup task
     let cleanup_state = state.clone();
-    tokio::spawn(async move {
+    let cleanup_shutdown = shutdown_notify.clone();
+    let cleanup_rate = rate_handle.clone();
+    let cleanup_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(600));
         loop {
-            interval.tick().await;
-            cleanup_expired(&cleanup_state).await;
-            cleanup_state.cleanup_admin_sessions().await;
-            cleanup_state.cleanup_chunk_sessions().await;
+            tokio::select! {
+                _ = cleanup_shutdown.notified() => {
+                    break;
+                }
+                _ = interval.tick() => {
+                    cleanup_expired(&cleanup_state).await;
+                    cleanup_state.cleanup_admin_sessions().await;
+                    cleanup_state.cleanup_chunk_sessions().await;
+                    cleanup_rate.prune_idle(Duration::from_secs(1800)).await;
+                }
+            }
         }
     });
 
     // setup email worker if config present
+    let mut email_handle = None;
     if state.mailgun_api_key.is_some()
         && state.mailgun_domain.is_some()
         && state.report_email_to.is_some()
@@ -162,9 +183,16 @@ async fn main() -> anyhow::Result<()> {
         let to_addr = state.report_email_to.clone().unwrap();
         let from_addr = state.report_email_from.clone().unwrap();
         println!("mail: enabled (domain={domain}, to={to_addr})");
-        tokio::spawn(async move {
+        let email_shutdown = shutdown_notify.clone();
+        let handle = tokio::spawn(async move {
             let client = reqwest::Client::new();
-            while let Some(ev) = rx.recv().await {
+            loop {
+                tokio::select! {
+                    _ = email_shutdown.notified() => {
+                        break;
+                    }
+                    maybe_ev = rx.recv() => {
+                        let Some(ev) = maybe_ev else { break; };
                 let subj = format!("[JuiceBox] Report: {} ({})", ev.file, ev.reason);
                 let expires_human = if ev.expires > 0 {
                     format!("{}s", ev.expires.saturating_sub(ev.time))
@@ -174,9 +202,9 @@ async fn main() -> anyhow::Result<()> {
                 let mut html = String::new();
                 html.push_str("<html><body style=\"font-family:system-ui,Arial,sans-serif;background:#0f141b;color:#e8edf2;padding:16px;\">");
                 html.push_str("<div style=\"background:#18222d;border:1px solid #2b3746;border-radius:12px;padding:18px 20px;max-width:640px;margin:auto;\">");
-                html.push_str(&format!(
+                html.push_str(
                     "<h2 style=\"margin:0 0 12px;font-size:18px;\">New Content Report</h2>"
-                ));
+                );
                 html.push_str("<table style=\"width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px;\">");
                 let row = |k: &str, v: &str| {
                     format!(
@@ -297,20 +325,22 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Err(e) => eprintln!("mail: error sending: {e}"),
                 }
+                    }
+                }
             }
         });
+        email_handle = Some(handle);
     } else {
         println!("mail: disabled (missing env vars)");
     }
 
-    let rate_layer = build_rate_limiter();
     let router = build_router(state.clone());
     let mut app: Router = router
         .layer(CompressionLayer::new())
         .layer(middleware::from_fn(add_cache_headers))
         .layer(middleware::from_fn(add_security_headers))
         .layer(middleware::from_fn_with_state(state.clone(), ban_gate))
-        .layer(rate_layer)
+        .layer(rate_layer.clone())
         .layer(axum::extract::DefaultBodyLimit::max(
             juicebox::util::max_file_bytes() as usize,
         ));
@@ -323,8 +353,104 @@ async fn main() -> anyhow::Result<()> {
         "listening on {addr} (prod host: {}), admin key loaded (expires {})",
         PROD_HOST, key_file.expires
     );
-    axum_server::bind(addr)
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await?;
+    let shutdown_state = state.clone();
+    let shutdown_notify_clone = shutdown_notify.clone();
+    let shutdown_rate = rate_handle.clone();
+    let shutdown_handle = Handle::new();
+    let shutdown_cancel = Arc::new(Notify::new());
+    let shutdown_task = tokio::spawn(wait_for_shutdown(
+        shutdown_state,
+        shutdown_notify_clone,
+        shutdown_rate.clone(),
+        shutdown_handle.clone(),
+        shutdown_cancel.clone(),
+    ));
+
+    let server = axum_server::bind(addr)
+        .handle(shutdown_handle.clone())
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>());
+
+    let server_result = server.await;
+    shutdown_handle.shutdown();
+    shutdown_notify.notify_waiters();
+    shutdown_cancel.notify_waiters();
+    let shutdown_handled = match shutdown_task.await {
+        Ok(result) => result,
+        Err(err) => {
+            tracing::warn!(?err, "shutdown task terminated unexpectedly");
+            false
+        }
+    };
+    if let Err(err) = cleanup_handle.await {
+        tracing::warn!(?err, "cleanup task terminated unexpectedly");
+    }
+    if let Some(handle) = email_handle {
+        match handle.await {
+            Ok(_) => {}
+            Err(err) => tracing::warn!(?err, "email task terminated unexpectedly"),
+        }
+    }
+    if !shutdown_handled {
+        state.cleanup_admin_sessions().await;
+        state.persist_admin_sessions().await;
+        state.persist_reports().await;
+        state.persist_bans().await;
+        state.persist_owners().await;
+        state.persist_all_chunk_sessions().await;
+        rate_handle.prune_idle(Duration::from_secs(0)).await;
+    }
+    server_result?;
     Ok(())
+}
+
+async fn wait_for_shutdown(
+    state: AppState,
+    notify: Arc<Notify>,
+    rate: RateLimiterInner,
+    handle: Handle,
+    cancel: Arc<Notify>,
+) -> bool {
+    let triggered = tokio::select! {
+        _ = listen_for_shutdown() => true,
+        _ = cancel.notified() => false,
+    };
+    if !triggered {
+        return false;
+    }
+    tracing::info!("shutdown signal received; commencing graceful shutdown");
+    notify.notify_waiters();
+    handle.shutdown();
+    state.cleanup_admin_sessions().await;
+    state.persist_admin_sessions().await;
+    state.persist_reports().await;
+    state.persist_bans().await;
+    state.persist_owners().await;
+    state.persist_all_chunk_sessions().await;
+    rate.prune_idle(Duration::from_secs(0)).await;
+    true
+}
+
+async fn listen_for_shutdown() {
+    let ctrl_c = async {
+        if let Err(err) = ctrl_c().await {
+            tracing::error!(?err, "failed to install ctrl+c handler");
+        }
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match signal(SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                sigterm.recv().await;
+            }
+            Err(err) => tracing::error!(?err, "failed to install SIGTERM handler"),
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = async {
+        std::future::pending::<()>().await;
+    };
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
 }

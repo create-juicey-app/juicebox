@@ -1,11 +1,12 @@
 use crate::util::{ADMIN_KEY_TTL, ADMIN_SESSION_TTL, new_id, now_secs, ttl_to_duration};
+use anyhow::Result;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::SystemTime};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::{Mutex, RwLock, Semaphore};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FileMeta {
@@ -53,6 +54,24 @@ pub struct ChunkSession {
     pub received: RwLock<Vec<bool>>,
     pub completed: AtomicBool,
     pub last_update: AtomicU64,
+    pub persist_lock: Mutex<()>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct ChunkSessionRecord {
+    owner: String,
+    original_name: String,
+    storage_name: String,
+    ttl_code: String,
+    expires: u64,
+    total_bytes: u64,
+    chunk_size: u64,
+    total_chunks: u32,
+    hash: Option<String>,
+    created: u64,
+    received: Vec<bool>,
+    completed: bool,
+    last_update: u64,
 }
 
 impl ChunkSession {
@@ -67,6 +86,45 @@ impl ChunkSession {
 
     pub fn is_completed(&self) -> bool {
         self.completed.load(Ordering::Relaxed)
+    }
+
+    async fn snapshot(&self) -> ChunkSessionRecord {
+        let received = self.received.read().await.clone();
+        ChunkSessionRecord {
+            owner: self.owner.clone(),
+            original_name: self.original_name.clone(),
+            storage_name: self.storage_name.clone(),
+            ttl_code: self.ttl_code.clone(),
+            expires: self.expires,
+            total_bytes: self.total_bytes,
+            chunk_size: self.chunk_size,
+            total_chunks: self.total_chunks,
+            hash: self.hash.clone(),
+            created: self.created,
+            received,
+            completed: self.completed.load(Ordering::Relaxed),
+            last_update: self.last_update.load(Ordering::Relaxed),
+        }
+    }
+
+    fn from_record(record: ChunkSessionRecord, dir: PathBuf) -> Self {
+        Self {
+            owner: record.owner,
+            original_name: record.original_name,
+            storage_name: record.storage_name,
+            ttl_code: record.ttl_code,
+            expires: record.expires,
+            total_bytes: record.total_bytes,
+            chunk_size: record.chunk_size,
+            total_chunks: record.total_chunks,
+            hash: record.hash,
+            storage_dir: Arc::new(dir),
+            created: record.created,
+            received: RwLock::new(record.received),
+            completed: AtomicBool::new(record.completed),
+            last_update: AtomicU64::new(record.last_update),
+            persist_lock: Mutex::new(()),
+        }
     }
 }
 
@@ -158,6 +216,69 @@ impl AppState {
             }
         }
     }
+
+    pub async fn persist_chunk_session(&self, _id: &str, session: &ChunkSession) -> Result<()> {
+        let _guard = session.persist_lock.lock().await;
+        let snapshot = session.snapshot().await;
+        let json = serde_json::to_vec(&snapshot)?;
+        let path = session.storage_dir.join("session.json");
+        let tmp = path.with_extension("tmp");
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        let mut file = fs::File::create(&tmp).await?;
+        file.write_all(&json).await?;
+        file.sync_all().await?;
+        fs::rename(&tmp, &path).await?;
+        Ok(())
+    }
+
+    pub async fn load_chunk_sessions_from_disk(&self) -> Result<()> {
+        let mut dirs = match fs::read_dir(&*self.chunk_dir).await {
+            Ok(d) => d,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(err.into()),
+        };
+        while let Some(entry) = dirs.next_entry().await? {
+            if !entry.file_type().await?.is_dir() {
+                continue;
+            }
+            let id = entry.file_name().to_string_lossy().to_string();
+            let meta_path = entry.path().join("session.json");
+            let bytes = match fs::read(&meta_path).await {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    tracing::warn!(?err, session_id = %id, "chunk session metadata missing; removing directory");
+                    let _ = fs::remove_dir_all(entry.path()).await;
+                    continue;
+                }
+            };
+            match serde_json::from_slice::<ChunkSessionRecord>(&bytes) {
+                Ok(record) => {
+                    let session = Arc::new(ChunkSession::from_record(record, entry.path()));
+                    self.chunk_sessions.insert(id, session);
+                }
+                Err(err) => {
+                    tracing::warn!(?err, session_id = %id, "failed to parse chunk session metadata; removing directory");
+                    let _ = fs::remove_dir_all(entry.path()).await;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn persist_all_chunk_sessions(&self) {
+        let sessions: Vec<(String, Arc<ChunkSession>)> = self
+            .chunk_sessions
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+        for (id, session) in sessions {
+            if let Err(err) = self.persist_chunk_session(&id, &session).await {
+                tracing::warn!(?err, session_id = %id, "failed to persist chunk session");
+            }
+        }
+    }
     pub async fn is_admin(&self, token: &str) -> bool {
         let map = self.admin_sessions.read().await;
         if let Some(exp) = map.get(token) {
@@ -218,7 +339,9 @@ impl AppState {
     pub async fn remove_chunk_session(&self, id: &str) {
         if let Some((_, session)) = self.chunk_sessions.remove(id) {
             let dir = session.storage_dir.clone();
-            let _ = fs::remove_dir_all(&*dir).await;
+            if let Err(err) = fs::remove_dir_all(&*dir).await {
+                tracing::warn!(?err, path = ?dir, "failed to remove chunk session directory");
+            }
         }
     }
 

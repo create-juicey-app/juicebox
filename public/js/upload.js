@@ -1,11 +1,10 @@
 // js/upload.js
 
-
-import { list } from './ui.js';
-import { fmtBytes, showSnack, copyToClipboard, flashCopied } from './utils.js';
-import { getTTL } from './ui.js';
-import { ownedHandler } from './owned.js';
-import { deleteHandler } from './delete.js';
+import { list } from "./ui.js";
+import { fmtBytes, showSnack, copyToClipboard, flashCopied } from "./utils.js";
+import { getTTL } from "./ui.js";
+import { ownedHandler } from "./owned.js";
+import { deleteHandler } from "./delete.js";
 
 const MIN_CHUNK_SIZE = 64 * 1024; // 64 KiB (backend minimum)
 const MAX_CHUNK_SIZE = 32 * 1024 * 1024; // 32 MiB (backend maximum)
@@ -14,12 +13,20 @@ const DEFAULT_CHUNK_THRESHOLD = 128 * 1024 * 1024; // 128 MiB
 const MAX_TOTAL_CHUNKS = 20_000;
 const STREAMING_OPT_IN =
   typeof window !== "undefined" && window.ENABLE_STREAMING_UPLOADS === true;
+const ACTIVE_STATUS_STATES = new Set([
+  "hashing",
+  "preparing",
+  "uploading",
+  "finalizing",
+]);
 
 export function shouldUseChunk(file) {
   if (!file) return false;
   const override = window.CHUNK_THRESHOLD_BYTES;
   const threshold =
-    typeof override === "number" && override > 0 ? override : DEFAULT_CHUNK_THRESHOLD;
+    typeof override === "number" && override > 0
+      ? override
+      : DEFAULT_CHUNK_THRESHOLD;
   if (window.MAX_FILE_BYTES && file.size > window.MAX_FILE_BYTES) {
     return true;
   }
@@ -29,7 +36,9 @@ export function shouldUseChunk(file) {
 export function selectChunkSize(fileSize) {
   const override = window.PREFERRED_CHUNK_SIZE_BYTES;
   let chunkSize =
-    typeof override === "number" && override > 0 ? override : DEFAULT_CHUNK_SIZE;
+    typeof override === "number" && override > 0
+      ? override
+      : DEFAULT_CHUNK_SIZE;
   chunkSize = Math.max(MIN_CHUNK_SIZE, Math.min(MAX_CHUNK_SIZE, chunkSize));
   const minChunk = Math.ceil(fileSize / MAX_TOTAL_CHUNKS);
   if (minChunk > chunkSize) {
@@ -66,7 +75,7 @@ export const uploadHandler = {
         remoteName: null,
         done: false,
         deleting: false,
-  removed: false,
+        removed: false,
         bar: null,
         barSpan: null,
         container: null,
@@ -81,13 +90,16 @@ export const uploadHandler = {
         hashPromise: null,
         hashChecked: false,
         statusEl: null,
+        statusState: null,
         canceled: false,
+        lastProgressPercent: -1,
       })),
       isGroup: cleaned.length > 1,
     };
     this.batches.push(batch);
     this.renderList();
     this.autoUpload();
+    this.refreshQueueStatuses();
   },
 
   renderList() {
@@ -98,7 +110,8 @@ export const uploadHandler = {
           li.className = "group-batch";
           li.innerHTML =
             '<div class="file-row group-head"><div class="name"></div><div class="size"></div><div class="actions"></div></div><div class="group-files"></div>';
-          li.querySelector(".group-head .name").textContent = batch.files.length + " files";
+          li.querySelector(".group-head .name").textContent =
+            batch.files.length + " files";
           list.appendChild(li);
           batch.groupLi = li;
           li.classList.add("adding");
@@ -140,7 +153,11 @@ export const uploadHandler = {
         if (f.container) return;
         const li = document.createElement("li");
         f.container = li;
-        li.innerHTML = `<div class="file-row"><div class="name">${f.file.name}</div><div class="size">${fmtBytes(f.file.size)}</div><div class="actions"></div></div><div class="bar"><span></span></div>`;
+        li.innerHTML = `<div class="file-row"><div class="name">${
+          f.file.name
+        }</div><div class="size">${fmtBytes(
+          f.file.size
+        )}</div><div class="actions"></div></div><div class="bar"><span></span></div>`;
         const del = document.createElement("button");
         del.type = "button";
         del.className = "remove";
@@ -148,8 +165,8 @@ export const uploadHandler = {
         del.title = "Remove";
         del.setAttribute("aria-label", "Remove file from queue");
         del.addEventListener("click", (e) => {
-            e.stopPropagation();
-            deleteHandler.handleDeleteClick(f, batch);
+          e.stopPropagation();
+          deleteHandler.handleDeleteClick(f, batch);
         });
         f.deleteBtn = del;
         li.querySelector(".actions").appendChild(del);
@@ -214,7 +231,9 @@ export const uploadHandler = {
 
   ensureLinkInput(f, batch, options = {}) {
     if (!f || !f.remoteName) return null;
-    const rel = f.remoteName.startsWith("f/") ? f.remoteName : `f/${f.remoteName}`;
+    const rel = f.remoteName.startsWith("f/")
+      ? f.remoteName
+      : `f/${f.remoteName}`;
     const container = this.ensureLinkContainer(f, batch);
     if (!container) return null;
     const pending = !!options.pending;
@@ -222,7 +241,10 @@ export const uploadHandler = {
     const highlight = !!options.highlight;
 
     if (!f.linkInput || !f.linkInput.isConnected) {
-      f.linkInput = this.makeLinkInput(rel, { autoCopy: autoCopy && !pending, pending });
+      f.linkInput = this.makeLinkInput(rel, {
+        autoCopy: autoCopy && !pending,
+        pending,
+      });
       container.appendChild(f.linkInput);
       f.linkAutoCopied = autoCopy && !pending;
       if (!pending) {
@@ -269,68 +291,114 @@ export const uploadHandler = {
     }
   },
 
+  collectPendingEntries() {
+    const entries = [];
+    for (const batch of this.batches) {
+      for (const f of batch.files) {
+        if (f.removed || f.done || f.deleting) continue;
+        entries.push({ f, batch });
+      }
+    }
+    return entries;
+  },
+
+  refreshQueueStatuses() {
+    const entries = this.collectPendingEntries().filter(({ f }) => !f.canceled);
+    const waiting = entries.filter(
+      ({ f }) => !ACTIVE_STATUS_STATES.has(f.statusState || "")
+    );
+    const total = waiting.length;
+    if (total === 0) {
+      for (const { f } of entries) {
+        if (f.statusState === "queue") {
+          this.setStatusMessage(f, "");
+        }
+      }
+      return;
+    }
+    waiting.forEach(({ f }, index) => {
+      const position = index + 1;
+      const message = total > 1 ? `Queued (${position} of ${total})` : "Queued";
+      this.setStatusMessage(f, message, {
+        state: "queue",
+        ariaLive: position === 1 ? "polite" : "off",
+      });
+    });
+  },
 
   // --- Concurrency Patch ---
   async uploadConcurrent(concurrency = 4) {
     if (this.uploading) return;
     this.uploading = true;
-    const allFiles = [];
-    for (const batch of this.batches) {
-      for (const f of batch.files) {
-        if (!f.removed && !f.done && !f.deleting) {
-          allFiles.push({ f, batch });
-        }
-      }
+    const allFiles = this.collectPendingEntries();
+    if (!allFiles.length) {
+      this.uploading = false;
+      return;
     }
     let idx = 0;
+    this.refreshQueueStatuses();
     const uploadNext = async () => {
       while (true) {
         const current = idx++;
         if (current >= allFiles.length) return;
         const { f, batch } = allFiles[current];
         if (f.canceled || f.removed) {
+          this.refreshQueueStatuses();
           continue;
         }
 
         if (!f.hashChecked) {
-          const showStatus = this.shouldUseChunk(f.file) && !f.canceled;
+          const shouldShowStatus = this.shouldUseChunk(f.file) && !f.canceled;
           try {
-            if (showStatus) this.setStatusMessage(f, "Calculating checksum…");
+            if (shouldShowStatus) {
+              this.setStatusMessage(f, "Calculating checksum…", {
+                state: "hashing",
+                ariaLive: current === 0 ? "assertive" : "polite",
+              });
+            }
             if (!f.hashPromise) {
               f.hashPromise = this.calculateFileHash(f.file);
             }
             const hash = await f.hashPromise;
             if (f.canceled) {
-              if (showStatus) this.setStatusMessage(f, "");
+              if (shouldShowStatus) this.setStatusMessage(f, "");
+              this.refreshQueueStatuses();
               continue;
             }
             f.hash = hash;
             const exists = await this.checkFileHash(hash);
             if (f.canceled) {
-              if (showStatus) this.setStatusMessage(f, "");
+              if (shouldShowStatus) this.setStatusMessage(f, "");
+              this.refreshQueueStatuses();
               continue;
             }
             f.hashChecked = true;
             if (exists) {
-              if (showStatus) this.setStatusMessage(f, "");
+              if (shouldShowStatus) this.setStatusMessage(f, "");
               this.handlePreUploadDuplicate(f, batch);
+              this.refreshQueueStatuses();
               continue;
             }
           } catch (e) {
             f.hashChecked = true;
-            if (window.DEBUG_LOGS) console.warn("Hash check failed, proceeding with upload", e);
+            if (window.DEBUG_LOGS)
+              console.warn("Hash check failed, proceeding with upload", e);
           } finally {
-            if (showStatus && !f.canceled) {
+            if (shouldShowStatus && !f.canceled) {
               this.setStatusMessage(f, "");
             }
+            this.refreshQueueStatuses();
           }
         }
 
         if (f.canceled || f.removed) {
+          this.refreshQueueStatuses();
           continue;
         }
 
+        this.refreshQueueStatuses();
         await this.uploadOne(f, batch);
+        this.refreshQueueStatuses();
       }
     };
     // Start N concurrent uploads
@@ -344,15 +412,16 @@ export const uploadHandler = {
       batch.files = batch.files.filter((f) => !f.removed);
     }
     this.batches = this.batches.filter((b) => b.files.length);
+    this.refreshQueueStatuses();
     this.uploading = false;
   },
 
   async calculateFileHash(file) {
     // Use a Web Worker for hashing to avoid blocking the main thread
     if (!window._fileHashWorker) {
-      window._fileHashWorker = new Worker('/js/file-hash-worker.js');
+      window._fileHashWorker = new Worker("/js/file-hash-worker.js");
       window._fileHashWorker._pending = [];
-      window._fileHashWorker.onmessage = function(e) {
+      window._fileHashWorker.onmessage = function (e) {
         const cb = window._fileHashWorker._pending.shift();
         if (cb) cb(e.data);
       };
@@ -360,7 +429,7 @@ export const uploadHandler = {
     return new Promise((resolve, reject) => {
       window._fileHashWorker._pending.push((data) => {
         if (data.hash) resolve(data.hash);
-        else reject(new Error(data.error || 'Hashing failed'));
+        else reject(new Error(data.error || "Hashing failed"));
       });
       window._fileHashWorker.postMessage(file);
     });
@@ -408,21 +477,49 @@ export const uploadHandler = {
     f.barSpan.style.width = pct.toFixed(2) + "%";
   },
 
-  setStatusMessage(f, message) {
-    if (!f.container) return;
-    if (message) {
-      if (!f.statusEl) {
-        const el = document.createElement("div");
-        el.className = "status-note";
-        f.container.appendChild(el);
-        f.statusEl = el;
+  setStatusMessage(f, message, options = {}) {
+    if (!f?.container) return;
+    const text = typeof message === "string" ? message : "";
+    const opts = options ?? {};
+    const { ariaLive = "polite", state = null, persist = false } = opts;
+
+    if (!text) {
+      if (f.statusEl) {
+        if (persist) {
+          f.statusEl.textContent = "";
+          f.statusEl.style.display = "none";
+          delete f.statusEl.dataset.state;
+        } else {
+          f.statusEl.remove();
+          f.statusEl = null;
+        }
       }
-      f.statusEl.textContent = message;
-      f.statusEl.style.display = "block";
-    } else if (f.statusEl) {
-      f.statusEl.remove();
-      f.statusEl = null;
+      f.statusState = null;
+      return;
     }
+
+    if (!f.statusEl) {
+      const el = document.createElement("div");
+      el.className = "status-note";
+      el.setAttribute("role", "status");
+      el.setAttribute("aria-live", ariaLive);
+      f.container.appendChild(el);
+      f.statusEl = el;
+    }
+
+    f.statusEl.style.display = "flex";
+    f.statusEl.textContent = text;
+    if (ariaLive) {
+      f.statusEl.setAttribute("aria-live", ariaLive);
+    } else {
+      f.statusEl.removeAttribute("aria-live");
+    }
+    if (state) {
+      f.statusEl.dataset.state = state;
+    } else if (f.statusEl.dataset.state) {
+      delete f.statusEl.dataset.state;
+    }
+    f.statusState = state || null;
   },
 
   async uploadMultipart(f, batch, ttlVal) {
@@ -435,16 +532,32 @@ export const uploadHandler = {
       xhr.open("POST", "/upload");
       xhr.responseType = "json";
       let finished = false;
+      f.lastProgressPercent = 0;
+      this.setStatusMessage(f, "Uploading…", {
+        state: "uploading",
+        ariaLive: "polite",
+      });
 
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
-          this.updateProgressBar(f, e.loaded, e.total || f.file.size);
+          const total = e.total || f.file.size || 1;
+          this.updateProgressBar(f, e.loaded, total);
+          const pct = Math.min(100, Math.max(0, (e.loaded / total) * 100));
+          const rounded = Math.round(pct);
+          if (rounded !== f.lastProgressPercent) {
+            this.setStatusMessage(f, `Uploading… ${rounded}%`, {
+              state: "uploading",
+              ariaLive: "off",
+            });
+            f.lastProgressPercent = rounded;
+          }
         }
       };
 
       xhr.onload = () => {
         if (finished || f.canceled) return resolve();
         finished = true;
+        f.lastProgressPercent = -1;
         let payload = xhr.response;
         if (!payload) {
           try {
@@ -471,6 +584,7 @@ export const uploadHandler = {
       xhr.onerror = xhr.onabort = () => {
         if (finished) return;
         finished = true;
+        f.lastProgressPercent = -1;
         if (!f.canceled) f.container?.classList.add("error");
         deleteHandler.updateDeleteButton(f);
         resolve();
@@ -485,7 +599,11 @@ export const uploadHandler = {
     if (f.canceled) return;
     const abort = new AbortController();
     f.abortController = abort;
-    this.setStatusMessage(f, "Preparing...");
+    f.lastProgressPercent = 0;
+    this.setStatusMessage(f, "Preparing upload…", {
+      state: "preparing",
+      ariaLive: "assertive",
+    });
     const chunkSize = this.selectChunkSize(f.file.size);
     const initPayload = {
       filename: f.file.name,
@@ -520,7 +638,10 @@ export const uploadHandler = {
     }
 
     if (!initResponse.ok) {
-      const message = await this.extractError(initResponse, "Failed to start chunked upload.");
+      const message = await this.extractError(
+        initResponse,
+        "Failed to start chunked upload."
+      );
       showSnack(message);
       f.container?.classList.add("error");
       this.setStatusMessage(f, "");
@@ -539,7 +660,8 @@ export const uploadHandler = {
         : initData.storage_name;
     }
     f.chunkSize = initData.chunk_size || chunkSize;
-    f.totalChunks = initData.total_chunks || Math.ceil(f.file.size / f.chunkSize);
+    f.totalChunks =
+      initData.total_chunks || Math.ceil(f.file.size / f.chunkSize);
     f.uploadedBytes = 0;
 
     try {
@@ -552,6 +674,7 @@ export const uploadHandler = {
       }
       this.setStatusMessage(f, "");
       this.removeLinkForFile(f);
+      f.lastProgressPercent = -1;
       await this.cancelChunkSession(f);
       throw err;
     }
@@ -559,19 +682,26 @@ export const uploadHandler = {
     if (f.remoteName) {
       this.ensureLinkInput(f, batch, { pending: true, autoCopy: false });
     }
-    this.setStatusMessage(f, "Finalizing...");
+    this.setStatusMessage(f, "Finalizing…", {
+      state: "finalizing",
+      ariaLive: "polite",
+    });
 
     let completeResponse;
     try {
-      completeResponse = await fetch(`/chunk/${encodeURIComponent(f.chunkSessionId)}/complete`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hash: f.hash || null }),
-        signal: abort.signal,
-      });
+      completeResponse = await fetch(
+        `/chunk/${encodeURIComponent(f.chunkSessionId)}/complete`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hash: f.hash || null }),
+          signal: abort.signal,
+        }
+      );
     } catch (err) {
       if (err?.name === "AbortError") {
         this.setStatusMessage(f, "");
+        f.lastProgressPercent = -1;
         await this.cancelChunkSession(f);
         throw err;
       }
@@ -580,6 +710,7 @@ export const uploadHandler = {
       await this.cancelChunkSession(f);
       this.setStatusMessage(f, "");
       this.removeLinkForFile(f);
+      f.lastProgressPercent = -1;
       throw err;
     }
 
@@ -588,17 +719,22 @@ export const uploadHandler = {
       await this.cancelChunkSession(f);
       this.setStatusMessage(f, "");
       this.removeLinkForFile(f);
+      f.lastProgressPercent = -1;
       this.markFileDuplicate(f, batch, dupPayload);
       return;
     }
 
     if (!completeResponse.ok) {
-      const message = await this.extractError(completeResponse, "Upload failed.");
+      const message = await this.extractError(
+        completeResponse,
+        "Upload failed."
+      );
       showSnack(message);
       f.container?.classList.add("error");
       await this.cancelChunkSession(f);
       this.setStatusMessage(f, "");
       this.removeLinkForFile(f);
+      f.lastProgressPercent = -1;
       throw new Error(message);
     }
 
@@ -614,24 +750,42 @@ export const uploadHandler = {
     const totalChunks = f.totalChunks || Math.ceil(f.file.size / chunkBytes);
     for (let index = 0; index < totalChunks; index++) {
       if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const humanIndex = index + 1;
       const start = index * chunkBytes;
       const end = Math.min(start + chunkBytes, f.file.size);
       const slice = f.file.slice(start, end);
+      const baseStatus =
+        totalChunks > 1
+          ? `Uploading chunk ${humanIndex} of ${totalChunks}`
+          : "Uploading…";
+      this.setStatusMessage(f, baseStatus, {
+        state: "uploading",
+        ariaLive: humanIndex === 1 ? "assertive" : "off",
+      });
       const send = async (useStream) => {
-        const body = useStream && typeof slice.stream === "function" ? slice.stream() : slice;
+        const body =
+          useStream && typeof slice.stream === "function"
+            ? slice.stream()
+            : slice;
         const options = {
           method: "PUT",
           headers: { "Content-Type": "application/octet-stream" },
           body,
           signal: abort.signal,
         };
-        if (useStream && body && typeof body === "object" && typeof body.getReader === "function") {
+        if (
+          useStream &&
+          body &&
+          typeof body === "object" &&
+          typeof body.getReader === "function"
+        ) {
           options.duplex = "half";
         }
         return fetch(`/chunk/${sessionId}/${index}`, options);
       };
 
-      const canStream = this.streamingAllowed && typeof slice.stream === "function";
+      const canStream =
+        this.streamingAllowed && typeof slice.stream === "function";
       let response = null;
       let streamError = null;
 
@@ -645,7 +799,10 @@ export const uploadHandler = {
             window.ENABLE_STREAMING_UPLOADS = false;
           }
           if (window.DEBUG_LOGS) {
-            console.warn("Streaming chunk upload failed, falling back to buffered mode", err);
+            console.warn(
+              "Streaming chunk upload failed, falling back to buffered mode",
+              err
+            );
           }
         }
       }
@@ -656,7 +813,9 @@ export const uploadHandler = {
           window.ENABLE_STREAMING_UPLOADS = false;
         }
         if (window.DEBUG_LOGS) {
-          console.warn("Chunk upload returned 400 with streaming body; retrying without streaming");
+          console.warn(
+            "Chunk upload returned 400 with streaming body; retrying without streaming"
+          );
         }
         response = null;
       }
@@ -670,11 +829,28 @@ export const uploadHandler = {
       }
 
       if (!response.ok) {
-        const message = await this.extractError(response, "Chunk upload failed.");
+        const message = await this.extractError(
+          response,
+          "Chunk upload failed."
+        );
         throw new Error(message);
       }
       f.uploadedBytes = end;
       this.updateProgressBar(f, f.uploadedBytes, f.file.size);
+      const percent = Math.round(
+        Math.min(100, Math.max(0, (f.uploadedBytes / (f.file.size || 1)) * 100))
+      );
+      if (percent !== f.lastProgressPercent) {
+        const message =
+          percent >= 100
+            ? `${baseStatus} (100%)`
+            : `${baseStatus} (${percent}%)`;
+        this.setStatusMessage(f, message, {
+          state: "uploading",
+          ariaLive: humanIndex === 1 && percent <= 5 ? "assertive" : "off",
+        });
+        f.lastProgressPercent = percent;
+      }
     }
   },
 
@@ -708,7 +884,9 @@ export const uploadHandler = {
     const sessionId = f.chunkSessionId;
     f.chunkSessionId = null;
     try {
-      await fetch(`/chunk/${encodeURIComponent(sessionId)}/cancel`, { method: "DELETE" });
+      await fetch(`/chunk/${encodeURIComponent(sessionId)}/cancel`, {
+        method: "DELETE",
+      });
     } catch {
       // ignore network errors on cancel
     } finally {
@@ -738,6 +916,7 @@ export const uploadHandler = {
     }
     this.removeLinkForFile(f);
     this.setStatusMessage(f, "");
+    f.lastProgressPercent = -1;
     if (f.barSpan) {
       f.barSpan.style.width = "0%";
       f.barSpan.classList.remove("complete");
@@ -760,6 +939,7 @@ export const uploadHandler = {
   markFileDuplicate(f, batch, payload) {
     this.setStatusMessage(f, "");
     this.removeLinkForFile(f);
+    f.lastProgressPercent = -1;
     try {
       showSnack("Duplicate file: already uploaded.");
     } catch {}
@@ -785,7 +965,10 @@ export const uploadHandler = {
     batch.files = batch.files.filter((x) => x !== f);
     if (batch.isGroup && batch.files.length === 0 && batch.groupLi) {
       batch.groupLi.classList.add("dupe-remove");
-      setTimeout(() => batch.groupLi?.parentNode?.removeChild(batch.groupLi), 400);
+      setTimeout(
+        () => batch.groupLi?.parentNode?.removeChild(batch.groupLi),
+        400
+      );
     }
     if (!batch.files.length) {
       this.batches = this.batches.filter((b) => b !== batch);
@@ -796,6 +979,7 @@ export const uploadHandler = {
   handlePreUploadDuplicate(f, batch) {
     this.setStatusMessage(f, "");
     this.removeLinkForFile(f);
+    f.lastProgressPercent = -1;
     try {
       showSnack("Duplicate file: already uploaded.");
     } catch {}
@@ -815,6 +999,7 @@ export const uploadHandler = {
 
   handleUploadSuccess(f, batch, payload) {
     this.setStatusMessage(f, "");
+    f.lastProgressPercent = -1;
     f.uploadedBytes = f.file.size;
     if (f.barSpan) {
       f.barSpan.style.width = "100%";

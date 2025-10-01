@@ -1,24 +1,42 @@
 // js/app.js
 
-import { fetchConfig } from './config.js';
-import { setupTTL, setupUI } from './ui.js';
-import { uploadHandler } from './upload.js';
-import { ownedHandler } from './owned.js';
-import { setupEventListeners } from './events.js';
-import { applyother } from './other.js';
+import { fetchConfig } from "./config.js";
+import { setupTTL, setupUI } from "./ui.js";
+import { uploadHandler } from "./upload.js";
+import { ownedHandler } from "./owned.js";
+import { setupEventListeners } from "./events.js";
+import { applyother } from "./other.js";
+import { showSnack } from "./utils.js";
 
-// Wait for the dynamic config to be fetched before initializing
-fetchConfig().then(() => {
-  // Apply all feature patches and other to the core handlers
-  applyother(uploadHandler, ownedHandler);
+let initPromise = null;
 
-  // Setup UI elements and initial state
-  setupTTL();
-  setupUI();
+export async function initializeApp() {
+  if (!initPromise) {
+    initPromise = (async () => {
+      await fetchConfig();
+      applyother(uploadHandler, ownedHandler);
+      setupTTL();
+      setupUI();
+      await ownedHandler.loadExisting();
+      setupEventListeners();
+    })().catch((err) => {
+      initPromise = null;
+      if (window.DEBUG_LOGS) console.error("[app] Failed to initialize", err);
+      try {
+        showSnack("We had trouble starting up. Please refresh and try again.");
+      } catch {}
+      throw err;
+    });
+  }
+  return initPromise;
+}
 
-  // Load user's existing files
-  ownedHandler.loadExisting();
+function boot() {
+  initializeApp().catch(() => {});
+}
 
-  // Setup all event listeners (drag/drop, paste, etc.)
-  setupEventListeners();
-});
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", boot, { once: true });
+} else {
+  boot();
+}

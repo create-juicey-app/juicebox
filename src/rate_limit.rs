@@ -9,7 +9,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
 use tower::{Layer, Service};
@@ -59,6 +59,11 @@ impl RateLimiterInner {
             false
         }
     }
+    pub async fn prune_idle(&self, max_idle: Duration) {
+        let mut map = self.buckets.write().await;
+        let now = Instant::now();
+        map.retain(|_, bucket| now.duration_since(bucket.last) <= max_idle);
+    }
 }
 
 #[derive(Clone)]
@@ -70,6 +75,12 @@ impl RateLimitLayer {
         Self {
             limiter: RateLimiterInner::new(capacity, refill_per_second),
         }
+    }
+    pub fn from_inner(limiter: RateLimiterInner) -> Self {
+        Self { limiter }
+    }
+    pub fn handle(&self) -> RateLimiterInner {
+        self.limiter.clone()
     }
 }
 impl<S> Layer<S> for RateLimitLayer {
@@ -128,7 +139,29 @@ where
     }
 }
 
-pub fn build_rate_limiter() -> RateLimitLayer {
+pub fn build_rate_limiter() -> (RateLimitLayer, RateLimiterInner) {
     // Less strict: allow 180 requests burst, refill 3 tokens/sec
-    RateLimitLayer::new(180, 3)
+    let limiter = RateLimiterInner::new(180, 3);
+    (RateLimitLayer::from_inner(limiter.clone()), limiter)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn prune_idle_removes_stale_buckets() {
+        let limiter = RateLimiterInner::new(5, 1);
+        assert!(limiter.check("198.51.100.1").await);
+        {
+            let mut buckets = limiter.buckets.write().await;
+            if let Some(bucket) = buckets.get_mut("198.51.100.1") {
+                bucket.last = Instant::now() - Duration::from_secs(3_600);
+            }
+        }
+        limiter.prune_idle(Duration::from_secs(60)).await;
+        let buckets = limiter.buckets.read().await;
+        assert!(!buckets.contains_key("198.51.100.1"));
+    }
 }
