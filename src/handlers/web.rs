@@ -25,6 +25,20 @@ pub struct LangQuery {
     pub deleted: Option<String>,
 }
 
+async fn apply_manifest_assets(state: &AppState, ctx: &mut Context) {
+    let manifest_path = state.static_dir.join("dist/manifest.json");
+    if let Ok(manifest_str) = fs::read_to_string(&manifest_path).await {
+        if let Ok(manifest_map) = serde_json::from_str::<HashMap<String, String>>(&manifest_str) {
+            if let Some(app_bundle) = manifest_map.get("app") {
+                ctx.insert("app_bundle", app_bundle);
+            }
+            if let Some(css_bundle) = manifest_map.get("css") {
+                ctx.insert("css_bundle", css_bundle);
+            }
+        }
+    }
+}
+
 pub async fn root_handler(
     State(state): State<AppState>,
     Query(query): Query<LangQuery>,
@@ -36,14 +50,7 @@ pub async fn root_handler(
     ctx.insert("t", &t_map);
     ctx.insert("max_file_bytes", &max_file_bytes());
     ctx.insert("max_file_size_str", &format_bytes(max_file_bytes()));
-    let manifest_path = state.static_dir.join("dist/manifest.json");
-    if let Ok(manifest_str) = fs::read_to_string(&manifest_path).await {
-        if let Ok(manifest_map) = serde_json::from_str::<HashMap<String, String>>(&manifest_str) {
-            if let Some(app_bundle) = manifest_map.get("app") {
-                ctx.insert("app_bundle", app_bundle);
-            }
-        }
-    }
+    apply_manifest_assets(&state, &mut ctx).await;
     let tera = &state.tera;
     match tera.render("index.html.tera", &ctx) {
         Ok(rendered) => (
@@ -167,6 +174,7 @@ pub async fn simple_handler(
     }
     let t_map = load_translation_map(lang).await;
     ctx.insert("t", &t_map);
+    apply_manifest_assets(&state, &mut ctx).await;
     let tera = &state.tera;
     match tera.render("simple.html.tera", &ctx) {
         Ok(rendered) => (
@@ -248,6 +256,7 @@ pub async fn render_tera_page(
     ctx.insert("t", &t_map);
     ctx.insert("max_file_bytes", &max_file_bytes());
     ctx.insert("max_file_size_str", &format_bytes(max_file_bytes()));
+    apply_manifest_assets(state, &mut ctx).await;
     if let Some((k, v)) = extra {
         ctx.insert(k, v);
     }

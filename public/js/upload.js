@@ -66,6 +66,7 @@ export const uploadHandler = {
         remoteName: null,
         done: false,
         deleting: false,
+  removed: false,
         bar: null,
         barSpan: null,
         container: null,
@@ -77,7 +78,10 @@ export const uploadHandler = {
         totalChunks: null,
         uploadedBytes: 0,
         hash: null,
+        hashPromise: null,
+        hashChecked: false,
         statusEl: null,
+        canceled: false,
       })),
       isGroup: cleaned.length > 1,
     };
@@ -280,36 +284,54 @@ export const uploadHandler = {
     }
     let idx = 0;
     const uploadNext = async () => {
-      if (idx >= allFiles.length) return;
-      const { f, batch } = allFiles[idx++];
-      // Calculate hash and check with server before uploading for non-chunked files
-      try {
-        if (this.shouldUseChunk(f.file)) {
-          f.hash = null;
-        } else {
-          f.hash = await this.calculateFileHash(f.file);
-          const exists = await this.checkFileHash(f.hash);
-          if (exists) {
-            showSnack("Duplicate file: already uploaded.");
-            f.done = true;
-            f.removed = true;
-            if (f.container) {
-              f.container.classList.add("dupe-remove");
-              setTimeout(() => {
-                if (f.container && f.container.parentNode) {
-                  f.container.parentNode.removeChild(f.container);
-                }
-              }, 400);
+      while (true) {
+        const current = idx++;
+        if (current >= allFiles.length) return;
+        const { f, batch } = allFiles[current];
+        if (f.canceled || f.removed) {
+          continue;
+        }
+
+        if (!f.hashChecked) {
+          const showStatus = this.shouldUseChunk(f.file) && !f.canceled;
+          try {
+            if (showStatus) this.setStatusMessage(f, "Calculating checksum…");
+            if (!f.hashPromise) {
+              f.hashPromise = this.calculateFileHash(f.file);
             }
-            return uploadNext();
+            const hash = await f.hashPromise;
+            if (f.canceled) {
+              if (showStatus) this.setStatusMessage(f, "");
+              continue;
+            }
+            f.hash = hash;
+            const exists = await this.checkFileHash(hash);
+            if (f.canceled) {
+              if (showStatus) this.setStatusMessage(f, "");
+              continue;
+            }
+            f.hashChecked = true;
+            if (exists) {
+              if (showStatus) this.setStatusMessage(f, "");
+              this.handlePreUploadDuplicate(f, batch);
+              continue;
+            }
+          } catch (e) {
+            f.hashChecked = true;
+            if (window.DEBUG_LOGS) console.warn("Hash check failed, proceeding with upload", e);
+          } finally {
+            if (showStatus && !f.canceled) {
+              this.setStatusMessage(f, "");
+            }
           }
         }
-      } catch (e) {
-        // If hash fails, proceed with upload anyway
-        if (window.DEBUG_LOGS) console.warn("Hash check failed, proceeding with upload", e);
+
+        if (f.canceled || f.removed) {
+          continue;
+        }
+
+        await this.uploadOne(f, batch);
       }
-      await this.uploadOne(f, batch);
-      await uploadNext();
     };
     // Start N concurrent uploads
     const workers = [];
@@ -357,12 +379,15 @@ export const uploadHandler = {
   },
 
   async uploadOne(f, batch) {
+    if (f.canceled) return;
     f.errorMessage = null;
     const ttlVal = getTTL();
     try {
       if (this.shouldUseChunk(f.file)) {
+        if (f.canceled) return;
         await this.uploadChunked(f, batch, ttlVal);
       } else {
+        if (f.canceled) return;
         await this.uploadMultipart(f, batch, ttlVal);
       }
     } catch (err) {
@@ -457,6 +482,7 @@ export const uploadHandler = {
   },
 
   async uploadChunked(f, batch, ttlVal) {
+    if (f.canceled) return;
     const abort = new AbortController();
     f.abortController = abort;
     this.setStatusMessage(f, "Preparing...");
@@ -692,6 +718,10 @@ export const uploadHandler = {
 
   cancelPendingUpload(f) {
     f.canceled = true;
+    f.removed = true;
+    try {
+      showSnack("Upload canceled.");
+    } catch {}
     if (f.xhr) {
       try {
         f.xhr.abort();
@@ -707,6 +737,13 @@ export const uploadHandler = {
       }
     }
     this.removeLinkForFile(f);
+    this.setStatusMessage(f, "");
+    if (f.barSpan) {
+      f.barSpan.style.width = "0%";
+      f.barSpan.classList.remove("complete");
+    }
+    f.bar?.classList.remove("divider");
+    deleteHandler.updateDeleteButton(f);
     return this.cancelChunkSession(f);
   },
 
@@ -752,6 +789,26 @@ export const uploadHandler = {
     }
     if (!batch.files.length) {
       this.batches = this.batches.filter((b) => b !== batch);
+    }
+    deleteHandler.updateDeleteButton(f);
+  },
+
+  handlePreUploadDuplicate(f, batch) {
+    this.setStatusMessage(f, "");
+    this.removeLinkForFile(f);
+    try {
+      showSnack("Duplicate file: already uploaded.");
+    } catch {}
+    f.done = true;
+    f.removed = true;
+    f.canceled = true;
+    if (f.container) {
+      f.container.classList.add("dupe-remove");
+      setTimeout(() => {
+        if (f.container && f.container.parentNode) {
+          f.container.parentNode.removeChild(f.container);
+        }
+      }, 400);
     }
     deleteHandler.updateDeleteButton(f);
   },

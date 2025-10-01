@@ -30,7 +30,7 @@
   <meta name="twitter:image" content="https://box.juicey.dev/silly.gif" />
   <meta name="twitter:image:alt" content="JuiceBox, Temporary File Host, the silly file share." />
   <!-- End social meta -->
-  <link rel="stylesheet" href="/css/app.css" />
+  <link rel="stylesheet" href="{{ css_bundle | default(value='/css/app.css') }}" />
   <style>
     .footer-links a, .footer-links a:visited { color: #fff !important; }
   </style>

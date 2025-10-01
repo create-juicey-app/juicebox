@@ -11,7 +11,7 @@
       name="description"
       content="{{ t.faq_meta_description | default(value='Frequently asked questions about JuiceBox temporary file host') }}"
     />
-    <link rel="stylesheet" href="/css/app.css" />
+  <link rel="stylesheet" href="{{ css_bundle | default(value='/css/app.css') }}" />
     <style>
       body {
         max-width: 860px;

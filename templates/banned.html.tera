@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <title>{{ t.banned_title | default(value='Access Restricted') }}</title>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <link rel="stylesheet" href="/css/app.css" />
+  <link rel="stylesheet" href="{{ css_bundle | default(value='/css/app.css') }}" />
     <style>
       body {
         display: flex;

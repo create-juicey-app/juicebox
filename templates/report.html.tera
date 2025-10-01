@@ -15,7 +15,7 @@
       name="description"
       content="{{ t.report_meta_description | default(value='Report abusive or illegal content hosted on JuiceBox.') }}"
     />
-    <link rel="stylesheet" href="/css/app.css" />
+  <link rel="stylesheet" href="{{ css_bundle | default(value='/css/app.css') }}" />
     <style>
       /* Page‑specific overrides */
       main {
