@@ -153,11 +153,12 @@ export const uploadHandler = {
         if (f.container) return;
         const li = document.createElement("li");
         f.container = li;
-        li.innerHTML = `<div class="file-row"><div class="name">${
-          f.file.name
-        }</div><div class="size">${fmtBytes(
-          f.file.size
-        )}</div><div class="actions"></div></div><div class="bar"><span></span></div>`;
+        li.innerHTML =
+          '<div class="file-row"><div class="name"></div><div class="size"></div><div class="actions"></div></div><div class="bar"><span></span></div>';
+        const nameEl = li.querySelector(".name");
+        const sizeEl = li.querySelector(".size");
+        if (nameEl) nameEl.textContent = f.file.name;
+        if (sizeEl) sizeEl.textContent = fmtBytes(f.file.size);
         const del = document.createElement("button");
         del.type = "button";
         del.className = "remove";

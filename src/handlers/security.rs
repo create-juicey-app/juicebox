@@ -14,20 +14,41 @@ use crate::util::{PROD_HOST, extract_client_ip};
 pub async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     let mut resp = next.run(req).await;
     let h = resp.headers_mut();
-    if !h.contains_key("X-Content-Type-Options") {
+    if !h.contains_key("Content-Security-Policy") {
         h.insert(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:".parse().unwrap(),
+            HeaderValue::from_static(
+                "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:",
+            ),
         );
     }
     if !h.contains_key("Permissions-Policy") {
         h.insert(
             "Permissions-Policy",
-            "camera=(), microphone=(), geolocation=(), fullscreen=(), payment=()"
-                .parse()
-                .unwrap(),
+            HeaderValue::from_static(
+                "camera=(), microphone=(), geolocation=(), fullscreen=(), payment=()",
+            ),
         );
     }
+    if !h.contains_key("Strict-Transport-Security") {
+        h.insert(
+            "Strict-Transport-Security",
+            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        );
+    }
+    if !h.contains_key("Referrer-Policy") {
+        h.insert("Referrer-Policy", HeaderValue::from_static("same-origin"));
+    }
+    if !h.contains_key("X-Content-Type-Options") {
+        h.insert(
+            "X-Content-Type-Options",
+            HeaderValue::from_static("nosniff"),
+        );
+    }
+    if !h.contains_key("X-Frame-Options") {
+        h.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
+    }
+
     if let Some(ct_val) = h.get(CONTENT_TYPE).and_then(|v| v.to_str().ok()) {
         let ct_lower = ct_val.to_ascii_lowercase();
         if ct_lower.starts_with("text/html") && !ct_lower.contains("charset=") {

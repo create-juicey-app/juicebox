@@ -185,10 +185,13 @@ pub async fn auth_post_handler(
         let token = new_id();
         state.create_admin_session(token.clone()).await;
         state.persist_admin_sessions().await;
-        let cookie = format!(
+        let mut cookie = format!(
             "adm={}; Path=/; HttpOnly; Max-Age={}; SameSite=Strict",
             token, ADMIN_SESSION_TTL
         );
+        if state.production {
+            cookie.push_str("; Secure");
+        }
         let mut resp = (
             StatusCode::SEE_OTHER,
             [(LOCATION, HeaderValue::from_static("/"))],
@@ -242,7 +245,19 @@ pub async fn admin_files_handler(State(state): State<AppState>, headers: HeaderM
         } else {
             format!("{}s", remain)
         };
-        rows.push_str(&format!("<tr><td><a href=\"/f/{f}\" target=_blank rel=noopener>{f}</a></td><td>{o}</td><td data-exp=\"{exp}\">{human}</td><td>{size}</td><td><form method=post action=/admin/files style=margin:0><input type=hidden name=file value=\"{f}\"><button type=submit class=del data-file=\"{f}\">Delete</button></form></td></tr>", f=file, o=&meta.owner, exp=meta.expires, human=human, size=size));
+        let file_href = format!("/f/{}", urlencoding::encode(file));
+        let file_label = htmlescape::encode_minimal(file);
+        let owner_label = htmlescape::encode_minimal(&meta.owner);
+        let file_attr = htmlescape::encode_minimal(file);
+        rows.push_str(&format!("<tr><td><a href=\"{href}\" target=_blank rel=noopener>{label}</a></td><td>{owner}</td><td data-exp=\"{exp}\">{human}</td><td>{size}</td><td><form method=post action=/admin/files style=margin:0><input type=hidden name=file value=\"{file_attr}\"><button type=submit class=del data-file=\"{file_attr}\">Delete</button></form></td></tr>",
+            href = file_href,
+            label = file_label,
+            owner = owner_label,
+            exp = meta.expires,
+            human = human,
+            size = size,
+            file_attr = file_attr,
+        ));
     }
     let tpl_path = state.static_dir.join("admin_files.html");
     match fs::read(&tpl_path).await {

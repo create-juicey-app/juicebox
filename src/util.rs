@@ -12,6 +12,7 @@ use std::{
 // removed rand; using cuid now
 use crate::state::AppState;
 use once_cell::sync::Lazy;
+use std::sync::RwLock;
 
 // Public constants
 // RANDOM_NAME_LEN removed (no longer needed with CUID)
@@ -30,6 +31,35 @@ pub const FORBIDDEN_EXTENSIONS: &[&str] = &[
     "js", "jse", "wsf", "wsh", "reg", "sh", "php", "pl", "py", "rb", "gadget", "hta", "mht",
     "mhtml",
 ];
+
+#[derive(Debug)]
+struct TrustedProxyConfig {
+    allow_headers: bool,
+    trusted_proxies: Vec<String>,
+}
+
+fn parse_truthy_env(var: &str) -> bool {
+    std::env::var(var)
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+static TRUSTED_PROXY_CONFIG: Lazy<RwLock<TrustedProxyConfig>> = Lazy::new(|| {
+    let allow_headers = parse_truthy_env("TRUST_PROXY_HEADERS");
+    let trusted_proxies = std::env::var("TRUSTED_PROXY_CIDRS")
+        .map(|raw| {
+            raw.split(',')
+                .map(|segment| segment.trim())
+                .filter(|segment| !segment.is_empty())
+                .map(|segment| segment.to_string())
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_else(|_| Vec::new());
+    RwLock::new(TrustedProxyConfig {
+        allow_headers,
+        trusted_proxies,
+    })
+});
 
 #[derive(Serialize)]
 pub struct ErrorBody {
@@ -174,19 +204,53 @@ pub fn is_cloudflare_edge(remote: IpAddr) -> bool {
     CF_CIDRS.iter().any(|c| ip_in_cidr(remote, c))
 }
 
+fn parse_ip(value: &str) -> Option<IpAddr> {
+    value.trim().parse::<IpAddr>().ok()
+}
+
 pub fn extract_client_ip(headers: &HeaderMap, fallback: Option<IpAddr>) -> String {
-    if let Some(val) = headers
-        .get("CF-Connecting-IP")
-        .and_then(|v| v.to_str().ok())
     {
-        if let Ok(ip) = val.trim().parse::<IpAddr>() {
-            return ip.to_string();
-        }
-    }
-    if let Some(val) = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = val.split(',').next() {
-            if let Ok(ip) = first.trim().parse::<IpAddr>() {
-                return ip.to_string();
+        let cfg = TRUSTED_PROXY_CONFIG
+            .read()
+            .expect("trusted proxy configuration poisoned");
+        if cfg.allow_headers {
+            if let Some(source_ip) = fallback {
+                let proxy_trusted = cfg.trusted_proxies.is_empty()
+                    || cfg
+                        .trusted_proxies
+                        .iter()
+                        .any(|cidr| ip_in_cidr(source_ip, cidr));
+                if proxy_trusted {
+                    if let Some(ip) = headers
+                        .get("CF-Connecting-IP")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(parse_ip)
+                    {
+                        return ip.to_string();
+                    }
+                    if let Some(ip) = headers
+                        .get("True-Client-IP")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(parse_ip)
+                    {
+                        return ip.to_string();
+                    }
+                    if let Some(ip) = headers
+                        .get("X-Real-IP")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(parse_ip)
+                    {
+                        return ip.to_string();
+                    }
+                    if let Some(val) = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok())
+                    {
+                        for candidate in val.split(',') {
+                            if let Some(ip) = parse_ip(candidate) {
+                                return ip.to_string();
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -197,6 +261,14 @@ pub fn extract_client_ip(headers: &HeaderMap, fallback: Option<IpAddr>) -> Strin
 
 pub fn real_client_ip(headers: &HeaderMap, fallback: &std::net::SocketAddr) -> String {
     extract_client_ip(headers, Some(fallback.ip()))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn set_trusted_proxy_config_for_tests(allow_headers: bool, cidrs: Vec<String>) {
+    if let Ok(mut cfg) = TRUSTED_PROXY_CONFIG.write() {
+        cfg.allow_headers = allow_headers;
+        cfg.trusted_proxies = cidrs;
+    }
 }
 
 // new: max simultaneous active files per IP
