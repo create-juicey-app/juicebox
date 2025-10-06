@@ -16,7 +16,7 @@ export const deleteHandler = {
       f.deleteBtn.disabled = false;
       f.deleteBtn.title = "Remove (not uploaded)";
     } else {
-      f.deleteBtn.textContent = "🗑️";
+      f.deleteBtn.textContent = "❌";
       f.deleteBtn.disabled = false;
       f.deleteBtn.title = "Delete from server";
     }
