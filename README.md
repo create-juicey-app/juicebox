@@ -31,6 +31,12 @@ cargo run --release
 
 By default, Juicebox will start its backend server, which serves both the frontend web UI and the API.
 
+Before starting the server, set an `IP_HASH_SECRET` environment variable (minimum 16 bytes) that will be used for HMAC-based IP hashing. You can generate one with:
+
+```bash
+openssl rand -hex 32
+```
+
 #### Frontend assets & tests
 
 Install the JavaScript toolchain once:

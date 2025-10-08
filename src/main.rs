@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use axum::{Router, middleware};
 use axum_server::Handle;
 use dashmap::DashMap;
@@ -6,14 +7,12 @@ use juicebox::handlers::{add_cache_headers, add_security_headers, build_router, 
 use juicebox::rate_limit::{RateLimiterInner, build_rate_limiter};
 use juicebox::state::{AppState, BanSubject, FileMeta, IpBan, ReportRecord, cleanup_expired};
 use juicebox::util::{IpVersion, PROD_HOST, UPLOAD_CONCURRENCY, hash_ip_string, hash_network_from_cidr, looks_like_hash, now_secs, ttl_to_duration};
-use rand::rngs::OsRng;
-use rand::RngCore;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
     io::ErrorKind,
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -294,6 +293,40 @@ async fn load_bans_with_migration(
     Ok((Vec::new(), false))
 }
 
+fn decode_hash_secret(raw: &str) -> anyhow::Result<Vec<u8>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("IP_HASH_SECRET may not be empty"));
+    }
+    // fuck you
+    if trimmed.len() % 2 == 0 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        let mut buf = Vec::with_capacity(trimmed.len() / 2);
+        for chunk in trimmed.as_bytes().chunks(2) {
+            let hi = (chunk[0] as char)
+                .to_digit(16)
+                .ok_or_else(|| anyhow!("IP_HASH_SECRET contains invalid hex"))?;
+            let lo = (chunk[1] as char)
+                .to_digit(16)
+                .ok_or_else(|| anyhow!("IP_HASH_SECRET contains invalid hex"))?;
+            buf.push(((hi << 4) | lo) as u8);
+        }
+        return Ok(buf);
+    }
+    Ok(trimmed.as_bytes().to_vec())
+}
+
+fn load_hash_secret_from_env() -> anyhow::Result<Vec<u8>> {
+    let raw = std::env::var("IP_HASH_SECRET")
+        .map_err(|_| anyhow!("IP_HASH_SECRET environment variable is required"))?;
+    let bytes = decode_hash_secret(&raw)?;
+    if bytes.len() < 16 {
+        return Err(anyhow!(
+            "IP_HASH_SECRET must be at least 16 bytes after decoding"
+        ));
+    }
+    Ok(bytes)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize tracing subscriber for logging
@@ -313,34 +346,13 @@ async fn main() -> anyhow::Result<()> {
     let admin_key_path = Arc::new(data_dir.join("admin_key.json"));
     let bans_path = Arc::new(data_dir.join("ip_bans.json"));
     let chunk_dir = Arc::new(data_dir.join("chunks"));
-    let ip_hash_secret_path = data_dir.join("ip_hash_secret.bin");
 
     // try create data dir earlier (already done above)
     fs::create_dir_all(&*static_dir).await?;
     fs::create_dir_all(&*upload_dir).await?;
     fs::create_dir_all(&*data_dir).await?;
     fs::create_dir_all(&*chunk_dir).await?;
-    if fs::metadata(&ip_hash_secret_path).await.is_err() {
-        let mut buf = [0u8; 32];
-        OsRng.fill_bytes(&mut buf);
-        fs::write(&ip_hash_secret_path, &buf).await?;
-    }
-    let ip_hash_secret = if let Ok(bytes) = fs::read(&ip_hash_secret_path).await {
-        if !bytes.is_empty() {
-            bytes
-        } else {
-            let mut buf = [0u8; 32];
-            OsRng.fill_bytes(&mut buf);
-            fs::write(&ip_hash_secret_path, &buf).await?;
-            buf.to_vec()
-        }
-    } else {
-        let mut buf = [0u8; 32];
-        OsRng.fill_bytes(&mut buf);
-        fs::write(&ip_hash_secret_path, &buf).await?;
-        buf.to_vec()
-    };
-    let ip_hash_secret = Arc::new(ip_hash_secret);
+    let ip_hash_secret = Arc::new(load_hash_secret_from_env()?);
     // ensure bans file presence
     let _ = fs::OpenOptions::new()
         .create(true)
@@ -712,7 +724,7 @@ async fn wait_for_shutdown(
 async fn listen_for_shutdown() {
     let ctrl_c = async {
         if let Err(err) = ctrl_c().await {
-            tracing::error!(?err, "failed to install ctrl+c handler");
+            tracing::error!(?err, "failed to install ctrl+c handler"); // this shouldn't happen.
         }
     };
     #[cfg(unix)]

@@ -3,9 +3,10 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use hmac::{Hmac, Mac};
 use sanitize_filename::sanitize;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -142,12 +143,18 @@ pub enum IpVersion {
     V6,
 }
 
+type HmacSha256 = Hmac<Sha256>;
+
 fn hash_with_secret(secret: &[u8], payload: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(secret);
-    hasher.update(b"::");
-    hasher.update(payload);
-    format!("{:x}", hasher.finalize())
+    let mut mac = HmacSha256::new_from_slice(secret)
+        .expect("HMAC key initialization should accept arbitrary key length");
+    mac.update(payload);
+    let result = mac.finalize().into_bytes();
+    let mut hex = String::with_capacity(result.len() * 2);
+    for byte in result {
+        hex.push_str(&format!("{:02x}", byte));
+    }
+    hex
 }
 
 fn ip_version_tag(ip: &IpAddr) -> (&'static str, IpVersion) {
