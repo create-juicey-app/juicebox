@@ -733,7 +733,7 @@ async fn listen_for_shutdown() {
             Ok(mut sigterm) => {
                 sigterm.recv().await;
             }
-            Err(err) => tracing::error!(?err, "failed to install SIGTERM handler"),
+            Err(err) => tracing::error!(?err, "failed to install SIGTERM handler"), //this shouldn't happen either
         }
     };
     #[cfg(not(unix))]
