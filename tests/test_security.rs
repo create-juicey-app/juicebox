@@ -61,7 +61,7 @@ async fn admin_files_handler_escapes_html_entities() {
     state.owners.insert(
         file_name.to_string(),
         FileMeta {
-            owner: owner.to_string(),
+            owner_hash: owner.to_string(),
             expires: now + 3600,
             original: file_name.to_string(),
             created: now,
@@ -86,7 +86,12 @@ async fn admin_files_handler_escapes_html_entities() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let body = String::from_utf8(body_bytes.to_vec()).unwrap();
-    let escaped_owner = htmlescape::encode_minimal(owner);
+    let truncated = if owner.len() <= 12 {
+        owner.to_string()
+    } else {
+        format!("{}…", &owner[..12])
+    };
+    let escaped_owner = htmlescape::encode_minimal(&truncated);
     assert!(body.contains(&escaped_owner));
     assert!(!body.contains(owner));
 

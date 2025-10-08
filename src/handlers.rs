@@ -1,5 +1,5 @@
-use axum::Router;
 use axum::routing::{delete, get, post, put};
+use axum::Router;
 use tower_http::services::ServeDir;
 
 use crate::state::AppState;
@@ -13,26 +13,26 @@ pub mod upload;
 pub mod web;
 
 pub use admin::{
-    AdminAuthForm, AdminFileDeleteForm, AdminReportDeleteForm, BanForm, UnbanForm,
     admin_file_delete_handler, admin_files_handler, admin_report_delete_handler,
     admin_reports_handler, auth_get_handler, auth_post_handler, ban_page_handler, ban_post_handler,
-    is_admin_handler, unban_post_handler,
+    is_admin_handler, unban_post_handler, AdminAuthForm, AdminFileDeleteForm,
+    AdminReportDeleteForm, BanForm, UnbanForm,
 };
 pub use delete::{
-    SimpleDeleteForm, delete_handler, simple_delete_handler, simple_delete_post_handler,
+    delete_handler, simple_delete_handler, simple_delete_post_handler, SimpleDeleteForm,
 };
-pub use hosting::{ConfigResponse, config_handler, fetch_file_handler, file_handler};
-pub use reports::{ReportForm, ReportRecordEmail, report_handler};
+pub use hosting::{config_handler, fetch_file_handler, file_handler, ConfigResponse};
+pub use reports::{report_handler, ReportForm, ReportRecordEmail};
 pub use security::{add_cache_headers, add_security_headers, ban_gate, enforce_host};
 pub use upload::{
-    CheckHashQuery, ChunkCompleteRequest, ChunkInitRequest, ChunkInitResponse, FileMetaEntry,
-    ListResponse, UploadResponse, cancel_chunk_upload_handler, checkhash_handler,
-    complete_chunk_upload_handler, init_chunk_upload_handler, list_handler, simple_list_handler,
-    simple_upload_handler, upload_chunk_part_handler, upload_handler,
+    cancel_chunk_upload_handler, checkhash_handler, complete_chunk_upload_handler,
+    init_chunk_upload_handler, list_handler, simple_list_handler, simple_upload_handler,
+    upload_chunk_part_handler, upload_handler, CheckHashQuery, ChunkCompleteRequest,
+    ChunkInitRequest, ChunkInitResponse, FileMetaEntry, ListResponse, UploadResponse,
 };
 pub use web::{
-    LangQuery, SimpleQuery, banned_handler, debug_ip_handler, faq_handler,
-    report_page_handler_i18n, root_handler, simple_handler, terms_handler, trusted_handler,
+    banned_handler, debug_ip_handler, faq_handler, report_page_handler_i18n, root_handler,
+    simple_handler, terms_handler, trusted_handler, LangQuery, SimpleQuery,
 };
 
 pub fn build_router(state: AppState) -> Router {

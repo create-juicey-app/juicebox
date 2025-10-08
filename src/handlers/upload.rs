@@ -1,28 +1,28 @@
-use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Multipart, Path, Query as AxumQuery, State};
 use axum::http::header::CACHE_CONTROL;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use infer;
 use mime_guess::mime;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr as ClientAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::Arc;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::state::{
-    AppState, ChunkSession, FileMeta, ReconcileReport, check_storage_integrity, cleanup_expired,
-    spawn_integrity_check, verify_user_entries_with_report,
+    check_storage_integrity, cleanup_expired, spawn_integrity_check,
+    verify_user_entries_with_report, AppState, ChunkSession, FileMeta, ReconcileReport,
 };
 use crate::util::{
-    FORBIDDEN_EXTENSIONS, is_forbidden_extension, json_error, make_storage_name, max_file_bytes,
-    new_id, now_secs, qualify_path, real_client_ip, ttl_to_duration,
+    is_forbidden_extension, json_error, make_storage_name, max_file_bytes, new_id, now_secs,
+    qualify_path, real_client_ip, ttl_to_duration, FORBIDDEN_EXTENSIONS,
 };
 
 #[derive(Deserialize)]
@@ -156,6 +156,15 @@ pub async fn init_chunk_upload_handler(
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
     let ip = real_client_ip(&headers, &addr);
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+        hash
+    } else {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_ip",
+            "unable to fingerprint client",
+        );
+    };
     if req.size == 0 {
         return json_error(StatusCode::BAD_REQUEST, "empty", "file size required");
     }
@@ -171,16 +180,16 @@ pub async fn init_chunk_upload_handler(
     let ttl = ttl_to_duration(&ttl_code).as_secs();
     let expires = now + ttl;
 
-    let (chunk_size, total_chunks) = match compute_chunk_layout(req.size, req.chunk_size) {
-        Some(layout) => layout,
-        None => {
+    let (chunk_size, total_chunks) =
+        if let Some(layout) = compute_chunk_layout(req.size, req.chunk_size) {
+            layout
+        } else {
             return json_error(
                 StatusCode::BAD_REQUEST,
                 "chunk_layout",
                 "unable to compute chunk layout",
             );
-        }
-    };
+        };
 
     if let Some(hash) = req.hash.as_ref() {
         if let Some((file, meta)) = find_duplicate_by_hash(&state, hash) {
@@ -209,7 +218,7 @@ pub async fn init_chunk_upload_handler(
     }
 
     let session = Arc::new(ChunkSession {
-        owner: ip,
+        owner_hash: owner_hash,
         original_name: req.filename.clone(),
         storage_name: storage_name.clone(),
         ttl_code: ttl_code.clone(),
@@ -263,6 +272,15 @@ pub async fn upload_chunk_part_handler(
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
     let ip = real_client_ip(&headers, &addr);
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+        hash
+    } else {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_ip",
+            "unable to fingerprint client",
+        );
+    };
     let Some(session_ref) = state.chunk_sessions.get(&params.id) else {
         return json_error(
             StatusCode::NOT_FOUND,
@@ -273,7 +291,7 @@ pub async fn upload_chunk_part_handler(
     let session = session_ref.value().clone();
     drop(session_ref);
     session.touch();
-    if session.owner != ip {
+    if session.owner_hash != owner_hash {
         return json_error(
             StatusCode::FORBIDDEN,
             "not_owner",
@@ -346,6 +364,15 @@ pub async fn complete_chunk_upload_handler(
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
     let ip = real_client_ip(&headers, &addr);
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+        hash
+    } else {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_ip",
+            "unable to fingerprint client",
+        );
+    };
     let Some(session_entry) = state.chunk_sessions.get(&path.id) else {
         return json_error(
             StatusCode::NOT_FOUND,
@@ -355,7 +382,7 @@ pub async fn complete_chunk_upload_handler(
     };
     let session = session_entry.value().clone();
     drop(session_entry);
-    if session.owner != ip {
+    if session.owner_hash != owner_hash {
         return json_error(
             StatusCode::FORBIDDEN,
             "not_owner",
@@ -504,7 +531,7 @@ pub async fn complete_chunk_upload_handler(
     }
 
     let meta = FileMeta {
-        owner: session.owner.clone(),
+        owner_hash: session.owner_hash.clone(),
         expires,
         original: session.original_name.clone(),
         created: now_secs(),
@@ -541,6 +568,15 @@ pub async fn cancel_chunk_upload_handler(
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
     let ip = real_client_ip(&headers, &addr);
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+        hash
+    } else {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_ip",
+            "unable to fingerprint client",
+        );
+    };
     let Some(entry) = state.chunk_sessions.get(&path.id) else {
         return json_error(
             StatusCode::NOT_FOUND,
@@ -548,7 +584,7 @@ pub async fn cancel_chunk_upload_handler(
             "upload session not found",
         );
     };
-    if entry.value().owner != ip {
+    if entry.value().owner_hash != owner_hash {
         return json_error(
             StatusCode::FORBIDDEN,
             "not_owner",
@@ -586,6 +622,15 @@ pub async fn upload_handler(
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
     let ip = real_client_ip(&headers, &addr);
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+        hash
+    } else {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_ip",
+            "unable to fingerprint client",
+        );
+    };
     let sem = state.upload_sem.clone();
     let _permit = match sem.try_acquire_owned() {
         Ok(p) => p,
@@ -692,14 +737,14 @@ pub async fn upload_handler(
 
     for (original_name, data) in &files_to_process {
         if data.len() as u64 > max_file_bytes() {
-            tracing::warn!(ip = %ip, ?original_name, size = data.len(), "Upload rejected: file too large");
+            tracing::warn!(owner_hash = %owner_hash, ?original_name, size = data.len(), "Upload rejected: file too large");
             continue;
         }
         let mut hasher = Sha256::new();
         hasher.update(&data);
         let hash = format!("{:x}", hasher.finalize());
         if let Some(entry) = state.owners.iter().find(|entry| entry.value().hash == hash) {
-            tracing::info!(ip = %ip, ?original_name, file = %entry.key(), "Duplicate upload detected");
+            tracing::info!(owner_hash = %owner_hash, ?original_name, file = %entry.key(), "Duplicate upload detected");
             duplicate_info = Some(json!({
                 "duplicate": true,
                 "file": entry.key(),
@@ -709,7 +754,7 @@ pub async fn upload_handler(
         }
         let storage_name = make_storage_name(original_name.as_deref());
         if is_forbidden_extension(&storage_name) {
-            tracing::warn!(ip = %ip, ?original_name, file = %storage_name, "Upload rejected: forbidden extension");
+            tracing::warn!(owner_hash = %owner_hash, ?original_name, file = %storage_name, "Upload rejected: forbidden extension");
             continue;
         }
         let path = state.upload_dir.join(&storage_name);
@@ -718,14 +763,14 @@ pub async fn upload_handler(
                 hash: hash.clone(),
                 created: now,
                 expires,
-                owner: ip.clone(),
+                owner_hash: owner_hash.clone(),
                 original: original_name.clone().unwrap_or_default(),
             };
             state.owners.insert(storage_name.clone(), meta);
-            tracing::info!(ip = %ip, file = %storage_name, size = data.len(), "File uploaded successfully");
+            tracing::info!(owner_hash = %owner_hash, file = %storage_name, size = data.len(), "File uploaded successfully");
             saved_files.push(storage_name);
         } else {
-            tracing::error!(ip = %ip, file = %storage_name, "Failed to write uploaded file");
+            tracing::error!(owner_hash = %owner_hash, file = %storage_name, "Failed to write uploaded file");
         }
     }
 
@@ -761,7 +806,10 @@ pub async fn list_handler(
     }
     cleanup_expired(&state).await;
     let client_ip = real_client_ip(&headers, &addr);
-    let reconcile_report = verify_user_entries_with_report(&state, &client_ip).await;
+    let Some(owner_hash) = state.hash_ip_to_string(&client_ip) else {
+        return json_error(StatusCode::FORBIDDEN, "invalid_ip", "unable to fingerprint client");
+    };
+    let reconcile_report = verify_user_entries_with_report(&state, &owner_hash).await;
     cleanup_expired(&state).await;
     check_storage_integrity(&state).await;
     let mut files: Vec<(String, u64, String, u64, u64)> = state
@@ -769,7 +817,7 @@ pub async fn list_handler(
         .iter()
         .filter_map(|entry| {
             let m = entry.value();
-            if m.owner == client_ip {
+            if m.owner_hash == owner_hash {
                 let set = m.created;
                 let total = if m.expires > set { m.expires - set } else { 0 };
                 Some((
@@ -822,6 +870,15 @@ pub async fn simple_upload_handler(
     mut multipart: Multipart,
 ) -> Response {
     let ip = real_client_ip(&headers, &addr);
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+        hash
+    } else {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_ip",
+            "unable to fingerprint client",
+        );
+    };
     let mut ttl_code = "3d".to_string();
     let mut files_to_process = Vec::new();
     let mut forbidden_error: Option<String> = None;
@@ -931,7 +988,7 @@ pub async fn simple_upload_handler(
     for (original_name, data) in &files_to_process {
         let now = now_secs();
         if data.len() as u64 > max_file_bytes() {
-            tracing::warn!(ip = %ip, ?original_name, size = data.len(), "Simple upload rejected: file too large");
+            tracing::warn!(owner_hash = %owner_hash, ?original_name, size = data.len(), "Simple upload rejected: file too large");
             continue;
         }
         let mut hasher = Sha256::new();
@@ -939,23 +996,23 @@ pub async fn simple_upload_handler(
         let hash = format!("{:x}", hasher.finalize());
         let storage_name = make_storage_name(original_name.as_deref());
         if is_forbidden_extension(&storage_name) {
-            tracing::warn!(ip = %ip, ?original_name, file = %storage_name, "Simple upload rejected: forbidden extension");
+            tracing::warn!(owner_hash = %owner_hash, ?original_name, file = %storage_name, "Simple upload rejected: forbidden extension");
             continue;
         }
         let path = state.upload_dir.join(&storage_name);
         if fs::write(&path, data).await.is_ok() {
             let meta = FileMeta {
-                owner: ip.clone(),
+                owner_hash: owner_hash.clone(),
                 expires,
                 original: original_name.clone().unwrap_or_default(),
                 created: now,
                 hash: hash.clone(),
             };
             state.owners.insert(storage_name.clone(), meta);
-            tracing::info!(ip = %ip, file = %storage_name, size = data.len(), "Simple file uploaded successfully");
+            tracing::info!(owner_hash = %owner_hash, file = %storage_name, size = data.len(), "Simple file uploaded successfully");
             saved_files.push(storage_name);
         } else {
-            tracing::error!(ip = %ip, file = %storage_name, "Failed to write simple uploaded file");
+            tracing::error!(owner_hash = %owner_hash, file = %storage_name, "Failed to write simple uploaded file");
         }
     }
 

@@ -13,10 +13,10 @@ pub struct ReportRecordEmail {
     pub file: String,
     pub reason: String,
     pub details: String,
-    pub ip: String,
+    pub reporter_hash: String,
     pub time: u64,
     pub iso_time: String,
-    pub owner_ip: String,
+    pub owner_hash: String,
     pub original_name: String,
     pub expires: u64,
     pub size: u64,
@@ -43,6 +43,13 @@ pub async fn report_handler(
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
     let ip = real_client_ip(&headers, &addr);
+    let Some(reporter_hash) = state.hash_ip_to_string(&ip) else {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_ip",
+            "unable to fingerprint client",
+        );
+    };
     let now = now_secs();
     let mut file_name = form.file.trim().to_string();
     if state.owners.get(&file_name).is_none() && !file_name.contains('.') {
@@ -69,10 +76,10 @@ pub async fn report_handler(
         file: file_name.clone(),
         reason: form.reason.clone(),
         details: form.details.clone().unwrap_or_default(),
-        ip: ip.clone(),
+        reporter_hash: reporter_hash.clone(),
         time: now,
     };
-    let (owner_ip, original_name, expires, size) = {
+    let (owner_hash, original_name, expires, size) = {
         if let Some(meta) = state.owners.get(&record.file) {
             let meta = meta.value();
             let path = state.upload_dir.join(&record.file);
@@ -80,7 +87,12 @@ pub async fn report_handler(
                 .await
                 .map(|m| m.len())
                 .unwrap_or(0);
-            (meta.owner.clone(), meta.original.clone(), meta.expires, sz)
+            (
+                meta.owner_hash.clone(),
+                meta.original.clone(),
+                meta.expires,
+                sz,
+            )
         } else {
             (String::new(), String::new(), 0u64, 0u64)
         }
@@ -106,10 +118,10 @@ pub async fn report_handler(
                 file: record.file.clone(),
                 reason: record.reason.clone(),
                 details: record.details.clone(),
-                ip: record.ip.clone(),
+                reporter_hash: record.reporter_hash.clone(),
                 time: record.time,
                 iso_time: iso,
-                owner_ip,
+                owner_hash,
                 original_name,
                 expires,
                 size,

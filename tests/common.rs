@@ -1,10 +1,19 @@
 mod common {}
 
 use juicebox::state::{AppState, ReportRecord};
-use juicebox::util::UPLOAD_CONCURRENCY;
+use juicebox::util::{hash_ip_string, UPLOAD_CONCURRENCY};
 use std::{collections::HashMap, path::Path, sync::Arc, time::SystemTime};
 use tempfile::TempDir;
 use tokio::sync::{RwLock, Semaphore};
+
+pub const PRIMARY_HASH_SECRET: [u8; 32] = [0x11; 32];
+pub const SECONDARY_HASH_SECRET: [u8; 32] = [0x22; 32];
+
+pub fn hash_fixture_ip(ip: &str) -> String {
+    hash_ip_string(&PRIMARY_HASH_SECRET, ip)
+        .map(|(_, hash)| hash)
+        .expect("hash fixture ip")
+}
 
 pub fn setup_test_app() -> (AppState, TempDir) {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -38,6 +47,7 @@ pub fn setup_test_app() -> (AppState, TempDir) {
     let tera = Arc::new(
         tera::Tera::new("templates/**/*.tera").expect("Failed to load templates for tests"),
     );
+    let ip_hash_secret = Arc::new(PRIMARY_HASH_SECRET.to_vec());
 
     let state = AppState {
         upload_dir,
@@ -63,6 +73,7 @@ pub fn setup_test_app() -> (AppState, TempDir) {
         tera,
         chunk_dir,
         chunk_sessions: Arc::new(dashmap::DashMap::new()),
+        ip_hash_secret,
     };
 
     (state, temp_dir)
@@ -92,6 +103,7 @@ pub fn recreate_state(base_path: &Path) -> AppState {
     let tera = Arc::new(
         tera::Tera::new("templates/**/*.tera").expect("Failed to load templates for tests"),
     );
+    let ip_hash_secret = Arc::new(SECONDARY_HASH_SECRET.to_vec());
 
     AppState {
         upload_dir,
@@ -117,5 +129,6 @@ pub fn recreate_state(base_path: &Path) -> AppState {
         tera,
         chunk_dir,
         chunk_sessions: Arc::new(dashmap::DashMap::new()),
+        ip_hash_secret,
     }
 }

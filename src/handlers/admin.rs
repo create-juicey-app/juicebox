@@ -1,14 +1,14 @@
-use axum::Json;
 use axum::extract::{Form, State};
 use axum::http::header::{CONTENT_TYPE, LOCATION, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::fs;
 
-use crate::state::AppState;
-use crate::util::{ADMIN_SESSION_TTL, get_cookie, json_error, new_id, now_secs};
+use crate::state::{AppState, BanSubject, IpBan};
+use crate::util::{get_cookie, json_error, new_id, now_secs, IpVersion, ADMIN_SESSION_TTL};
 
 #[derive(Deserialize)]
 pub struct BanForm {
@@ -18,7 +18,7 @@ pub struct BanForm {
 
 #[derive(Deserialize)]
 pub struct UnbanForm {
-    pub ip: String,
+    pub key: String,
 }
 
 #[derive(Deserialize)]
@@ -48,9 +48,12 @@ pub async fn ban_page_handler(State(state): State<AppState>, headers: HeaderMap)
     let rows: String = bans
         .iter()
         .map(|b| {
-            let ip_enc = htmlescape::encode_minimal(&b.ip);
+            let subject_label = describe_ban_subject(b);
+            let subject_key = b.subject.key();
             let reason_enc = htmlescape::encode_minimal(&b.reason);
-            format!("<tr><td>{}</td><td>{}</td><td>{}</td><td><form method=post action=/unban style=margin:0><input type=hidden name=ip value=\"{}\"><button type=submit class=del aria-label=\"Unban {}\">Unban</button></form></td></tr>", ip_enc, reason_enc, b.time, ip_enc, ip_enc)
+            let subject_enc = htmlescape::encode_minimal(&subject_label);
+            let key_enc = htmlescape::encode_minimal(subject_key);
+            format!("<tr><td>{}</td><td>{}</td><td>{}</td><td><form method=post action=/unban style=margin:0><input type=hidden name=key value=\"{}\"><button type=submit class=del aria-label=\"Unban {}\">Unban</button></form></td></tr>", subject_enc, reason_enc, b.time, key_enc, subject_enc)
         })
         .collect();
     let path = state.static_dir.join("ban.html");
@@ -86,13 +89,21 @@ pub async fn ban_post_handler(
     } else {
         return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
     }
-    let ip = frm.ip.trim();
-    if ip.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "missing", "missing ip");
+    let input = frm.ip.trim();
+    if input.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "missing", "missing ban target");
     }
-    state
-        .add_ban(ip.to_string(), frm.reason.unwrap_or_default())
-        .await;
+    let Some(subject) = state.ban_subject_from_input(input) else {
+        return json_error(StatusCode::BAD_REQUEST, "invalid", "unable to interpret target");
+    };
+    let reason = frm.reason.unwrap_or_default().trim().to_string();
+    let ban = IpBan {
+        subject,
+        label: Some(input.to_string()),
+        reason,
+        time: 0,
+    };
+    state.add_ban(ban).await;
     state.persist_bans().await;
     (
         StatusCode::SEE_OTHER,
@@ -114,11 +125,11 @@ pub async fn unban_post_handler(
     } else {
         return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
     }
-    let ip = frm.ip.trim();
-    if ip.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "missing", "missing ip");
+    let key = frm.key.trim();
+    if key.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "missing", "missing ban key");
     }
-    state.remove_ban(ip).await;
+    state.remove_ban(key).await;
     state.persist_bans().await;
     (
         StatusCode::SEE_OTHER,
@@ -247,7 +258,7 @@ pub async fn admin_files_handler(State(state): State<AppState>, headers: HeaderM
         };
         let file_href = format!("/f/{}", urlencoding::encode(file));
         let file_label = htmlescape::encode_minimal(file);
-        let owner_label = htmlescape::encode_minimal(&meta.owner);
+        let owner_label = htmlescape::encode_minimal(&short_hash(&meta.owner_hash));
         let file_attr = htmlescape::encode_minimal(file);
         rows.push_str(&format!("<tr><td><a href=\"{href}\" target=_blank rel=noopener>{label}</a></td><td>{owner}</td><td data-exp=\"{exp}\">{human}</td><td>{size}</td><td><form method=post action=/admin/files style=margin:0><input type=hidden name=file value=\"{file_attr}\"><button type=submit class=del data-file=\"{file_attr}\">Delete</button></form></td></tr>",
             href = file_href,
@@ -317,7 +328,13 @@ pub async fn admin_reports_handler(State(state): State<AppState>, headers: Heade
     let reports = state.reports.read().await.clone();
     let mut rows = String::new();
     for (idx, r) in reports.iter().enumerate() {
-        rows.push_str(&format!("<tr><td><a href=\"/{file}\" target=_blank rel=noopener>{file}</a></td><td>{reason}</td><td>{details}</td><td>{ip}</td><td>{time}</td><td><form method=post action=/admin/reports style=margin:0><input type=hidden name=idx value=\"{idx}\"><button type=submit class=del data-idx=\"{idx}\">Remove</button></form></td></tr>", file=htmlescape::encode_minimal(&r.file), reason=htmlescape::encode_minimal(&r.reason), details=htmlescape::encode_minimal(&r.details), ip=htmlescape::encode_minimal(&r.ip), time=r.time, idx=idx));
+        rows.push_str(&format!("<tr><td><a href=\"/{file}\" target=_blank rel=noopener>{file}</a></td><td>{reason}</td><td>{details}</td><td>{reporter}</td><td>{time}</td><td><form method=post action=/admin/reports style=margin:0><input type=hidden name=idx value=\"{idx}\"><button type=submit class=del data-idx=\"{idx}\">Remove</button></form></td></tr>",
+            file=htmlescape::encode_minimal(&r.file),
+            reason=htmlescape::encode_minimal(&r.reason),
+            details=htmlescape::encode_minimal(&r.details),
+            reporter=htmlescape::encode_minimal(&short_hash(&r.reporter_hash)),
+            time=r.time,
+            idx=idx));
     }
     let tpl_path = state.static_dir.join("admin_reports.html");
     match fs::read(&tpl_path).await {
@@ -376,4 +393,41 @@ fn subtle_equals(a: &[u8], b: &[u8]) -> bool {
         diff |= a[i] ^ b[i];
     }
     diff == 0
+}
+
+fn short_hash(value: &str) -> String {
+    if value.len() <= 12 {
+        return value.to_string();
+    }
+    format!("{}…", &value[..12])
+}
+
+fn describe_ban_subject(ban: &IpBan) -> String {
+    if let Some(label) = ban.label.as_ref().filter(|l| !l.trim().is_empty()) {
+        return label.trim().to_string();
+    }
+    describe_subject(&ban.subject)
+}
+
+fn describe_subject(subject: &BanSubject) -> String {
+    match subject {
+        BanSubject::Exact { hash } => format!("Hash {}", short_hash(hash)),
+        BanSubject::Network {
+            hash,
+            prefix,
+            version,
+        } => format!(
+            "Net/{}/{} {}",
+            prefix,
+            version_label(*version),
+            short_hash(hash)
+        ),
+    }
+}
+
+fn version_label(version: IpVersion) -> &'static str {
+    match version {
+        IpVersion::V4 => "v4",
+        IpVersion::V6 => "v6",
+    }
 }

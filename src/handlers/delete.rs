@@ -4,8 +4,9 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use std::net::SocketAddr as ClientAddr;
 use tokio::fs;
+use tracing::debug;
 
-use crate::state::{AppState, cleanup_expired};
+use crate::state::{cleanup_expired, AppState};
 use crate::util::{json_error, real_client_ip};
 
 #[derive(Deserialize)]
@@ -24,12 +25,15 @@ pub async fn delete_handler(
     if state.is_banned(&ip).await {
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
+    let Some((_, owner_hash)) = state.hash_ip(&ip) else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
     if file.contains('/') || file.contains("..") || file.contains('\\') {
         return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file name");
     }
     cleanup_expired(&state).await;
     match state.owners.get(&file) {
-        Some(meta) if meta.value().owner == ip => {}
+        Some(meta) if meta.value().owner_hash == owner_hash => {}
         _ => return (StatusCode::NOT_FOUND, "not found").into_response(),
     }
     state.owners.remove(&file);
@@ -64,47 +68,34 @@ async fn handle_simple_delete(
     headers: HeaderMap,
     f: String,
 ) -> Response {
-    println!("[DEBUG] handle_simple_delete: called with f='{}'", f);
     let ip = real_client_ip(&headers, &addr);
-    println!("[DEBUG] handle_simple_delete: real_client_ip='{}'", ip);
+    let Some((_, owner_hash)) = state.hash_ip(&ip) else {
+        let url = format!("/simple?m={}", urlencoding::encode("File not found or not owned by you."));
+        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response();
+    };
     let fname = f.trim();
     if fname.is_empty() || fname.contains('/') || fname.contains("..") || fname.contains('\\') {
-        println!(
-            "[DEBUG] handle_simple_delete: invalid file name '{}', returning error",
-            fname
-        );
+        debug!(file = fname, "simple delete rejected: invalid name");
         let url = format!("/simple?m={}", urlencoding::encode("Invalid file name."));
         return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response();
     }
     let can_delete = match state.owners.get(fname) {
-        Some(meta) if meta.value().owner == ip => true,
+        Some(meta) if meta.value().owner_hash == owner_hash => true,
         _ => false,
     };
     if can_delete {
-        println!(
-            "[DEBUG] handle_simple_delete: found file '{}' owned by '{}', deleting",
-            fname, ip
-        );
+        debug!(file = fname, owner_hash = %owner_hash, "simple delete: removing owned file");
         state.owners.remove(fname);
         let path = state.upload_dir.join(fname);
         let _ = fs::remove_file(&path).await;
-        println!(
-            "[DEBUG] handle_simple_delete: file '{}' removed from disk (if existed)",
-            fname
-        );
         state.persist_owners().await;
-        println!("[DEBUG] handle_simple_delete: owners persisted");
         let url = format!(
             "/simple?m={}",
             urlencoding::encode("File Deleted Successfully.")
         );
-        println!("[DEBUG] handle_simple_delete: returning success redirect");
         (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
     } else {
-        println!(
-            "[DEBUG] handle_simple_delete: file '{}' not found or not owned by '{}', returning error",
-            fname, ip
-        );
+        debug!(file = fname, owner_hash = %owner_hash, "simple delete: no ownership match");
         let url = format!(
             "/simple?m={}",
             urlencoding::encode("File not found or not owned by you.")
