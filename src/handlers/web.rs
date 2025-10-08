@@ -1,8 +1,8 @@
-use axum::Json;
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -163,12 +163,23 @@ pub async fn simple_handler(
     };
 
     let client_ip = real_client_ip(&headers, &addr);
+    let owner_hash = match state.hash_ip_to_string(&client_ip) {
+        Some(hash) => hash,
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                [(axum::http::header::CONTENT_TYPE, "text/html")],
+                "<html><body><h1>Access denied</h1><p>Unable to fingerprint client.</p></body></html>",
+            )
+                .into_response();
+        }
+    };
     let mut files: Vec<(String, u64, String)> = state
         .owners
         .iter()
         .filter_map(|entry| {
             let m = entry.value();
-            if m.owner == client_ip {
+            if m.owner_hash == owner_hash {
                 Some((entry.key().clone(), m.expires, m.original.clone()))
             } else {
                 None

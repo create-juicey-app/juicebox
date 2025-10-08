@@ -1,7 +1,11 @@
-use crate::util::{ADMIN_KEY_TTL, ADMIN_SESSION_TTL, new_id, now_secs, ttl_to_duration};
+use crate::util::{
+    hash_ip_addr, hash_ip_string, hash_network_from_cidr, hash_network_from_ip, new_id, now_secs,
+    ttl_to_duration, IpVersion, ADMIN_KEY_TTL, ADMIN_SESSION_TTL,
+};
 use anyhow::Result;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::SystemTime};
 use tokio::fs;
@@ -10,7 +14,8 @@ use tokio::sync::{Mutex, RwLock, Semaphore};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FileMeta {
-    pub owner: String,
+    #[serde(alias = "owner")]
+    pub owner_hash: String,
     pub expires: u64,
     #[serde(default)]
     pub original: String,
@@ -23,7 +28,8 @@ pub struct ReportRecord {
     pub file: String,
     pub reason: String,
     pub details: String,
-    pub ip: String,
+    #[serde(alias = "ip")]
+    pub reporter_hash: String,
     pub time: u64,
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -31,16 +37,40 @@ pub struct AdminKeyFile {
     pub key: String,
     pub expires: u64,
 }
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum BanSubject {
+    Exact {
+        hash: String,
+    },
+    Network {
+        hash: String,
+        prefix: u8,
+        version: IpVersion,
+    },
+}
+
+impl BanSubject {
+    pub fn key(&self) -> &str {
+        match self {
+            BanSubject::Exact { hash } => hash,
+            BanSubject::Network { hash, .. } => hash,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct IpBan {
-    pub ip: String,
+    pub subject: BanSubject,
+    #[serde(default)]
+    pub label: Option<String>,
     pub reason: String,
     pub time: u64,
 }
 
 #[derive(Debug)]
 pub struct ChunkSession {
-    pub owner: String,
+    pub owner_hash: String,
     pub original_name: String,
     pub storage_name: String,
     pub ttl_code: String,
@@ -59,7 +89,8 @@ pub struct ChunkSession {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ChunkSessionRecord {
-    owner: String,
+    #[serde(alias = "owner")]
+    owner_hash: String,
     original_name: String,
     storage_name: String,
     ttl_code: String,
@@ -91,7 +122,7 @@ impl ChunkSession {
     async fn snapshot(&self) -> ChunkSessionRecord {
         let received = self.received.read().await.clone();
         ChunkSessionRecord {
-            owner: self.owner.clone(),
+            owner_hash: self.owner_hash.clone(),
             original_name: self.original_name.clone(),
             storage_name: self.storage_name.clone(),
             ttl_code: self.ttl_code.clone(),
@@ -109,7 +140,7 @@ impl ChunkSession {
 
     fn from_record(record: ChunkSessionRecord, dir: PathBuf) -> Self {
         Self {
-            owner: record.owner,
+            owner_hash: record.owner_hash,
             original_name: record.original_name,
             storage_name: record.storage_name,
             ttl_code: record.ttl_code,
@@ -154,9 +185,59 @@ pub struct AppState {
     pub tera: std::sync::Arc<tera::Tera>,
     pub chunk_dir: Arc<PathBuf>,
     pub chunk_sessions: Arc<DashMap<String, Arc<ChunkSession>>>,
+    pub ip_hash_secret: Arc<Vec<u8>>,
 }
 
 impl AppState {
+    fn ip_hash_secret_bytes(&self) -> &[u8] {
+        self.ip_hash_secret.as_ref()
+    }
+
+    pub fn hash_ip(&self, ip: &str) -> Option<(IpVersion, String)> {
+        hash_ip_string(self.ip_hash_secret_bytes(), ip)
+    }
+
+    pub fn hash_ip_to_string(&self, ip: &str) -> Option<String> {
+        self.hash_ip(ip).map(|(_, hash)| hash)
+    }
+
+    pub fn hash_ip_addr(&self, addr: &IpAddr) -> (IpVersion, String) {
+        hash_ip_addr(self.ip_hash_secret_bytes(), addr)
+    }
+
+    pub fn hash_network_for_ip(
+        &self,
+        addr: &IpAddr,
+        prefix: u8,
+    ) -> Option<(IpVersion, u8, String)> {
+        hash_network_from_ip(self.ip_hash_secret_bytes(), addr, prefix)
+    }
+
+    pub fn hash_network_from_cidr(&self, cidr: &str) -> Option<(IpVersion, u8, String)> {
+        hash_network_from_cidr(self.ip_hash_secret_bytes(), cidr)
+    }
+
+    pub fn ban_subject_from_input(&self, input: &str) -> Option<BanSubject> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if let Some((version, prefix, hash)) = self.hash_network_from_cidr(trimmed) {
+            return Some(BanSubject::Network {
+                hash,
+                prefix,
+                version,
+            });
+        }
+        if let Ok(addr) = trimmed.parse::<IpAddr>() {
+            let (_, hash) = self.hash_ip_addr(&addr);
+            return Some(BanSubject::Exact { hash });
+        }
+        Some(BanSubject::Exact {
+            hash: trimmed.to_string(),
+        })
+    }
+
     pub async fn persist_owners(&self) {
         // DashMap is not directly serializable, so collect to HashMap
         let owners: HashMap<String, FileMeta> = self
@@ -318,22 +399,109 @@ impl AppState {
         Ok(new)
     }
     pub async fn is_banned(&self, ip: &str) -> bool {
-        let bans = self.bans.read().await;
-        bans.iter().any(|b| b.ip == ip)
-    }
-    pub async fn add_ban(&self, ip: String, reason: String) {
-        let mut bans = self.bans.write().await;
-        if !bans.iter().any(|b| b.ip == ip) {
-            bans.push(IpBan {
-                ip,
-                reason,
-                time: now_secs(),
-            });
+        let parsed_ip = ip.parse::<IpAddr>().ok();
+        let mut ip_hash = None;
+        if let Some(addr) = parsed_ip.as_ref() {
+            let (_, hash) = self.hash_ip_addr(addr);
+            ip_hash = Some(hash);
         }
+        let direct_hash_input = if parsed_ip.is_none() { Some(ip) } else { None };
+
+        let bans = self.bans.read().await;
+        for ban in bans.iter() {
+            match &ban.subject {
+                BanSubject::Exact { hash } => {
+                    if ip_hash.as_ref().is_some_and(|candidate| candidate == hash) {
+                        return true;
+                    }
+                    if direct_hash_input.is_some_and(|candidate| candidate == hash) {
+                        return true;
+                    }
+                }
+                BanSubject::Network {
+                    hash,
+                    prefix,
+                    version,
+                } => {
+                    if let Some(addr) = parsed_ip.as_ref() {
+                        if let Some((net_version, _, candidate)) =
+                            self.hash_network_for_ip(addr, *prefix)
+                        {
+                            if net_version == *version && &candidate == hash {
+                                return true;
+                            }
+                        }
+                    }
+                    if direct_hash_input.is_some_and(|candidate| candidate == hash) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
-    pub async fn remove_ban(&self, ip: &str) {
+    pub async fn add_ban(&self, mut ban: IpBan) {
+        if ban.time == 0 {
+            ban.time = now_secs();
+        }
+        let key = ban.subject.key().to_string();
         let mut bans = self.bans.write().await;
-        bans.retain(|b| b.ip != ip);
+        if bans.iter().any(|b| b.subject.key() == key) {
+            return;
+        }
+        bans.push(ban);
+    }
+    pub async fn remove_ban(&self, key: &str) {
+        let mut bans = self.bans.write().await;
+        bans.retain(|b| b.subject.key() != key);
+    }
+
+    pub async fn find_ban_for_input(&self, input: &str) -> Option<IpBan> {
+        let parsed_ip = input.parse::<IpAddr>().ok();
+        let ip_hash = parsed_ip.as_ref().map(|addr| self.hash_ip_addr(addr).1);
+        let direct_value = if parsed_ip.is_none() {
+            Some(input.to_string())
+        } else {
+            None
+        };
+        let bans = self.bans.read().await;
+        for ban in bans.iter() {
+            match &ban.subject {
+                BanSubject::Exact { hash } => {
+                    if ip_hash.as_ref().is_some_and(|candidate| candidate == hash) {
+                        return Some(ban.clone());
+                    }
+                    if direct_value
+                        .as_ref()
+                        .is_some_and(|candidate| candidate == hash)
+                    {
+                        return Some(ban.clone());
+                    }
+                }
+                BanSubject::Network {
+                    hash,
+                    prefix,
+                    version,
+                } => {
+                    if let Some(addr) = parsed_ip.as_ref() {
+                        if let Some((net_version, _, candidate)) =
+                            self.hash_network_for_ip(addr, *prefix)
+                        {
+                            if net_version == *version && &candidate == hash {
+                                return Some(ban.clone());
+                            }
+                        }
+                    }
+                    if direct_value
+                        .as_ref()
+                        .is_some_and(|candidate| candidate == hash)
+                    {
+                        return Some(ban.clone());
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub async fn remove_chunk_session(&self, id: &str) {
@@ -440,7 +608,7 @@ pub async fn reload_metadata_if_changed(state: &AppState) {
                 state.owners.insert(
                     k,
                     FileMeta {
-                        owner: v,
+                        owner_hash: v,
                         expires: default_exp,
                         original: String::new(),
                         created: now_secs(),
@@ -455,8 +623,8 @@ pub async fn reload_metadata_if_changed(state: &AppState) {
 }
 
 // Simplified: delegate to the already tested reconcile implementation, ignore its report.
-pub async fn verify_user_entries(state: &AppState, ip: &str) {
-    let _ = verify_user_entries_with_report(state, ip).await;
+pub async fn verify_user_entries(state: &AppState, owner_hash: &str) {
+    let _ = verify_user_entries_with_report(state, owner_hash).await;
 } // Simplified: delegate to the already tested reconcile implementation, ignore its report.
 
 #[derive(serde::Serialize)]
@@ -468,7 +636,7 @@ pub struct ReconcileReport {
 
 pub async fn verify_user_entries_with_report(
     state: &AppState,
-    ip: &str,
+    owner_hash: &str,
 ) -> Option<ReconcileReport> {
     if let Ok(bytes) = fs::read(&*state.metadata_path).await {
         if let Ok(disk_map) = serde_json::from_slice::<HashMap<String, FileMeta>>(&bytes) {
@@ -477,10 +645,10 @@ pub async fn verify_user_entries_with_report(
             let mut to_add = Vec::new();
             for entry in state.owners.iter() {
                 let (fname, meta_mem) = (entry.key(), entry.value());
-                if meta_mem.owner == ip {
+                if meta_mem.owner_hash == owner_hash {
                     match disk_map.get(fname) {
                         Some(meta_disk) => {
-                            if meta_disk.owner != meta_mem.owner
+                            if meta_disk.owner_hash != meta_mem.owner_hash
                                 || meta_disk.expires != meta_mem.expires
                                 || meta_disk.original != meta_mem.original
                             {
@@ -492,7 +660,7 @@ pub async fn verify_user_entries_with_report(
                 }
             }
             for (fname, meta_disk) in disk_map.iter() {
-                if meta_disk.owner == ip && state.owners.get(fname).is_none() {
+                if meta_disk.owner_hash == owner_hash && state.owners.get(fname).is_none() {
                     to_add.push((fname.clone(), meta_disk.clone()));
                 }
             }

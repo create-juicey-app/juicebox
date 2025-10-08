@@ -36,7 +36,7 @@
           <option value="en" {% if lang == "en" %}selected{% endif %}>🇬🇧 English</option>
           <option value="fr" {% if lang == "fr" %}selected{% endif %}>🇫🇷 Français</option>
           <option value="es" {% if lang == "es" %}selected{% endif %}>🇪🇸 Español</option>
-          <option value="uk" {% if lang == "uk" %}selected{% endif %}>🇺🇦 Українська</option>
+          <option value="uk" {% if lang == "uk" %}selected{% endif %}>🇺🇦 Українська мова</option>
         </select>
       </label>
       <button type="submit" class="lang-btn">OK</button>

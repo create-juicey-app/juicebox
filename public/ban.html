@@ -1,4 +1,3 @@
-<!-- filepath: /home/juiceydev/juicebox/public/ban.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -13,12 +12,12 @@
     <h1>Ban Management</h1>
     <!-- Updated action to /admin/ban to match server routes -->
     <form method="post" action="/admin/ban" class="inline">
-      <input type="text" name="ip" placeholder="IP address" required aria-label="IP address" />
+      <input type="text" name="ip" placeholder="IP / CIDR / hash" required aria-label="Ban target" />
       <input type="text" name="reason" placeholder="Reason (optional)" aria-label="Reason" />
       <button type="submit">Add Ban</button>
     </form>
     <table role="table" aria-label="Existing bans">
-      <thead><tr><th>IP</th><th>Reason</th><th>Time</th><th>Action</th></tr></thead>
+  <thead><tr><th>Target</th><th>Reason</th><th>Time</th><th>Action</th></tr></thead>
       <tbody>
         {{ROWS}}
       </tbody>

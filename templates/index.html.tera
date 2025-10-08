@@ -77,7 +77,7 @@
                 <option value="en" {% if lang == "en" %}selected{% endif %}>🇬🇧 English</option>
                 <option value="fr" {% if lang == "fr" %}selected{% endif %}>🇫🇷 Français</option>
                 <option value="es" {% if lang == "es" %}selected{% endif %}>🇪🇸 Español</option>
-                <option value="uk" {% if lang == "uk" %}selected{% endif %}>🇺🇦 Українська</option>
+                <option value="uk" {% if lang == "uk" %}selected{% endif %}>🇺🇦 Українська мова</option>
             </select>
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 20 20" style="margin-left:-1.5em;pointer-events:none;position:relative;z-index:2;fill:#fff;opacity:.7;">
                 <path d="M5.5 8l4.5 4.5L14.5 8z"/>
@@ -99,7 +99,7 @@
       </div>
       <ul id="fileList" title="Upload queue showing files, progress bars, and actions" role="list"></ul>
       <p class="site-note" title="Upload usage note">{{ t.upload_note | default(value="Upload your files. Links show after each finishes. Maximum file size is {max_size}, Files expire after selected retention. Limit: maximum 5 active files per IP (delete one to free a slot). See <a href='/faq' target='_blank' rel='noopener' title='Open FAQ in new tab'>Read the FAQ</a>.") | replace(from='{max_size}', to=max_file_size_str) }}</p>
-      <p class="site-note" title="Privacy notice">{{ t.privacy_note | default(value="Notice: Your IP address is processed only to associate uploads with your session, apply limits, and enable abuse/moderation actions. It is not shared and is removed once all related files expire.") }}</p>
+  <p class="site-note" title="Privacy notice">{{ t.privacy_note | default(value="Notice: Your IP address is immediately hashed with a secret pepper and used only to associate uploads with your session, apply limits, and enable abuse/moderation actions. It is never stored in plaintext and the hash is removed once all related files expire.") }}</p>
     </section></div>
     <div class="panel" id="ownedPanel" style="display:none"><section>
       <h2 id="yourFiles" title="Files previously uploaded from this connection">{{ t.your_files | default(value="Your Files") }}</h2>

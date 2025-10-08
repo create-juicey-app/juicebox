@@ -298,7 +298,7 @@ async fn test_chunk_session_persistence_across_restart() {
     assert_eq!(restored_session.original_name, "resume.bin");
     assert_eq!(restored_session.total_chunks, session.total_chunks);
     assert_eq!(restored_session.chunk_size, session.chunk_size);
-    assert_eq!(restored_session.owner, "100.64.1.1".to_string());
+    assert_eq!(restored_session.owner_hash, common::hash_fixture_ip("100.64.1.1"));
     let received = restored_session.received.read().await;
     assert!(received[0]);
     assert!(received.iter().skip(1).all(|r| !*r));

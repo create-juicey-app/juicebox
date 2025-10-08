@@ -8,8 +8,8 @@ use std::net::SocketAddr as ClientAddr;
 use std::time::{Duration, SystemTime};
 use tokio::fs;
 
-use crate::state::AppState;
-use crate::util::{PROD_HOST, extract_client_ip};
+use crate::state::{AppState, IpBan};
+use crate::util::{extract_client_ip, PROD_HOST};
 
 pub async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     let mut resp = next.run(req).await;
@@ -97,13 +97,9 @@ pub async fn ban_gate(
     if !state.is_banned(&ip).await {
         return next.run(req).await;
     }
-    let (reason, time) = {
-        let bans = state.bans.read().await;
-        if let Some(b) = bans.iter().find(|b| b.ip == ip) {
-            (b.reason.clone(), b.time)
-        } else {
-            (String::new(), 0)
-        }
+    let (reason, time, label) = match state.find_ban_for_input(&ip).await {
+        Some(ban) => (ban.reason.clone(), ban.time, ban_label(&ban)),
+        None => (String::new(), 0, short_hash(&ip)),
     };
     let safe_reason = htmlescape::encode_minimal(&reason);
     let time_line = if time > 0 {
@@ -116,7 +112,7 @@ pub async fn ban_gate(
         let mut body = String::from_utf8_lossy(&bytes).into_owned();
         body = body
             .replace("{{REASON}}", &safe_reason)
-            .replace("{{IP}}", &ip)
+            .replace("{{IP}}", &label)
             .replace("{{TIME_LINE}}", &time_line);
         return (
             StatusCode::FORBIDDEN,
@@ -127,7 +123,7 @@ pub async fn ban_gate(
     }
     let fallback = format!(
         "<html><body><h1>Banned</h1><p>{}</p><p>{}</p></body></html>",
-        safe_reason, ip
+        safe_reason, label
     );
     (
         StatusCode::FORBIDDEN,
@@ -154,4 +150,19 @@ pub async fn add_cache_headers(req: Request<Body>, next: Next) -> Response {
         );
     }
     resp
+}
+
+fn ban_label(ban: &IpBan) -> String {
+    if let Some(label) = ban.label.as_ref().filter(|l| !l.trim().is_empty()) {
+        return label.trim().to_string();
+    }
+    short_hash(ban.subject.key())
+}
+
+fn short_hash(value: &str) -> String {
+    if value.len() <= 12 {
+        value.to_string()
+    } else {
+        format!("{}…", &value[..12])
+    }
 }

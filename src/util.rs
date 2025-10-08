@@ -1,12 +1,14 @@
 use axum::{
-    Json,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
+    Json,
 };
+use hmac::{Hmac, Mac};
 use sanitize_filename::sanitize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::{
-    net::IpAddr,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 // removed rand; using cuid now
@@ -128,6 +130,115 @@ pub fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::from_secs(0))
         .as_secs()
+}
+
+pub fn looks_like_hash(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum IpVersion {
+    V4,
+    V6,
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+fn hash_with_secret(secret: &[u8], payload: &[u8]) -> String {
+    let mut mac = HmacSha256::new_from_slice(secret)
+        .expect("HMAC key initialization should accept arbitrary key length");
+    mac.update(payload);
+    let result = mac.finalize().into_bytes();
+    let mut hex = String::with_capacity(result.len() * 2);
+    for byte in result {
+        hex.push_str(&format!("{:02x}", byte));
+    }
+    hex
+}
+
+fn ip_version_tag(ip: &IpAddr) -> (&'static str, IpVersion) {
+    match ip {
+        IpAddr::V4(_) => ("v4", IpVersion::V4),
+        IpAddr::V6(_) => ("v6", IpVersion::V6),
+    }
+}
+
+fn normalize_v4(addr: Ipv4Addr, prefix: u8) -> Option<Ipv4Addr> {
+    if prefix > 32 {
+        return None;
+    }
+    if prefix == 0 {
+        return Some(Ipv4Addr::UNSPECIFIED);
+    }
+    let mask = u32::MAX << (32 - prefix);
+    Some(Ipv4Addr::from(u32::from(addr) & mask))
+}
+
+fn normalize_v6(addr: Ipv6Addr, prefix: u8) -> Option<Ipv6Addr> {
+    if prefix > 128 {
+        return None;
+    }
+    if prefix == 0 {
+        return Some(Ipv6Addr::UNSPECIFIED);
+    }
+    let mask: u128 = u128::MAX << (128 - prefix);
+    Some(Ipv6Addr::from(u128::from(addr) & mask))
+}
+
+pub fn hash_ip_string(secret: &[u8], raw: &str) -> Option<(IpVersion, String)> {
+    let ip: IpAddr = raw.trim().parse().ok()?;
+    Some(hash_ip_addr(secret, &ip))
+}
+
+pub fn hash_ip_addr(secret: &[u8], ip: &IpAddr) -> (IpVersion, String) {
+    let (tag, version) = ip_version_tag(ip);
+    let payload = match ip {
+        IpAddr::V4(v4) => format!("ip|{tag}|{v4}"),
+        IpAddr::V6(v6) => format!("ip|{tag}|{v6}"),
+    };
+    (version, hash_with_secret(secret, payload.as_bytes()))
+}
+
+pub fn hash_network_from_ip(
+    secret: &[u8],
+    ip: &IpAddr,
+    prefix: u8,
+) -> Option<(IpVersion, u8, String)> {
+    match ip {
+        IpAddr::V4(v4) => {
+            if prefix > 32 {
+                return None;
+            }
+            let base = normalize_v4(*v4, prefix)?;
+            let payload = format!("net|v4|{prefix}|{base}");
+            Some((
+                IpVersion::V4,
+                prefix,
+                hash_with_secret(secret, payload.as_bytes()),
+            ))
+        }
+        IpAddr::V6(v6) => {
+            if prefix > 128 {
+                return None;
+            }
+            let base = normalize_v6(*v6, prefix)?;
+            let payload = format!("net|v6|{prefix}|{base}");
+            Some((
+                IpVersion::V6,
+                prefix,
+                hash_with_secret(secret, payload.as_bytes()),
+            ))
+        }
+    }
+}
+
+pub fn hash_network_from_cidr(secret: &[u8], cidr: &str) -> Option<(IpVersion, u8, String)> {
+    let mut parts = cidr.split('/');
+    let base = parts.next()?.trim();
+    let prefix = parts.next()?.trim().parse::<u8>().ok()?;
+    let ip: IpAddr = base.parse().ok()?;
+    hash_network_from_ip(secret, &ip, prefix)
 }
 
 pub fn qualify_path(state: &AppState, path: &str) -> String {

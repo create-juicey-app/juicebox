@@ -1,13 +1,16 @@
+use anyhow::anyhow;
 use axum::{Router, middleware};
 use axum_server::Handle;
 use dashmap::DashMap;
 use juicebox::handlers::ban_gate;
 use juicebox::handlers::{add_cache_headers, add_security_headers, build_router, enforce_host};
 use juicebox::rate_limit::{RateLimiterInner, build_rate_limiter};
-use juicebox::state::{AppState, FileMeta, ReportRecord, cleanup_expired};
-use juicebox::util::{PROD_HOST, UPLOAD_CONCURRENCY, now_secs, ttl_to_duration};
+use juicebox::state::{AppState, BanSubject, FileMeta, IpBan, ReportRecord, cleanup_expired};
+use juicebox::util::{IpVersion, PROD_HOST, UPLOAD_CONCURRENCY, hash_ip_string, hash_network_from_cidr, looks_like_hash, now_secs, ttl_to_duration};
+use serde::Deserialize;
 use std::{
     collections::HashMap,
+    io::ErrorKind,
     net::SocketAddr,
     path::PathBuf,
     sync::Arc,
@@ -20,6 +23,309 @@ use tokio::signal::ctrl_c;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Notify, RwLock, Semaphore};
 use tower_http::compression::CompressionLayer;
+
+async fn load_owners_with_migration(
+    path: &PathBuf,
+    secret: &[u8],
+) -> anyhow::Result<(HashMap<String, FileMeta>, bool)> {
+    let data = match fs::read(path).await {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok((HashMap::new(), false)),
+        Err(err) => return Err(err.into()),
+    };
+    if data.is_empty() {
+        return Ok((HashMap::new(), false));
+    }
+    if let Ok(mut map) = serde_json::from_slice::<HashMap<String, FileMeta>>(&data) {
+        let mut changed = false;
+        for meta in map.values_mut() {
+            if !looks_like_hash(&meta.owner_hash) {
+                if let Some((_, hash)) = hash_ip_string(secret, &meta.owner_hash) {
+                    meta.owner_hash = hash;
+                    changed = true;
+                }
+            }
+        }
+        return Ok((map, changed));
+    }
+    if let Ok(old_map) = serde_json::from_slice::<HashMap<String, String>>(&data) {
+        let default_exp = now_secs() + ttl_to_duration("3d").as_secs();
+        let mut map = HashMap::new();
+        let mut changed = false;
+        for (file, owner) in old_map {
+            let owner_hash = if let Some((_, hash)) = hash_ip_string(secret, &owner) {
+                changed = true;
+                hash
+            } else {
+                owner
+            };
+            map.insert(
+                file,
+                FileMeta {
+                    owner_hash,
+                    expires: default_exp,
+                    original: String::new(),
+                    created: now_secs(),
+                    hash: String::new(),
+                },
+            );
+        }
+        return Ok((map, changed));
+    }
+    Ok((HashMap::new(), false))
+}
+
+#[derive(Deserialize)]
+struct LegacyReportRecord {
+    file: String,
+    reason: String,
+    #[serde(default)]
+    details: String,
+    #[serde(alias = "reporter_hash")]
+    ip: String,
+    time: u64,
+}
+
+async fn load_reports_with_migration(
+    path: &PathBuf,
+    secret: &[u8],
+) -> anyhow::Result<(Vec<ReportRecord>, bool)> {
+    let data = match fs::read(path).await {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok((Vec::new(), false)),
+        Err(err) => return Err(err.into()),
+    };
+    if data.is_empty() {
+        return Ok((Vec::new(), false));
+    }
+    if let Ok(mut reports) = serde_json::from_slice::<Vec<ReportRecord>>(&data) {
+        let mut changed = false;
+        for report in reports.iter_mut() {
+            if !looks_like_hash(&report.reporter_hash) {
+                if let Some((_, hash)) = hash_ip_string(secret, &report.reporter_hash) {
+                    report.reporter_hash = hash;
+                    changed = true;
+                }
+            }
+        }
+        return Ok((reports, changed));
+    }
+    if let Ok(raw_reports) = serde_json::from_slice::<Vec<LegacyReportRecord>>(&data) {
+        let mut reports = Vec::with_capacity(raw_reports.len());
+        let mut changed = false;
+        for raw in raw_reports {
+            let (reporter_hash, migrated) = if looks_like_hash(&raw.ip) {
+                (raw.ip, false)
+            } else if let Some((_, hash)) = hash_ip_string(secret, &raw.ip) {
+                (hash, true)
+            } else {
+                (raw.ip, false)
+            };
+            if migrated {
+                changed = true;
+            }
+            reports.push(ReportRecord {
+                file: raw.file,
+                reason: raw.reason,
+                details: raw.details,
+                reporter_hash,
+                time: raw.time,
+            });
+        }
+        return Ok((reports, changed));
+    }
+    Ok((Vec::new(), false))
+}
+
+#[derive(Deserialize)]
+struct LegacyIpBan {
+    subject: LegacyBanSubject,
+    #[serde(default)]
+    label: Option<String>,
+    reason: String,
+    time: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+enum LegacyBanSubject {
+    Exact {
+        #[serde(default)]
+        hash: Option<String>,
+        #[serde(default)]
+        ip: Option<String>,
+    },
+    Network {
+        #[serde(default)]
+        hash: Option<String>,
+        #[serde(default)]
+        cidr: Option<String>,
+        #[serde(default)]
+        ip: Option<String>,
+        #[serde(default)]
+        prefix: Option<u8>,
+        #[serde(default)]
+        version: Option<IpVersion>,
+    },
+}
+
+async fn load_bans_with_migration(
+    path: &PathBuf,
+    secret: &[u8],
+) -> anyhow::Result<(Vec<IpBan>, bool)> {
+    let data = match fs::read(path).await {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok((Vec::new(), false)),
+        Err(err) => return Err(err.into()),
+    };
+    if data.is_empty() {
+        return Ok((Vec::new(), false));
+    }
+    if let Ok(mut bans) = serde_json::from_slice::<Vec<IpBan>>(&data) {
+        let mut changed = false;
+        for ban in bans.iter_mut() {
+            match &mut ban.subject {
+                BanSubject::Exact { hash } => {
+                    if !looks_like_hash(hash) {
+                        if let Some((_, new_hash)) = hash_ip_string(secret, hash) {
+                            *hash = new_hash;
+                            changed = true;
+                        }
+                    }
+                }
+                BanSubject::Network { hash, prefix, version } => {
+                    if !looks_like_hash(hash) {
+                        let cidr = format!("{}/{}", hash, prefix);
+                        if let Some((ver, pre, new_hash)) = hash_network_from_cidr(secret, &cidr) {
+                            *version = ver;
+                            *prefix = pre;
+                            *hash = new_hash;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        return Ok((bans, changed));
+    }
+    if let Ok(raw_bans) = serde_json::from_slice::<Vec<LegacyIpBan>>(&data) {
+        let mut bans = Vec::with_capacity(raw_bans.len());
+        let mut changed = false;
+        for raw in raw_bans {
+            let subject = match raw.subject {
+                LegacyBanSubject::Exact { hash, ip } => {
+                    let value = hash.or(ip).unwrap_or_default();
+                    let (final_hash, migrated) = if looks_like_hash(&value) {
+                        (value, false)
+                    } else if let Some((_, new_hash)) = hash_ip_string(secret, &value) {
+                        (new_hash, true)
+                    } else {
+                        (value, false)
+                    };
+                    if migrated {
+                        changed = true;
+                    }
+                    BanSubject::Exact { hash: final_hash }
+                }
+                LegacyBanSubject::Network {
+                    hash,
+                    cidr,
+                    ip,
+                    prefix,
+                    version,
+                } => {
+                    let mut migrated = false;
+                    let from_cidr = cidr
+                        .as_ref()
+                        .and_then(|c| hash_network_from_cidr(secret, c));
+                    let (version, prefix, final_hash) = if let Some((ver, pre, new_hash)) = from_cidr {
+                        migrated = true;
+                        (ver, pre, new_hash)
+                    } else if let (Some(ip), Some(pre)) = (ip.as_ref(), prefix) {
+                        let cidr_string = format!("{}/{}", ip, pre);
+                        if let Some((ver, pre, new_hash)) = hash_network_from_cidr(secret, &cidr_string)
+                        {
+                            migrated = true;
+                            (ver, pre, new_hash)
+                        } else {
+                            let ver = version.unwrap_or_else(|| if ip.contains(':') { IpVersion::V6 } else { IpVersion::V4 });
+                            (ver, pre, hash.clone().unwrap_or_else(|| ip.clone()))
+                        }
+                    } else if let Some(existing) = hash {
+                        let ver = version.unwrap_or(IpVersion::V4);
+                        let pre = prefix.unwrap_or(match ver {
+                            IpVersion::V4 => 32,
+                            IpVersion::V6 => 128,
+                        });
+                        if looks_like_hash(&existing) {
+                            (ver, pre, existing)
+                        } else if let Some((ver2, pre2, new_hash)) = hash_network_from_cidr(
+                            secret,
+                            &format!("{}/{}", existing, pre),
+                        ) {
+                            migrated = true;
+                            (ver2, pre2, new_hash)
+                        } else {
+                            (ver, pre, existing)
+                        }
+                    } else {
+                        (IpVersion::V4, 32, String::new())
+                    };
+                    if migrated {
+                        changed = true;
+                    }
+                    BanSubject::Network {
+                        hash: final_hash,
+                        prefix,
+                        version,
+                    }
+                }
+            };
+            bans.push(IpBan {
+                subject,
+                label: raw.label,
+                reason: raw.reason,
+                time: raw.time,
+            });
+        }
+        return Ok((bans, changed));
+    }
+    Ok((Vec::new(), false))
+}
+
+fn decode_hash_secret(raw: &str) -> anyhow::Result<Vec<u8>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("IP_HASH_SECRET may not be empty"));
+    }
+    // fuck you
+    if trimmed.len() % 2 == 0 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        let mut buf = Vec::with_capacity(trimmed.len() / 2);
+        for chunk in trimmed.as_bytes().chunks(2) {
+            let hi = (chunk[0] as char)
+                .to_digit(16)
+                .ok_or_else(|| anyhow!("IP_HASH_SECRET contains invalid hex"))?;
+            let lo = (chunk[1] as char)
+                .to_digit(16)
+                .ok_or_else(|| anyhow!("IP_HASH_SECRET contains invalid hex"))?;
+            buf.push(((hi << 4) | lo) as u8);
+        }
+        return Ok(buf);
+    }
+    Ok(trimmed.as_bytes().to_vec())
+}
+
+fn load_hash_secret_from_env() -> anyhow::Result<Vec<u8>> {
+    let raw = std::env::var("IP_HASH_SECRET")
+        .map_err(|_| anyhow!("IP_HASH_SECRET environment variable is required"))?;
+    let bytes = decode_hash_secret(&raw)?;
+    if bytes.len() < 16 {
+        return Err(anyhow!(
+            "IP_HASH_SECRET must be at least 16 bytes after decoding"
+        ));
+    }
+    Ok(bytes)
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -46,6 +352,7 @@ async fn main() -> anyhow::Result<()> {
     fs::create_dir_all(&*upload_dir).await?;
     fs::create_dir_all(&*data_dir).await?;
     fs::create_dir_all(&*chunk_dir).await?;
+    let ip_hash_secret = Arc::new(load_hash_secret_from_env()?);
     // ensure bans file presence
     let _ = fs::OpenOptions::new()
         .create(true)
@@ -53,43 +360,16 @@ async fn main() -> anyhow::Result<()> {
         .open(&*bans_path)
         .await;
 
-    let owners_map: HashMap<String, FileMeta> = match fs::read(&*metadata_path).await {
-        Ok(data) => {
-            if let Ok(old_map) = serde_json::from_slice::<HashMap<String, String>>(&data) {
-                old_map
-                    .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k,
-                            FileMeta {
-                                owner: v,
-                                expires: now_secs() + ttl_to_duration("3d").as_secs(),
-                                original: String::new(),
-                                created: now_secs(),
-                                hash: String::new(), // legacy files have no hash, so set empty
-                            },
-                        )
-                    })
-                    .collect()
-            } else {
-                serde_json::from_slice(&data).unwrap_or_default()
-            }
-        }
-        Err(_) => HashMap::new(),
-    };
-
-    let reports_vec: Vec<ReportRecord> = match fs::read(&*reports_path).await {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    };
+    let (owners_map, owners_migrated) =
+        load_owners_with_migration(metadata_path.as_ref(), &ip_hash_secret).await?;
+    let (reports_vec, reports_migrated) =
+        load_reports_with_migration(reports_path.as_ref(), &ip_hash_secret).await?;
     let admin_sessions_map: HashMap<String, u64> = match fs::read(&*admin_sessions_path).await {
         Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
         Err(_) => HashMap::new(),
     };
-    let bans_vec: Vec<juicebox::state::IpBan> = match fs::read(&*bans_path).await {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    };
+    let (bans_vec, bans_migrated) =
+        load_bans_with_migration(bans_path.as_ref(), &ip_hash_secret).await?;
 
     let initial_mtime = fs::metadata(&*metadata_path)
         .await
@@ -132,7 +412,18 @@ async fn main() -> anyhow::Result<()> {
         tera,
         chunk_dir,
         chunk_sessions: Arc::new(DashMap::new()),
+        ip_hash_secret: ip_hash_secret.clone(),
     };
+
+    if owners_migrated {
+        state.persist_owners().await;
+    }
+    if reports_migrated {
+        state.persist_reports().await;
+    }
+    if bans_migrated {
+        state.persist_bans().await;
+    }
 
     if let Err(err) = state.load_chunk_sessions_from_disk().await {
         tracing::warn!(?err, "failed to restore chunk upload sessions from disk");
@@ -215,8 +506,8 @@ async fn main() -> anyhow::Result<()> {
                 };
                 html.push_str(&row("File ID", &ev.file));
                 html.push_str(&row("Reason", &ev.reason));
-                html.push_str(&row("Reporter IP", &ev.ip));
-                html.push_str(&row("Owner IP", &ev.owner_ip));
+                html.push_str(&row("Reporter Hash IP", &ev.reporter_hash));
+                html.push_str(&row("Owner Hash IP", &ev.owner_hash));
                 html.push_str(&row("Original Name", &ev.original_name));
                 html.push_str(&row("Size (bytes)", &ev.size.to_string()));
                 html.push_str(&row(
@@ -239,8 +530,8 @@ async fn main() -> anyhow::Result<()> {
                 let file_link = format!("https://{}/f/{}", PROD_HOST, ev.file);
                 let admin_files = format!("https://{}/admin/files", PROD_HOST);
                 let admin_reports = format!("https://{}/admin/reports", PROD_HOST);
-                let ban_link = if !ev.owner_ip.is_empty() {
-                    format!("https://{}/admin/ban?ip={}", PROD_HOST, ev.owner_ip)
+                let ban_link = if !ev.owner_hash.is_empty() {
+                    format!("https://{}/admin/ban?ip={}", PROD_HOST, ev.owner_hash)
                 } else {
                     String::new()
                 };
@@ -287,8 +578,8 @@ async fn main() -> anyhow::Result<()> {
                     "Report: file={} reason={} reporter_ip={} owner_ip={} size={} details={}",
                     ev.file,
                     ev.reason,
-                    ev.ip,
-                    ev.owner_ip,
+                    ev.reporter_hash,
+                    ev.owner_hash,
                     ev.size,
                     if ev.details.is_empty() {
                         "(none)"
@@ -318,8 +609,8 @@ async fn main() -> anyhow::Result<()> {
                             eprintln!("mail: failed status={status} body={body_txt}");
                         } else {
                             println!(
-                                "mail: sent report file={} reason={} owner_ip={} reporter_ip={}",
-                                ev.file, ev.reason, ev.owner_ip, ev.ip
+                                "mail: sent report file={} reason={} owner_hash={} reporter_hash={}",
+                                ev.file, ev.reason, ev.owner_hash, ev.reporter_hash
                             );
                         }
                     }
@@ -433,7 +724,7 @@ async fn wait_for_shutdown(
 async fn listen_for_shutdown() {
     let ctrl_c = async {
         if let Err(err) = ctrl_c().await {
-            tracing::error!(?err, "failed to install ctrl+c handler");
+            tracing::error!(?err, "failed to install ctrl+c handler"); // this shouldn't happen.
         }
     };
     #[cfg(unix)]
@@ -442,7 +733,7 @@ async fn listen_for_shutdown() {
             Ok(mut sigterm) => {
                 sigterm.recv().await;
             }
-            Err(err) => tracing::error!(?err, "failed to install SIGTERM handler"),
+            Err(err) => tracing::error!(?err, "failed to install SIGTERM handler"), //this shouldn't happen either
         }
     };
     #[cfg(not(unix))]
