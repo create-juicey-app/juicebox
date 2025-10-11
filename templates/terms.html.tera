@@ -105,7 +105,7 @@
     <header>
       <h1>{{ t.terms_title | default(value='Terms of Service') }}</h1>
       <p style="opacity: 0.7; font-size: 0.9rem">
-        {{ t.terms_effective | default(value='Effective: 2024 (Expanded revision Sep 2024)') }}
+        {{ t.terms_effective | default(value='Effective: 2025 (Revision Oct 2025)') }}
       </p>
     </header>
     <main id="mainContent" tabindex="-1">
@@ -182,7 +182,7 @@
         <p>{{ t.terms_section_contact_body | safe }}</p>
       </div>
       <p style="font-size: 0.65rem; opacity: 0.55">
-        {{ t.terms_last_updated | default(value='Last updated: 2024-09-01') }}
+        {{ t.terms_last_updated | default(value='Last updated: 2025-10-11') }}
       </p>
       <p style="font-size: 0.7rem">
         <a href="/">{{ t.home }}</a> • <a href="/faq">{{ t.faq }}</a> •

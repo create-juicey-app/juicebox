@@ -59,6 +59,23 @@
         border: 1px solid #273242;
         border-radius: 12px;
       }
+      .callout {
+        margin: 1.4rem 0 1.8rem;
+        padding: 1rem 1.1rem 1.1rem;
+        background: #16202c;
+        border: 1px solid #2b394a;
+        border-radius: 12px;
+      }
+      .callout h2 {
+        margin-top: 0;
+        font-size: 1rem;
+        text-transform: none;
+        letter-spacing: 0;
+        opacity: 0.9;
+      }
+      .callout ul {
+        padding-left: 1.2rem;
+      }
       details {
         background: #141d26;
         padding: 0.9rem 1rem;
@@ -114,6 +131,22 @@
         {{ t.faq_lead | default(value='Everything you usually ask before uploading.') }}
       </p>
     </header>
+    <section
+      class="callout"
+      aria-label="{{ t.faq_intro_label | default(value='Service overview') }}"
+    >
+      <h2>{{ t.faq_intro_heading | default(value='Quick facts before you upload') }}</h2>
+      <p>{{ t.faq_intro_body | default(value='JuiceBox stores your files temporarily, keeps only a hash of the edge IP derived with a secret pepper, and purges everything once the timer you choose expires. Keep this in mind while reviewing the answers below.') | safe }}</p>
+      <ul>
+        <li>{{ t.faq_intro_point_1 | default(value='Retention windows range from 1 hour to 14 days, and expired files are permanently deleted.') }}</li>
+        <li>{{ t.faq_intro_point_2 | default(value='Uploads can happen in a single request or via resumable chunk sessions; stalled sessions are cleaned up automatically.') }}</li>
+        <li>{{ t.faq_intro_point_3 | default(value='Ownership, rate limits, and bans use an HMAC hash of the Cloudflare edge IP plus the secret pepper—no raw addresses are ever stored.') }}</li>
+        <li>{{ t.faq_intro_point_4 | default(value='Check the Terms for full policy details, especially if you are dealing with regulated or copyrighted material.') }}</li>
+      </ul>
+      <p class="small" style="margin: 0">
+        <a href="/terms">{{ t.view_terms | default(value='Read the updated Terms of Service') }}</a>
+      </p>
+    </section>
     <main id="mainContent" tabindex="-1">
       <section class="details-list">
         <h2>{{ t.faq_basics | default(value='Basics') }}</h2>
