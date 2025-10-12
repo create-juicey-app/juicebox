@@ -13,6 +13,7 @@
       name="description"
       content="{{ t.terms_meta_description | default(value='Terms of Service for JuiceBox temporary file host') }}"
     />
+  <script src="/js/lang.js"></script>
   <link rel="stylesheet" href="{{ css_bundle | default(value='/css/app.css') }}" />
     <style>
       body {
@@ -263,26 +264,5 @@
         "
       ></span>
     </footer>
-    <script>
-      // Language auto-apply: checks cookie/localStorage and reloads with ?lang= if needed
-      (function () {
-        var getLang = function () {
-          var m = document.cookie.match(/(?:^|; )lang=([a-z]{2})/);
-          if (m) return m[1];
-          try {
-            var l = localStorage.getItem("lang");
-            if (l) return l;
-          } catch (e) {}
-          return null;
-        };
-        var urlLang = new URLSearchParams(window.location.search).get("lang");
-        var cookieLang = getLang();
-        if (cookieLang && cookieLang !== urlLang) {
-          var url = new URL(window.location.href);
-          url.searchParams.set("lang", cookieLang);
-          window.location = url.toString();
-        }
-      })();
-    </script>
   </body>
 </html>

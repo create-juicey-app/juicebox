@@ -1,14 +1,14 @@
+use axum::Json;
 use axum::extract::{Form, State};
 use axum::http::header::{CONTENT_TYPE, LOCATION, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::fs;
 
 use crate::state::{AppState, BanSubject, IpBan};
-use crate::util::{get_cookie, json_error, new_id, now_secs, IpVersion, ADMIN_SESSION_TTL};
+use crate::util::{ADMIN_SESSION_TTL, IpVersion, get_cookie, json_error, new_id, now_secs};
 
 #[derive(Deserialize)]
 pub struct BanForm {
@@ -94,7 +94,11 @@ pub async fn ban_post_handler(
         return json_error(StatusCode::BAD_REQUEST, "missing", "missing ban target");
     }
     let Some(subject) = state.ban_subject_from_input(input) else {
-        return json_error(StatusCode::BAD_REQUEST, "invalid", "unable to interpret target");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            "unable to interpret target",
+        );
     };
     let reason = frm.reason.unwrap_or_default().trim().to_string();
     let ban = IpBan {

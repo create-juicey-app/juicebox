@@ -1,8 +1,8 @@
+use axum::Json;
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -205,7 +205,7 @@ pub async fn simple_handler(
             format!("{}s", expires_in)
         };
         rows.push_str(&format!(
-            "<tr><td><a href=\"{}\">{}</a></td><td>{}</td><td><a href=\"/simple/delete?f={}\" class=delete-link>Delete</a></td></tr>",
+            "<tr><td><a href=\"{}\" data-lang-skip=\"true\">{}</a></td><td>{}</td><td><a href=\"/simple/delete?f={}\" class=delete-link>Delete</a></td></tr>",
             url,
             htmlescape::encode_minimal(original),
             human,

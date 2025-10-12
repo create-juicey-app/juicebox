@@ -1,7 +1,7 @@
 mod common {}
 
 use juicebox::state::{AppState, ReportRecord};
-use juicebox::util::{hash_ip_string, UPLOAD_CONCURRENCY};
+use juicebox::util::{UPLOAD_CONCURRENCY, hash_ip_string};
 use std::{collections::HashMap, path::Path, sync::Arc, time::SystemTime};
 use tempfile::TempDir;
 use tokio::sync::{RwLock, Semaphore};
@@ -74,6 +74,7 @@ pub fn setup_test_app() -> (AppState, TempDir) {
         chunk_dir,
         chunk_sessions: Arc::new(dashmap::DashMap::new()),
         ip_hash_secret,
+        owners_persist_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
 
     (state, temp_dir)
@@ -130,5 +131,6 @@ pub fn recreate_state(base_path: &Path) -> AppState {
         chunk_dir,
         chunk_sessions: Arc::new(dashmap::DashMap::new()),
         ip_hash_secret,
+        owners_persist_lock: Arc::new(tokio::sync::Mutex::new(())),
     }
 }

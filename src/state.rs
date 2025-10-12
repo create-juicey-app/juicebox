@@ -1,12 +1,12 @@
 use crate::util::{
-    hash_ip_addr, hash_ip_string, hash_network_from_cidr, hash_network_from_ip, new_id, now_secs,
-    ttl_to_duration, IpVersion, ADMIN_KEY_TTL, ADMIN_SESSION_TTL,
+    ADMIN_KEY_TTL, ADMIN_SESSION_TTL, IpVersion, hash_ip_addr, hash_ip_string,
+    hash_network_from_cidr, hash_network_from_ip, new_id, now_secs, ttl_to_duration,
 };
 use anyhow::Result;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::SystemTime};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -85,6 +85,7 @@ pub struct ChunkSession {
     pub completed: AtomicBool,
     pub last_update: AtomicU64,
     pub persist_lock: Mutex<()>,
+    pub assembled_chunks: AtomicU32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -103,6 +104,8 @@ struct ChunkSessionRecord {
     received: Vec<bool>,
     completed: bool,
     last_update: u64,
+    #[serde(default)]
+    assembled_chunks: u32,
 }
 
 impl ChunkSession {
@@ -112,6 +115,8 @@ impl ChunkSession {
 
     pub fn mark_completed(&self) {
         self.completed.store(true, Ordering::Relaxed);
+        self.assembled_chunks
+            .store(self.total_chunks, Ordering::Relaxed);
         self.touch();
     }
 
@@ -135,6 +140,7 @@ impl ChunkSession {
             received,
             completed: self.completed.load(Ordering::Relaxed),
             last_update: self.last_update.load(Ordering::Relaxed),
+            assembled_chunks: self.assembled_chunks.load(Ordering::Relaxed),
         }
     }
 
@@ -155,6 +161,7 @@ impl ChunkSession {
             completed: AtomicBool::new(record.completed),
             last_update: AtomicU64::new(record.last_update),
             persist_lock: Mutex::new(()),
+            assembled_chunks: AtomicU32::new(record.assembled_chunks),
         }
     }
 }
@@ -186,6 +193,7 @@ pub struct AppState {
     pub chunk_dir: Arc<PathBuf>,
     pub chunk_sessions: Arc<DashMap<String, Arc<ChunkSession>>>,
     pub ip_hash_secret: Arc<Vec<u8>>,
+    pub owners_persist_lock: Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -238,7 +246,7 @@ impl AppState {
         })
     }
 
-    pub async fn persist_owners(&self) {
+    async fn persist_owners_inner(&self) {
         // DashMap is not directly serializable, so collect to HashMap
         let owners: HashMap<String, FileMeta> = self
             .owners
@@ -260,6 +268,18 @@ impl AppState {
                 }
             }
         }
+    }
+
+    pub async fn persist_owners(&self) {
+        let _guard = self.owners_persist_lock.lock().await;
+        self.persist_owners_inner().await;
+    }
+
+    pub fn spawn_persist_owners(&self) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            state.persist_owners().await;
+        });
     }
     pub async fn persist_reports(&self) {
         let reports = self.reports.read().await;
@@ -506,10 +526,12 @@ impl AppState {
 
     pub async fn remove_chunk_session(&self, id: &str) {
         if let Some((_, session)) = self.chunk_sessions.remove(id) {
-            let dir = session.storage_dir.clone();
-            if let Err(err) = fs::remove_dir_all(&*dir).await {
-                tracing::warn!(?err, path = ?dir, "failed to remove chunk session directory");
-            }
+            let dir = (*session.storage_dir).clone();
+            tokio::spawn(async move {
+                if let Err(err) = fs::remove_dir_all(&dir).await {
+                    tracing::warn!(?err, path = ?dir, "failed to remove chunk session directory");
+                }
+            });
         }
     }
 

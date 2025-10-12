@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>{{ t.title | default(value='JuiceBox - Fast Temporary File Host') }}</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script src="/js/lang.js"></script>
   <!-- Social & SEO meta additions -->
   <meta name="description" content="{{ t.meta_description | default(value='JuiceBox is an open-source and simple high-speed temporary file host with hotlinking. Click, upload, share lightweight expiring links with selectable file retention up to ' ~ max_file_size_str ~ '.') }}" />
   <link rel="canonical" href="https://box.juicey.dev/" />
@@ -30,9 +31,52 @@
   <meta name="twitter:image" content="https://box.juicey.dev/silly.gif" />
   <meta name="twitter:image:alt" content="JuiceBox, Temporary File Host, the silly file share." />
   <!-- End social meta -->
+  <link rel="preload" href="{{ css_bundle | default(value='/css/app.css') }}" as="style" />
   <link rel="stylesheet" href="{{ css_bundle | default(value='/css/app.css') }}" />
   <style>
-    .footer-links a, .footer-links a:visited { color: #fff !important; }
+    :root {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
+      background: #0f141b;
+      color: #e8edf2;
+    }
+
+    body {
+      margin: 0;
+      background: #0f141b;
+      color: #e8edf2;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 1.9rem 1.2rem 1rem;
+      text-align: center;
+    }
+
+    main {
+      width: min(880px, 82%);
+      margin: 1.1rem auto 2.5rem;
+      display: grid;
+      gap: 1.6rem;
+      grid-template-columns: 1fr;
+    }
+
+    .panel {
+      background: #1d2733;
+      border: 1px solid #2f3b4a;
+      border-radius: 14px;
+      box-shadow: 0 4px 16px -8px rgba(0, 0, 0, 0.6);
+    }
+
+    .panel section {
+      padding: 1.25rem 1.35rem 1.5rem;
+    }
+
+    .footer-links a,
+    .footer-links a:visited {
+      color: #fff !important;
+    }
   </style>
 </head>
 <body>
@@ -43,28 +87,23 @@
 
  
   <header>
-    <h1 class="brand-heading"><a href="/" class="brand-link" aria-label="JuiceBox Home"><img src="/logo.png" alt="JuiceBox logo" class="logo" decoding="async" draggable="false" />JuiceBox <span class="visually-hidden">{{ t.brand_subtitle | default(value="Fast Temporary File Host") }}</span></a></h1>
+    <h1 class="brand-heading"><a href="/" class="brand-link" aria-label="JuiceBox Home"><img src="/logo.png" alt="JuiceBox logo" class="logo" decoding="async" draggable="false" width="64" height="64" fetchpriority="high" />JuiceBox <span class="visually-hidden">{{ t.brand_subtitle | default(value="Fast Temporary File Host") }}</span></a></h1>
     <p class="lead">{{ t.lead | default(value="Click, Upload, Share!") }}</p>
   </header>
   <main id="mainContent" tabindex="-1">
     <script>
-  // Language switcher: set cookie and reload with lang param
   window.addEventListener('DOMContentLoaded', function() {
     var sel = document.getElementById('langSelect');
-    if(!sel) return;
-    sel.addEventListener('change', function(){
-      var lang = sel.value;
-      document.cookie = 'lang=' + lang + ';path=/;max-age=31536000';
-      var url = new URL(window.location.href);
-      url.searchParams.set('lang', lang);
-      window.location = url.toString();
-    });
-    // On load, if cookie exists and no lang param, reload with cookie
-    var m = document.cookie.match(/(?:^|; )lang=([a-z]{2})/);
-    if(m && !new URLSearchParams(window.location.search).has('lang')){
-      var url = new URL(window.location.href);
-      url.searchParams.set('lang', m[1]);
-      window.location = url.toString();
+    if (!sel) return;
+    if (window.JBLang && typeof window.JBLang.syncSelect === 'function') {
+      window.JBLang.syncSelect(sel);
+    } else {
+      sel.addEventListener('change', function () {
+        var lang = sel.value;
+        var url = new URL(window.location.href);
+        url.searchParams.set('lang', lang);
+        window.location.assign(url.toString());
+      });
     }
   });
   </script>
@@ -92,7 +131,7 @@
         <span id="ttlValue" class="ttl-value" title="Current retention value">3d</span>
         <span class="subtle" title="Files are automatically deleted after retention">{{ t.auto_delete | default(value="auto delete") }}</span>
       </div>
-      <div class="drop-zone" id="dropZone" aria-describedby="dropHint" title="{{ t.drop_title | default(value='Click or drag files here to upload (max {max_size} each)') | replace(from='{max_size}', to=max_file_size_str) }}">
+  <div class="drop-zone" id="dropZone" aria-describedby="dropHint" title="{{ t.drop_title | default(value='Click or drag files here to upload (max {max_size} each)') | replace(from='{max_size}', to=max_file_size_str) }}" style="min-height:240px;padding:3.5rem 1rem;border:2px dashed #ff9800;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0.65rem;text-align:center;width:100%;box-sizing:border-box;">
         <input type="file" id="fileInput" multiple title="File picker" aria-label="{{ t.file_picker | default(value='Select files to upload (maximum {max_size} each)') | replace(from='{max_size}', to=max_file_size_str) }}" aria-describedby="dropHint" />
         <div class="icon" title="Folder icon">📁</div>
         <div class="muted" id="dropHint" title="Click or drop to begin selecting files">{{ t.drop_hint | default(value="Click or drop files") }}</div>
@@ -101,10 +140,9 @@
       <p class="site-note" title="Upload usage note">{{ t.upload_note | default(value="Upload your files. Links show after each finishes. Maximum file size is {max_size}, Files expire after selected retention. Limit: maximum 5 active files per IP (delete one to free a slot). See <a href='/faq' target='_blank' rel='noopener' title='Open FAQ in new tab'>Read the FAQ</a>.") | replace(from='{max_size}', to=max_file_size_str) }}</p>
   <p class="site-note" title="Privacy notice">{{ t.privacy_note | default(value="Notice: Your IP address is immediately hashed with a secret pepper and used only to associate uploads with your session, apply limits, and enable abuse/moderation actions. It is never stored in plaintext and the hash is removed once all related files expire.") }}</p>
     </section></div>
-    <div class="panel" id="ownedPanel" style="display:none"><section>
+    <div class="panel" id="ownedPanel"><section>
       <h2 id="yourFiles" title="Files previously uploaded from this connection">{{ t.your_files | default(value="Your Files") }}</h2>
-      <ul id="ownedList" title="List of files you have uploaded" role="list"></ul>
-    <ul id="ownedList" title="List of files you have uploaded" role="list" aria-label="Your uploaded files"></ul>
+      <ul id="ownedList" title="List of files you have uploaded" role="list" aria-label="Your uploaded files" aria-live="polite"></ul>
         <p class="site-note" title="Owned files note">{{ t.owned_note | default(value="These are files linked to your IP, They persist across refresh until deleted.") }}</p>
         <script>
         // Accessibility: add aria-label and autocomplete to .link-input fields after they are created

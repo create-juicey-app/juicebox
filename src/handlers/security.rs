@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 use tokio::fs;
 
 use crate::state::{AppState, IpBan};
-use crate::util::{extract_client_ip, PROD_HOST};
+use crate::util::{PROD_HOST, extract_client_ip};
 
 pub async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
     let mut resp = next.run(req).await;

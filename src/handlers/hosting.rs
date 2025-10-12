@@ -1,16 +1,16 @@
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::header::{
     ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, EXPIRES, VARY,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use mime_guess::MimeGuess;
 use serde::Serialize;
 use std::env;
 use tokio::fs;
 
-use crate::state::{cleanup_expired, AppState};
+use crate::state::{AppState, cleanup_expired};
 use crate::util::{format_bytes, json_error, max_file_bytes, now_secs};
 
 #[derive(Serialize)]
@@ -52,10 +52,20 @@ pub async fn fetch_file_handler(
             headers.insert(CONTENT_TYPE, mime.as_ref().parse().unwrap());
             if meta_expires > now {
                 let remaining = meta_expires - now;
-                headers.insert(
-                    CACHE_CONTROL,
-                    HeaderValue::from_str(&format!("public, max-age={}", remaining)).unwrap(),
-                );
+                // If the object expires far in the future, mark it immutable so CDNs cache aggressively.
+                // Otherwise use the remaining TTL as max-age.
+                if remaining > 60 * 60 * 24 * 7 {
+                    // more than 7 days -> long cache
+                    headers.insert(
+                        CACHE_CONTROL,
+                        HeaderValue::from_static("public, max-age=31536000, immutable"),
+                    );
+                } else {
+                    headers.insert(
+                        CACHE_CONTROL,
+                        HeaderValue::from_str(&format!("public, max-age={}", remaining)).unwrap(),
+                    );
+                }
                 let exp_time = std::time::SystemTime::UNIX_EPOCH
                     + std::time::Duration::from_secs(meta_expires);
                 headers.insert(

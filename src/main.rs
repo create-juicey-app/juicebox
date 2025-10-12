@@ -6,7 +6,10 @@ use juicebox::handlers::ban_gate;
 use juicebox::handlers::{add_cache_headers, add_security_headers, build_router, enforce_host};
 use juicebox::rate_limit::{RateLimiterInner, build_rate_limiter};
 use juicebox::state::{AppState, BanSubject, FileMeta, IpBan, ReportRecord, cleanup_expired};
-use juicebox::util::{IpVersion, PROD_HOST, UPLOAD_CONCURRENCY, hash_ip_string, hash_network_from_cidr, looks_like_hash, now_secs, ttl_to_duration};
+use juicebox::util::{
+    IpVersion, PROD_HOST, UPLOAD_CONCURRENCY, hash_ip_string, hash_network_from_cidr,
+    looks_like_hash, now_secs, ttl_to_duration,
+};
 use serde::Deserialize;
 use std::{
     collections::HashMap,
@@ -193,7 +196,11 @@ async fn load_bans_with_migration(
                         }
                     }
                 }
-                BanSubject::Network { hash, prefix, version } => {
+                BanSubject::Network {
+                    hash,
+                    prefix,
+                    version,
+                } => {
                     if !looks_like_hash(hash) {
                         let cidr = format!("{}/{}", hash, prefix);
                         if let Some((ver, pre, new_hash)) = hash_network_from_cidr(secret, &cidr) {
@@ -238,39 +245,46 @@ async fn load_bans_with_migration(
                     let from_cidr = cidr
                         .as_ref()
                         .and_then(|c| hash_network_from_cidr(secret, c));
-                    let (version, prefix, final_hash) = if let Some((ver, pre, new_hash)) = from_cidr {
-                        migrated = true;
-                        (ver, pre, new_hash)
-                    } else if let (Some(ip), Some(pre)) = (ip.as_ref(), prefix) {
-                        let cidr_string = format!("{}/{}", ip, pre);
-                        if let Some((ver, pre, new_hash)) = hash_network_from_cidr(secret, &cidr_string)
-                        {
+                    let (version, prefix, final_hash) =
+                        if let Some((ver, pre, new_hash)) = from_cidr {
                             migrated = true;
                             (ver, pre, new_hash)
+                        } else if let (Some(ip), Some(pre)) = (ip.as_ref(), prefix) {
+                            let cidr_string = format!("{}/{}", ip, pre);
+                            if let Some((ver, pre, new_hash)) =
+                                hash_network_from_cidr(secret, &cidr_string)
+                            {
+                                migrated = true;
+                                (ver, pre, new_hash)
+                            } else {
+                                let ver = version.unwrap_or_else(|| {
+                                    if ip.contains(':') {
+                                        IpVersion::V6
+                                    } else {
+                                        IpVersion::V4
+                                    }
+                                });
+                                (ver, pre, hash.clone().unwrap_or_else(|| ip.clone()))
+                            }
+                        } else if let Some(existing) = hash {
+                            let ver = version.unwrap_or(IpVersion::V4);
+                            let pre = prefix.unwrap_or(match ver {
+                                IpVersion::V4 => 32,
+                                IpVersion::V6 => 128,
+                            });
+                            if looks_like_hash(&existing) {
+                                (ver, pre, existing)
+                            } else if let Some((ver2, pre2, new_hash)) =
+                                hash_network_from_cidr(secret, &format!("{}/{}", existing, pre))
+                            {
+                                migrated = true;
+                                (ver2, pre2, new_hash)
+                            } else {
+                                (ver, pre, existing)
+                            }
                         } else {
-                            let ver = version.unwrap_or_else(|| if ip.contains(':') { IpVersion::V6 } else { IpVersion::V4 });
-                            (ver, pre, hash.clone().unwrap_or_else(|| ip.clone()))
-                        }
-                    } else if let Some(existing) = hash {
-                        let ver = version.unwrap_or(IpVersion::V4);
-                        let pre = prefix.unwrap_or(match ver {
-                            IpVersion::V4 => 32,
-                            IpVersion::V6 => 128,
-                        });
-                        if looks_like_hash(&existing) {
-                            (ver, pre, existing)
-                        } else if let Some((ver2, pre2, new_hash)) = hash_network_from_cidr(
-                            secret,
-                            &format!("{}/{}", existing, pre),
-                        ) {
-                            migrated = true;
-                            (ver2, pre2, new_hash)
-                        } else {
-                            (ver, pre, existing)
-                        }
-                    } else {
-                        (IpVersion::V4, 32, String::new())
-                    };
+                            (IpVersion::V4, 32, String::new())
+                        };
                     if migrated {
                         changed = true;
                     }
@@ -413,6 +427,7 @@ async fn main() -> anyhow::Result<()> {
         chunk_dir,
         chunk_sessions: Arc::new(DashMap::new()),
         ip_hash_secret: ip_hash_secret.clone(),
+        owners_persist_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
 
     if owners_migrated {

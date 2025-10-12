@@ -195,7 +195,7 @@ export const uploadHandler = {
     if (pending) {
       inp.classList.add("pending");
       inp.dataset.status = "pending";
-      inp.title = "Finalizing upload… link may briefly be unavailable";
+      inp.title = "Checking chunks… link may briefly be unavailable";
       inp.setAttribute("aria-live", "polite");
     }
     if (autoCopy && !pending) {
@@ -256,7 +256,7 @@ export const uploadHandler = {
       f.linkInput.classList.toggle("pending", pending);
       f.linkInput.dataset.status = pending ? "pending" : "ready";
       f.linkInput.title = pending
-        ? "Finalizing upload… link may briefly be unavailable"
+        ? "Checking chunks… link may briefly be unavailable"
         : "Click to copy direct download link";
       if (pending) {
         f.linkInput.setAttribute("aria-live", "polite");
@@ -487,12 +487,14 @@ export const uploadHandler = {
     if (!text) {
       if (f.statusEl) {
         if (persist) {
-          f.statusEl.textContent = "";
+          if (f.statusText) f.statusText.textContent = "";
           f.statusEl.style.display = "none";
           delete f.statusEl.dataset.state;
         } else {
           f.statusEl.remove();
           f.statusEl = null;
+          f.statusIcon = null;
+          f.statusText = null;
         }
       }
       f.statusState = null;
@@ -504,12 +506,46 @@ export const uploadHandler = {
       el.className = "status-note";
       el.setAttribute("role", "status");
       el.setAttribute("aria-live", ariaLive);
+      const icon = document.createElement("span");
+      icon.className = "status-icon";
+      icon.setAttribute("aria-hidden", "true");
+      const textWrap = document.createElement("span");
+      textWrap.className = "status-text";
+      el.append(icon, textWrap);
       f.container.appendChild(el);
       f.statusEl = el;
+      f.statusIcon = icon;
+      f.statusText = textWrap;
+    } else {
+      if (!f.statusIcon) {
+        const existingIcon = f.statusEl.querySelector(".status-icon");
+        if (existingIcon) {
+          f.statusIcon = existingIcon;
+        } else {
+          const icon = document.createElement("span");
+          icon.className = "status-icon";
+          icon.setAttribute("aria-hidden", "true");
+          f.statusEl.prepend(icon);
+          f.statusIcon = icon;
+        }
+      }
+      if (!f.statusText) {
+        const existingText = f.statusEl.querySelector(".status-text");
+        if (existingText) {
+          f.statusText = existingText;
+        } else {
+          const textWrap = document.createElement("span");
+          textWrap.className = "status-text";
+          f.statusEl.appendChild(textWrap);
+          f.statusText = textWrap;
+        }
+      }
     }
 
     f.statusEl.style.display = "flex";
-    f.statusEl.textContent = text;
+    if (f.statusText) {
+      f.statusText.textContent = text;
+    }
     if (ariaLive) {
       f.statusEl.setAttribute("aria-live", ariaLive);
     } else {
@@ -683,13 +719,30 @@ export const uploadHandler = {
     if (f.remoteName) {
       this.ensureLinkInput(f, batch, { pending: true, autoCopy: false });
     }
-    this.setStatusMessage(f, "Finalizing…", {
+    const totalChunks = f.totalChunks || Math.ceil(f.file.size / f.chunkSize);
+    const initialStitchMessage = totalChunks
+      ? `Checking chunks (0/${totalChunks})`
+      : "Checking chunks…";
+    this.setStatusMessage(f, initialStitchMessage, {
       state: "finalizing",
       ariaLive: "polite",
     });
+    f.lastStitchMessage = initialStitchMessage;
 
+    let stopChunkStatus = null;
     let completeResponse;
     try {
+      if (typeof this.startChunkStatusPolling === "function") {
+        if (f.stitchPollingStop) {
+          try {
+            f.stitchPollingStop();
+          } catch {
+            // ignore cleanup errors
+          }
+        }
+        stopChunkStatus = this.startChunkStatusPolling(f);
+        f.stitchPollingStop = stopChunkStatus;
+      }
       completeResponse = await fetch(
         `/chunk/${encodeURIComponent(f.chunkSessionId)}/complete`,
         {
@@ -700,6 +753,10 @@ export const uploadHandler = {
         }
       );
     } catch (err) {
+      if (stopChunkStatus) {
+        stopChunkStatus();
+        f.stitchPollingStop = null;
+      }
       if (err?.name === "AbortError") {
         this.setStatusMessage(f, "");
         f.lastProgressPercent = -1;
@@ -713,6 +770,11 @@ export const uploadHandler = {
       this.removeLinkForFile(f);
       f.lastProgressPercent = -1;
       throw err;
+    }
+
+    if (stopChunkStatus) {
+      stopChunkStatus();
+      f.stitchPollingStop = null;
     }
 
     if (completeResponse.status === 409) {
@@ -853,6 +915,86 @@ export const uploadHandler = {
         f.lastProgressPercent = percent;
       }
     }
+  },
+
+  startChunkStatusPolling(f) {
+    if (!f?.chunkSessionId) {
+      return () => {};
+    }
+    const sessionId = encodeURIComponent(f.chunkSessionId);
+    let stopped = false;
+    let timer = null;
+    let inFlight = false;
+    const pollIntervalMs = 600;
+    const safeSetTimeout = (fn, delay) => {
+      timer = setTimeout(fn, delay);
+    };
+    const runPoll = async () => {
+      if (stopped || inFlight) {
+        if (!stopped && !inFlight) {
+          safeSetTimeout(runPoll, pollIntervalMs);
+        }
+        return;
+      }
+      inFlight = true;
+      try {
+        const response = await fetch(`/chunk/${sessionId}/status`, {
+          headers: { Accept: "application/json" },
+        });
+        if (stopped) {
+          return;
+        }
+        if (response.status === 404) {
+          stopped = true;
+          return;
+        }
+        if (!response.ok) {
+          safeSetTimeout(runPoll, pollIntervalMs * 2);
+          return;
+        }
+        const data = await response.json().catch(() => null);
+        if (!data) {
+          safeSetTimeout(runPoll, pollIntervalMs * 2);
+          return;
+        }
+        const total = data.total_chunks || f.totalChunks || 0;
+        const assembledRaw = data.assembled_chunks ?? 0;
+        const assembled = total ? Math.min(assembledRaw, total) : assembledRaw;
+        const message = total
+          ? `Checking chunks (${assembled}/${total})`
+          : `Checking chunks (${assembled})`;
+        if (f.statusState === "finalizing" && message !== f.lastStitchMessage) {
+          this.setStatusMessage(f, message, {
+            state: "finalizing",
+            ariaLive: assembled <= 1 ? "polite" : "off",
+          });
+          f.lastStitchMessage = message;
+        }
+        if (data.completed || (total && assembled >= total)) {
+          stopped = true;
+          return;
+        }
+        safeSetTimeout(runPoll, pollIntervalMs);
+      } catch (err) {
+        if (window?.DEBUG_LOGS) {
+          console.warn("chunk status poll failed", err);
+        }
+        if (!stopped) {
+          safeSetTimeout(runPoll, pollIntervalMs * 2);
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    runPoll();
+
+    return () => {
+      stopped = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
   },
 
   async extractError(response, fallback) {

@@ -1,28 +1,28 @@
+use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Multipart, Path, Query as AxumQuery, State};
 use axum::http::header::CACHE_CONTROL;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use infer;
 use mime_guess::mime;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr as ClientAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::state::{
-    check_storage_integrity, cleanup_expired, spawn_integrity_check,
-    verify_user_entries_with_report, AppState, ChunkSession, FileMeta, ReconcileReport,
+    AppState, ChunkSession, FileMeta, ReconcileReport, check_storage_integrity, cleanup_expired,
+    spawn_integrity_check, verify_user_entries_with_report,
 };
 use crate::util::{
-    is_forbidden_extension, json_error, make_storage_name, max_file_bytes, new_id, now_secs,
-    qualify_path, real_client_ip, ttl_to_duration, FORBIDDEN_EXTENSIONS,
+    FORBIDDEN_EXTENSIONS, is_forbidden_extension, json_error, make_storage_name, max_file_bytes,
+    new_id, now_secs, qualify_path, real_client_ip, ttl_to_duration,
 };
 
 #[derive(Deserialize)]
@@ -93,6 +93,13 @@ pub struct ChunkPathParams {
 #[derive(Debug, Deserialize)]
 pub struct ChunkCompletePath {
     id: String,
+}
+
+#[derive(Serialize)]
+pub struct ChunkStatusResponse {
+    pub total_chunks: u32,
+    pub assembled_chunks: u32,
+    pub completed: bool,
 }
 
 fn compute_chunk_layout(total_size: u64, requested: Option<u64>) -> Option<(u64, u32)> {
@@ -233,6 +240,7 @@ pub async fn init_chunk_upload_handler(
         completed: AtomicBool::new(false),
         last_update: AtomicU64::new(now),
         persist_lock: Mutex::new(()),
+        assembled_chunks: AtomicU32::new(0),
     });
     state
         .chunk_sessions
@@ -422,6 +430,7 @@ pub async fn complete_chunk_upload_handler(
     let final_path = state.upload_dir.join(&storage_name);
     let mut tmp_path = final_path.clone();
     tmp_path.set_extension("part");
+    let start = tokio::time::Instant::now();
     let mut file = match fs::File::create(&tmp_path).await {
         Ok(f) => f,
         Err(err) => {
@@ -434,8 +443,13 @@ pub async fn complete_chunk_upload_handler(
             );
         }
     };
+    session.assembled_chunks.store(0, Ordering::Relaxed);
     let mut hasher = Sha256::new();
+    let mut chunk_buf = Vec::with_capacity(session.chunk_size as usize);
+    let open_elapsed = start.elapsed();
+    tracing::debug!(session = %path.id, elapsed_ms = open_elapsed.as_millis(), "complete: file create ready");
     for idx in 0..session.total_chunks {
+        let chunk_start = tokio::time::Instant::now();
         let chunk_path = session.storage_dir.join(format!("{:06}.chunk", idx));
         let mut chunk_file = match fs::File::open(&chunk_path).await {
             Ok(f) => f,
@@ -450,35 +464,55 @@ pub async fn complete_chunk_upload_handler(
                 );
             }
         };
-        let mut buf = vec![0u8; 8192];
-        loop {
-            match chunk_file.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    if file.write_all(&buf[..n]).await.is_err() {
-                        drop(permit);
-                        let _ = fs::remove_file(&tmp_path).await;
-                        return json_error(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "write",
-                            "failed writing assembled file",
-                        );
-                    }
-                    hasher.update(&buf[..n]);
-                }
-                Err(err) => {
-                    drop(permit);
-                    let _ = fs::remove_file(&tmp_path).await;
-                    tracing::error!(?err, ?chunk_path, "failed reading chunk");
-                    return json_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "chunk_read",
-                        "failed reading chunk data",
-                    );
-                }
-            }
+        let expected_len = expected_chunk_len(&session, idx);
+        chunk_buf.resize(expected_len as usize, 0);
+        if let Err(err) = chunk_file.read_exact(&mut chunk_buf).await {
+            drop(permit);
+            let _ = fs::remove_file(&tmp_path).await;
+            let code = if err.kind() == std::io::ErrorKind::UnexpectedEof {
+                tracing::error!(
+                    actual = chunk_buf.len(),
+                    expected = expected_len,
+                    ?chunk_path,
+                    "chunk length mismatch during assembly"
+                );
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    "chunk_size",
+                    "chunk length mismatch",
+                )
+            } else {
+                tracing::error!(?err, ?chunk_path, "failed reading chunk");
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "chunk_read",
+                    "failed reading chunk data",
+                )
+            };
+            return code;
+        }
+        if let Err(err) = file.write_all(&chunk_buf).await {
+            drop(permit);
+            let _ = fs::remove_file(&tmp_path).await;
+            tracing::error!(?err, ?chunk_path, "failed writing assembled file");
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "write",
+                "failed writing assembled file",
+            );
+        }
+        hasher.update(&chunk_buf);
+        session.assembled_chunks.store(
+            std::cmp::min(idx + 1, session.total_chunks),
+            Ordering::Relaxed,
+        );
+        let chunk_elapsed = chunk_start.elapsed();
+        if chunk_elapsed.as_millis() >= 25 {
+            tracing::warn!(session = %path.id, chunk = idx, elapsed_ms = chunk_elapsed.as_millis(), "complete: slow chunk assembly");
         }
     }
+    let assemble_elapsed = start.elapsed();
+    tracing::debug!(session = %path.id, elapsed_ms = assemble_elapsed.as_millis(), "complete: chunks assembled");
     if file.flush().await.is_err() {
         drop(permit);
         let _ = fs::remove_file(&tmp_path).await;
@@ -498,6 +532,11 @@ pub async fn complete_chunk_upload_handler(
         );
     }
     drop(permit);
+    session
+        .assembled_chunks
+        .store(session.total_chunks, Ordering::Relaxed);
+    let finalize_elapsed = start.elapsed();
+    tracing::debug!(session = %path.id, elapsed_ms = finalize_elapsed.as_millis(), "complete: file moved");
 
     let digest = format!("{:x}", hasher.finalize());
     let expected_hash = req
@@ -545,8 +584,19 @@ pub async fn complete_chunk_upload_handler(
         tracing::warn!(?err, session_id = %path.id, "failed to persist completed chunk session before cleanup");
     }
     state.owners.insert(storage_name.clone(), meta);
-    state.persist_owners().await;
+    let persist_start = tokio::time::Instant::now();
+    state.spawn_persist_owners();
+    let persist_latency = persist_start.elapsed();
+    tracing::debug!(session = %path.id, elapsed_ms = persist_latency.as_micros(), "complete: spawned owner persist");
+    let cleanup_start = tokio::time::Instant::now();
     state.remove_chunk_session(&path.id).await;
+    let cleanup_elapsed = cleanup_start.elapsed();
+    if cleanup_elapsed.as_millis() >= 50 {
+        tracing::warn!(session = %path.id, elapsed_ms = cleanup_elapsed.as_millis(), "complete: slow cleanup");
+    } else {
+        tracing::debug!(session = %path.id, elapsed_ms = cleanup_elapsed.as_millis(), "complete: cleanup complete");
+    }
+    tracing::info!(session = %path.id, storage = %storage_name, total_ms = start.elapsed().as_millis(), "complete: finished");
     spawn_integrity_check(state.clone());
 
     Json(UploadResponse {
@@ -597,6 +647,52 @@ pub async fn cancel_chunk_upload_handler(
         .status(StatusCode::NO_CONTENT)
         .body(axum::body::Body::empty())
         .unwrap()
+}
+
+#[axum::debug_handler]
+pub async fn chunk_status_handler(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<ClientAddr>,
+    headers: HeaderMap,
+    Path(path): Path<ChunkCompletePath>,
+) -> Response {
+    if state.is_banned(&real_client_ip(&headers, &addr)).await {
+        return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
+    }
+    let ip = real_client_ip(&headers, &addr);
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+        hash
+    } else {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_ip",
+            "unable to fingerprint client",
+        );
+    };
+    let Some(session_entry) = state.chunk_sessions.get(&path.id) else {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "chunk_session",
+            "upload session not found",
+        );
+    };
+    let session = session_entry.value().clone();
+    drop(session_entry);
+    if session.owner_hash != owner_hash {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "not_owner",
+            "upload session not owned by ip",
+        );
+    }
+    let total = session.total_chunks;
+    let assembled = session.assembled_chunks.load(Ordering::Relaxed).min(total);
+    Json(ChunkStatusResponse {
+        total_chunks: total,
+        assembled_chunks: assembled,
+        completed: session.is_completed() && assembled >= total,
+    })
+    .into_response()
 }
 
 #[axum::debug_handler]
@@ -807,7 +903,11 @@ pub async fn list_handler(
     cleanup_expired(&state).await;
     let client_ip = real_client_ip(&headers, &addr);
     let Some(owner_hash) = state.hash_ip_to_string(&client_ip) else {
-        return json_error(StatusCode::FORBIDDEN, "invalid_ip", "unable to fingerprint client");
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "invalid_ip",
+            "unable to fingerprint client",
+        );
     };
     let reconcile_report = verify_user_entries_with_report(&state, &owner_hash).await;
     cleanup_expired(&state).await;
