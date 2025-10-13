@@ -63,6 +63,24 @@ static TRUSTED_PROXY_CONFIG: Lazy<RwLock<TrustedProxyConfig>> = Lazy::new(|| {
     })
 });
 
+fn is_local_proxy(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local(),
+    }
+}
+
+fn proxy_source_trusted(cfg: &TrustedProxyConfig, source_ip: IpAddr) -> bool {
+    if is_local_proxy(&source_ip) {
+        return true;
+    }
+    cfg.trusted_proxies.is_empty()
+        || cfg
+            .trusted_proxies
+            .iter()
+            .any(|cidr| ip_in_cidr(source_ip, cidr))
+}
+
 #[derive(Serialize)]
 pub struct ErrorBody {
     pub code: &'static str,
@@ -326,12 +344,7 @@ pub fn extract_client_ip(headers: &HeaderMap, fallback: Option<IpAddr>) -> Strin
             .expect("trusted proxy configuration poisoned");
         if cfg.allow_headers {
             if let Some(source_ip) = fallback {
-                let proxy_trusted = cfg.trusted_proxies.is_empty()
-                    || cfg
-                        .trusted_proxies
-                        .iter()
-                        .any(|cidr| ip_in_cidr(source_ip, cidr));
-                if proxy_trusted {
+                if proxy_source_trusted(&cfg, source_ip) {
                     if let Some(ip) = headers
                         .get("CF-Connecting-IP")
                         .and_then(|v| v.to_str().ok())
@@ -384,12 +397,7 @@ pub fn headers_trusted(_headers: &HeaderMap, fallback: Option<IpAddr>) -> bool {
         return false;
     }
     if let Some(source_ip) = fallback {
-        let proxy_trusted = cfg.trusted_proxies.is_empty()
-            || cfg
-                .trusted_proxies
-                .iter()
-                .any(|cidr| ip_in_cidr(source_ip, cidr));
-        return proxy_trusted;
+        return proxy_source_trusted(&cfg, source_ip);
     }
     false
 }

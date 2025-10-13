@@ -5,9 +5,9 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use http_body_util::BodyExt;
 use juicebox::handlers::admin_files_handler;
 use juicebox::state::FileMeta;
-use juicebox::util::{extract_client_ip, now_secs, set_trusted_proxy_config_for_tests};
+use juicebox::util::{extract_client_ip, headers_trusted, now_secs, set_trusted_proxy_config_for_tests};
 use once_cell::sync::Lazy;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 use urlencoding::encode;
 
@@ -46,6 +46,36 @@ fn extract_client_ip_trusts_headers_from_allowed_proxy() {
     let remote = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
     let result = extract_client_ip(&headers, Some(remote));
     assert_eq!(result, "198.51.100.9");
+    set_trusted_proxy_config_for_tests(false, Vec::new());
+}
+
+#[test]
+fn extract_client_ip_trusts_loopback_proxy_without_cidr_match() {
+    let _lock = PROXY_GUARD.lock().unwrap();
+    set_trusted_proxy_config_for_tests(true, vec!["203.0.113.0/24".into()]);
+    let mut headers = HeaderMap::new();
+    headers.insert("CF-Connecting-IP", HeaderValue::from_static("198.51.100.9"));
+    let remote = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+    let result = extract_client_ip(&headers, Some(remote));
+    assert_eq!(result, "198.51.100.9");
+    set_trusted_proxy_config_for_tests(false, Vec::new());
+}
+
+#[test]
+fn headers_trusted_respects_private_sources() {
+    let _lock = PROXY_GUARD.lock().unwrap();
+    set_trusted_proxy_config_for_tests(true, vec!["198.51.100.0/24".into()]);
+    let headers = HeaderMap::new();
+    let loopback_v4 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+    assert!(headers_trusted(&headers, Some(loopback_v4)));
+    let private_v4 = IpAddr::V4(Ipv4Addr::new(192, 168, 0, 5));
+    assert!(headers_trusted(&headers, Some(private_v4)));
+    let loopback_v6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
+    assert!(headers_trusted(&headers, Some(loopback_v6)));
+    let ula_v6: Ipv6Addr = "fd12:3456:789a::1".parse().unwrap();
+    assert!(headers_trusted(&headers, Some(IpAddr::V6(ula_v6))));
+    let global_v4 = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
+    assert!(!headers_trusted(&headers, Some(global_v4)));
     set_trusted_proxy_config_for_tests(false, Vec::new());
 }
 

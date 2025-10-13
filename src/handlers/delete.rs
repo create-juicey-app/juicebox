@@ -2,13 +2,13 @@ use axum::extract::{ConnectInfo, Form, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
+use std::env;
 use std::net::SocketAddr as ClientAddr;
 use tokio::fs;
 use tracing::{debug, info, warn};
-use std::env;
 
 use crate::state::{AppState, cleanup_expired};
-use crate::util::{json_error, real_client_ip, PROD_HOST};
+use crate::util::{PROD_HOST, json_error, real_client_ip};
 
 #[derive(Deserialize)]
 pub struct SimpleDeleteForm {
@@ -158,7 +158,11 @@ async fn purge_cloudflare_file(fname: &str) -> Result<(), anyhow::Error> {
     if !resp.status().is_success() {
         let status = resp.status();
         let txt = resp.text().await.unwrap_or_else(|_| "<no body>".into());
-        return Err(anyhow::anyhow!("cloudflare purge failed: {} {}", status, txt));
+        return Err(anyhow::anyhow!(
+            "cloudflare purge failed: {} {}",
+            status,
+            txt
+        ));
     }
     Ok(())
 }
