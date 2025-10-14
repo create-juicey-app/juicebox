@@ -10,8 +10,18 @@ use std::net::SocketAddr;
 use tera::Context;
 use tokio::fs;
 
-use crate::state::AppState;
-use crate::util::{format_bytes, max_file_bytes, now_secs, qualify_path, real_client_ip};
+use crate::state::{AppState, BanSubject};
+use crate::util::{
+    extract_client_ip,
+    format_bytes,
+    headers_trusted,
+    max_file_bytes,
+    now_secs,
+    qualify_path,
+    real_client_ip,
+    IpVersion,
+    MAX_ACTIVE_FILES_PER_IP,
+};
 
 #[derive(Deserialize)]
 pub struct SimpleQuery {
@@ -93,7 +103,6 @@ pub async fn trusted_handler(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    use crate::util::headers_trusted;
     let edge = addr.ip().to_string();
     let trusted = headers_trusted(&headers, Some(addr.ip()));
     if trusted {
@@ -122,6 +131,150 @@ pub async fn trusted_handler(
         )
             .into_response()
     }
+}
+
+pub async fn visitor_debug_handler(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    const MAX_FILE_PREVIEW: usize = 20;
+
+    let edge_ip = addr.ip().to_string();
+    let real_ip = real_client_ip(&headers, &addr);
+    let extracted_ip = extract_client_ip(&headers, Some(addr.ip()));
+    let trusted = headers_trusted(&headers, Some(addr.ip()));
+
+    let version_label = |version: IpVersion| match version {
+        IpVersion::V4 => "v4",
+        IpVersion::V6 => "v6",
+    };
+
+    let edge_hash = state
+        .hash_ip(&edge_ip)
+        .map(|(version, hash)| json!({ "version": version_label(version), "value": hash }));
+
+    let real_hash_tuple = state.hash_ip(&real_ip);
+    let real_hash = real_hash_tuple.as_ref().map(|(version, hash)| {
+        json!({ "version": version_label(*version), "value": hash })
+    });
+    let owner_hash = real_hash_tuple.as_ref().map(|(_, hash)| hash.clone());
+
+    let extracted_hash = if extracted_ip == real_ip {
+        real_hash.clone()
+    } else {
+        state.hash_ip(&extracted_ip).map(|(version, hash)| {
+            json!({ "version": version_label(version), "value": hash })
+        })
+    };
+
+    let forwarded = json!({
+        "cf_connecting_ip": headers
+            .get("CF-Connecting-IP")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string()),
+        "true_client_ip": headers
+            .get("True-Client-IP")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string()),
+        "x_real_ip": headers
+            .get("X-Real-IP")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string()),
+        "x_forwarded_for": headers
+            .get("X-Forwarded-For")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string()),
+    });
+
+    let mut header_dump: HashMap<String, Vec<String>> = HashMap::new();
+    for (name, value) in headers.iter() {
+        header_dump
+            .entry(name.to_string())
+            .or_insert_with(Vec::new)
+            .push(value.to_str().map(|s| s.to_string()).unwrap_or_else(|_| format!("{:?}", value)));
+    }
+
+    let now = now_secs();
+    let mut owned_files = Vec::new();
+    let mut owned_total = 0usize;
+    if let Some(owner_hash_value) = owner_hash.as_ref() {
+        for entry in state.owners.iter() {
+            if entry.value().owner_hash == *owner_hash_value {
+                owned_total += 1;
+                if owned_files.len() < MAX_FILE_PREVIEW {
+                    owned_files.push(json!({
+                        "file": entry.key().clone(),
+                        "original": entry.value().original,
+                        "created": entry.value().created,
+                        "expires": entry.value().expires,
+                        "seconds_until_expiry": entry.value().expires.saturating_sub(now),
+                        "content_hash": entry.value().hash,
+                    }));
+                }
+            }
+        }
+    }
+    let files_truncated = owned_total > owned_files.len();
+
+    let mut ban_source = real_ip.clone();
+    let mut ban_detail = state.find_ban_for_input(&ban_source).await;
+    if ban_detail.is_none() && extracted_ip != ban_source {
+        ban_source = extracted_ip.clone();
+        ban_detail = state.find_ban_for_input(&ban_source).await;
+    }
+    let ban_json = ban_detail.map(|ban| {
+        let subject = match ban.subject {
+            BanSubject::Exact { hash } => {
+                json!({ "mode": "exact", "hash": hash })
+            }
+            BanSubject::Network {
+                hash,
+                prefix,
+                version,
+            } => {
+                json!({
+                    "mode": "network",
+                    "hash": hash,
+                    "prefix": prefix,
+                    "version": version_label(version),
+                })
+            }
+        };
+        json!({
+            "reason": ban.reason,
+            "label": ban.label,
+            "time": ban.time,
+            "subject": subject,
+        })
+    });
+
+    let payload = json!({
+        "timestamp": now,
+        "production": state.production,
+        "edge_ip": edge_ip,
+        "client": {
+            "real_ip": real_ip,
+            "extracted_ip": extracted_ip,
+            "headers_trusted": trusted,
+            "forwarded": forwarded,
+            "hash": real_hash,
+            "extracted_hash": extracted_hash,
+            "edge_hash": edge_hash,
+        },
+        "owner": {
+            "hash": owner_hash,
+            "active_count": owned_total,
+            "active_limit": MAX_ACTIVE_FILES_PER_IP,
+            "files_preview": owned_files,
+            "files_truncated": files_truncated,
+        },
+        "ban": ban_json,
+        "ban_lookup_ip": ban_source,
+        "headers": header_dump,
+    });
+
+    Json(payload).into_response()
 }
 
 pub async fn faq_handler(

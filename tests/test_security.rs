@@ -1,13 +1,14 @@
 mod common;
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use http_body_util::BodyExt;
-use juicebox::handlers::admin_files_handler;
+use juicebox::handlers::{admin_files_handler, visitor_debug_handler};
 use juicebox::state::FileMeta;
 use juicebox::util::{extract_client_ip, headers_trusted, now_secs, set_trusted_proxy_config_for_tests};
 use once_cell::sync::Lazy;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use serde_json::Value;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Mutex;
 use urlencoding::encode;
 
@@ -76,6 +77,53 @@ fn headers_trusted_respects_private_sources() {
     assert!(headers_trusted(&headers, Some(IpAddr::V6(ula_v6))));
     let global_v4 = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
     assert!(!headers_trusted(&headers, Some(global_v4)));
+    set_trusted_proxy_config_for_tests(false, Vec::new());
+}
+
+#[tokio::test]
+async fn visitor_debug_reports_hash_and_owner_snapshot() {
+    let _lock = PROXY_GUARD.lock().unwrap();
+    set_trusted_proxy_config_for_tests(false, Vec::new());
+
+    let (state, _tmp) = common::setup_test_app();
+    let owner_hash = common::hash_fixture_ip("127.0.0.1");
+    let now = now_secs();
+    state.owners.insert(
+        "demo.bin".to_string(),
+        FileMeta {
+            owner_hash: owner_hash.clone(),
+            expires: now + 3600,
+            original: "demo.bin".to_string(),
+            created: now,
+            hash: "deadbeef".into(),
+        },
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::HOST, HeaderValue::from_static("badbox.juicey.dev"));
+    headers.insert("CF-Connecting-IP", HeaderValue::from_static("198.51.100.9"));
+    headers.insert(
+        "X-Forwarded-For",
+        HeaderValue::from_static("198.51.100.9, 203.0.113.5"),
+    );
+    let addr: SocketAddr = SocketAddr::from(([127, 0, 0, 1], 4444));
+
+    let resp = visitor_debug_handler(State(state.clone()), ConnectInfo(addr), headers).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let data: Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    assert_eq!(data["client"]["real_ip"], "127.0.0.1");
+    assert_eq!(data["client"]["headers_trusted"], false);
+    assert!(data["client"]["hash"].is_object());
+    assert!(data["client"]["edge_hash"].is_object());
+    assert_eq!(data["owner"]["hash"], owner_hash);
+    assert_eq!(data["owner"]["active_count"], 1);
+    let files = data["owner"]["files_preview"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["file"], "demo.bin");
+    assert_eq!(data["ban"], Value::Null);
+
     set_trusted_proxy_config_for_tests(false, Vec::new());
 }
 
