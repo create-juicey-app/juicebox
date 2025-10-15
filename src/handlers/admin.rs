@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::fs;
+use tracing::{info, trace, warn};
 
 use crate::state::{AppState, BanSubject, IpBan};
 use crate::util::{ADMIN_SESSION_TTL, IpVersion, get_cookie, json_error, new_id, now_secs};
@@ -37,11 +38,14 @@ pub struct AdminReportDeleteForm {
 }
 
 pub async fn ban_page_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    trace!("rendering ban page");
     if let Some(tok) = get_cookie(&headers, "adm") {
         if !state.is_admin(&tok).await {
+            warn!("ban page access denied: invalid admin session");
             return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
         }
     } else {
+        warn!("ban page access denied: missing admin session");
         return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
     }
     let bans = state.bans.read().await.clone();
@@ -82,25 +86,31 @@ pub async fn ban_post_handler(
     headers: HeaderMap,
     Form(frm): Form<BanForm>,
 ) -> Response {
+    trace!(target = %frm.ip, "processing ban submission");
     if let Some(tok) = get_cookie(&headers, "adm") {
         if !state.is_admin(&tok).await {
+            warn!("ban submission rejected: invalid admin session");
             return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
         }
     } else {
+        warn!("ban submission rejected: missing admin session");
         return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
     }
     let input = frm.ip.trim();
     if input.is_empty() {
+        warn!("ban submission rejected: no target provided");
         return json_error(StatusCode::BAD_REQUEST, "missing", "missing ban target");
     }
     let Some(subject) = state.ban_subject_from_input(input) else {
+        warn!(target = input, "ban submission rejected: invalid target");
         return json_error(
             StatusCode::BAD_REQUEST,
             "invalid",
             "unable to interpret target",
         );
     };
-    let reason = frm.reason.unwrap_or_default().trim().to_string();
+    let reason_trimmed = frm.reason.as_deref().map(str::trim).unwrap_or_default();
+    let reason = reason_trimmed.to_string();
     let ban = IpBan {
         subject,
         label: Some(input.to_string()),
@@ -109,6 +119,7 @@ pub async fn ban_post_handler(
     };
     state.add_ban(ban).await;
     state.persist_bans().await;
+    info!(target = input, reason = reason_trimmed, "ban added");
     (
         StatusCode::SEE_OTHER,
         [(LOCATION, HeaderValue::from_static("/admin/ban"))],
@@ -122,19 +133,24 @@ pub async fn unban_post_handler(
     headers: HeaderMap,
     Form(frm): Form<UnbanForm>,
 ) -> Response {
+    trace!(key = %frm.key, "processing unban submission");
     if let Some(tok) = get_cookie(&headers, "adm") {
         if !state.is_admin(&tok).await {
+            warn!("unban rejected: invalid admin session");
             return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
         }
     } else {
+        warn!("unban rejected: missing admin session");
         return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
     }
     let key = frm.key.trim();
     if key.is_empty() {
+        warn!("unban rejected: empty key");
         return json_error(StatusCode::BAD_REQUEST, "missing", "missing ban key");
     }
     state.remove_ban(key).await;
     state.persist_bans().await;
+    info!(ban_key = key, "ban removed");
     (
         StatusCode::SEE_OTHER,
         [(LOCATION, HeaderValue::from_static("/admin/ban"))],
@@ -143,6 +159,7 @@ pub async fn unban_post_handler(
 }
 
 pub async fn auth_get_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    trace!("serving admin auth page");
     if let Some(tok) = get_cookie(&headers, "adm") {
         if state.is_admin(&tok).await {
             let already_path = state.static_dir.join("admin_already.html");
@@ -186,6 +203,7 @@ pub async fn auth_post_handler(
 ) -> Response {
     let submitted = frm.key.trim();
     if submitted.is_empty() {
+        warn!("admin auth rejected: empty key");
         return json_error(StatusCode::BAD_REQUEST, "missing", "missing key");
     }
     let current_key = { state.admin_key.read().await.clone() };
@@ -214,12 +232,15 @@ pub async fn auth_post_handler(
             .into_response();
         resp.headers_mut()
             .append(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+        info!("admin auth success");
         return resp;
     }
+    warn!("admin auth failed: invalid key");
     json_error(StatusCode::UNAUTHORIZED, "invalid_key", "invalid key")
 }
 
 pub async fn is_admin_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    trace!("checking admin session status");
     if let Some(tok) = get_cookie(&headers, "adm") {
         if state.is_admin(&tok).await {
             return (StatusCode::OK, Json(json!({"admin": true}))).into_response();
@@ -229,11 +250,14 @@ pub async fn is_admin_handler(State(state): State<AppState>, headers: HeaderMap)
 }
 
 pub async fn admin_files_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    trace!("rendering admin files view");
     if let Some(tok) = get_cookie(&headers, "adm") {
         if !state.is_admin(&tok).await {
+            warn!("admin files access denied: invalid session");
             return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
         }
     } else {
+        warn!("admin files access denied: missing session");
         return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
     }
     let mut rows = String::new();
@@ -300,20 +324,25 @@ pub async fn admin_file_delete_handler(
     headers: HeaderMap,
     Form(frm): Form<AdminFileDeleteForm>,
 ) -> Response {
+    trace!(file = %frm.file, "admin file delete requested");
     if let Some(tok) = get_cookie(&headers, "adm") {
         if !state.is_admin(&tok).await {
+            warn!(file = %frm.file, "admin file delete rejected: invalid session");
             return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
         }
     } else {
+        warn!(file = %frm.file, "admin file delete rejected: missing session");
         return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
     }
     let file = frm.file.trim();
     if file.is_empty() || file.contains('/') || file.contains('\\') {
+        warn!(file, "admin file delete rejected: invalid name");
         return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file");
     }
     state.owners.remove(file);
     let _ = fs::remove_file(state.upload_dir.join(file)).await;
     state.persist_owners().await;
+    info!(file, "admin deleted file");
     (
         StatusCode::SEE_OTHER,
         [(LOCATION, HeaderValue::from_static("/admin/files"))],
@@ -322,11 +351,14 @@ pub async fn admin_file_delete_handler(
 }
 
 pub async fn admin_reports_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    trace!("rendering admin reports view");
     if let Some(tok) = get_cookie(&headers, "adm") {
         if !state.is_admin(&tok).await {
+            warn!("admin reports access denied: invalid session");
             return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
         }
     } else {
+        warn!("admin reports access denied: missing session");
         return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
     }
     let reports = state.reports.read().await.clone();
@@ -366,11 +398,20 @@ pub async fn admin_report_delete_handler(
     headers: HeaderMap,
     Form(frm): Form<AdminReportDeleteForm>,
 ) -> Response {
+    trace!(index = frm.idx, "admin report delete requested");
     if let Some(tok) = get_cookie(&headers, "adm") {
         if !state.is_admin(&tok).await {
+            warn!(
+                idx = frm.idx,
+                "admin report delete rejected: invalid session"
+            );
             return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
         }
     } else {
+        warn!(
+            idx = frm.idx,
+            "admin report delete rejected: missing session"
+        );
         return json_error(StatusCode::UNAUTHORIZED, "not_admin", "auth required");
     }
     let idx = frm.idx;
@@ -378,6 +419,7 @@ pub async fn admin_report_delete_handler(
         let mut reports = state.reports.write().await;
         if idx < reports.len() {
             reports.remove(idx);
+            info!(idx, "admin removed report");
         }
     }
     state.persist_reports().await;

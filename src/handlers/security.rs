@@ -7,20 +7,39 @@ use axum::response::{IntoResponse, Response};
 use std::net::SocketAddr as ClientAddr;
 use std::time::{Duration, SystemTime};
 use tokio::fs;
+use tracing::{debug, info, trace, warn};
 
 use crate::state::{AppState, IpBan};
 use crate::util::{PROD_HOST, extract_client_ip};
 
-pub async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
+pub async fn add_security_headers(
+    State(state): State<AppState>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
     let mut resp = next.run(req).await;
     let h = resp.headers_mut();
+    trace!("applying security headers");
     if !h.contains_key("Content-Security-Policy") {
-        h.insert(
-            "Content-Security-Policy",
-            HeaderValue::from_static(
-                "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:",
-            ),
+        let mut csp = String::from(
+            "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:",
         );
+        let mut connect_src = String::from("connect-src 'self'");
+        if let Some(origin) = state.telemetry.sentry_connect_origin() {
+            connect_src.push(' ');
+            connect_src.push_str(&origin);
+        }
+        csp.push_str("; ");
+        csp.push_str(&connect_src);
+        match HeaderValue::from_str(&csp) {
+            Ok(value) => {
+                h.insert("Content-Security-Policy", value);
+                debug!("inserted Content-Security-Policy header");
+            }
+            Err(err) => {
+                warn!(error = %err, "failed to construct Content-Security-Policy header");
+            }
+        }
     }
     if !h.contains_key("Permissions-Policy") {
         h.insert(
@@ -29,12 +48,14 @@ pub async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
                 "camera=(), microphone=(), geolocation=(), fullscreen=(), payment=()",
             ),
         );
+        trace!("inserted Permissions-Policy header");
     }
     if !h.contains_key("Strict-Transport-Security") {
         h.insert(
             "Strict-Transport-Security",
             HeaderValue::from_static("max-age=31536000; includeSubDomains"),
         );
+        trace!("inserted Strict-Transport-Security header");
     }
     if !h.contains_key("Referrer-Policy") {
         h.insert("Referrer-Policy", HeaderValue::from_static("same-origin"));
@@ -56,6 +77,7 @@ pub async fn add_security_headers(req: Request<Body>, next: Next) -> Response {
                 CONTENT_TYPE,
                 HeaderValue::from_static("text/html; charset=utf-8"),
             );
+            debug!("normalized text/html content-type charset");
         }
     }
     resp
@@ -68,6 +90,7 @@ pub async fn enforce_host(req: Request<Body>, next: Next) -> Response {
         .and_then(|h| h.to_str().ok())
         .unwrap_or_default();
     if host == PROD_HOST {
+        trace!(host, "host enforcement passed");
         next.run(req).await
     } else {
         let uri = format!(
@@ -79,6 +102,7 @@ pub async fn enforce_host(req: Request<Body>, next: Next) -> Response {
                 .unwrap_or("/")
         );
         let hv = HeaderValue::from_str(&uri).unwrap();
+        info!(requested_host = host, redirect = %uri, "redirecting request to canonical host");
         (StatusCode::MOVED_PERMANENTLY, [(LOCATION, hv)]).into_response()
     }
 }
@@ -91,12 +115,15 @@ pub async fn ban_gate(
 ) -> Response {
     let path = req.uri().path();
     if path.starts_with("/css/") || path.starts_with("/js/") {
+        trace!(path, "ban gate bypass for static asset");
         return next.run(req).await;
     }
     let ip = extract_client_ip(req.headers(), Some(addr.ip()));
     if !state.is_banned(&ip).await {
+        trace!(%ip, path, "ban gate passed");
         return next.run(req).await;
     }
+    warn!(%ip, path, "ban gate blocked request");
     let (reason, time, label) = match state.find_ban_for_input(&ip).await {
         Some(ban) => (ban.reason.clone(), ban.time, ban_label(&ban)),
         None => (String::new(), 0, short_hash(&ip)),
@@ -114,6 +141,7 @@ pub async fn ban_gate(
             .replace("{{REASON}}", &safe_reason)
             .replace("{{IP}}", &label)
             .replace("{{TIME_LINE}}", &time_line);
+        debug!(%ip, reason = %safe_reason, "serving ban template");
         return (
             StatusCode::FORBIDDEN,
             [(CONTENT_TYPE, HeaderValue::from_static("text/html"))],
@@ -121,6 +149,7 @@ pub async fn ban_gate(
         )
             .into_response();
     }
+    warn!(%ip, path, "ban template missing, serving fallback");
     let fallback = format!(
         "<html><body><h1>Banned</h1><p>{}</p><p>{}</p></body></html>",
         safe_reason, label
@@ -148,6 +177,7 @@ pub async fn add_cache_headers(req: Request<Body>, next: Next) -> Response {
             EXPIRES,
             HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap(),
         );
+        debug!(path, max_age, "applied static asset cache headers");
     }
     resp
 }

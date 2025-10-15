@@ -63,6 +63,24 @@ Run the Jest unit tests that cover shared frontend utilities:
 npm test
 ```
 
+### Telemetry (optional)
+
+Juicebox ships with [Sentry](https://sentry.io/) error reporting. In production builds the backend falls back to a bundled project DSN, but you can override or disable telemetry via environment variables:
+
+- `SENTRY_DSN` &mdash; set to your own DSN. Leave unset in development to disable Sentry, or set to `disabled`/`off` to opt out explicitly.
+- `SENTRY_ENV` &mdash; optional environment label reported to Sentry (defaults to `production`/`development` based on `APP_ENV`).
+- `SENTRY_RELEASE` &mdash; optional release identifier shown on Sentry's Releases tab. When omitted the server falls back to the crate version or a detected commit hash.
+- `SENTRY_TRACES_SAMPLE_RATE` &mdash; floating-point value in `[0.0, 1.0]` controlling tracing/transaction sampling (defaults to `0.1` in production and `0.0` elsewhere).
+- `SENTRY_VERIFY_PANIC` &mdash; set to `1`/`true` to trigger a startup panic and verify that events reach Sentry; unset or `0` for normal operation.
+
+Release health is enabled automatically whenever Sentry runs. Each inbound request records a server-mode session so crash-free percentages and adoption metrics light up in Sentry. If you deploy via CI/CD, export either `SENTRY_RELEASE` or one of `SOURCE_VERSION`, `GIT_COMMIT`, `GIT_SHA`, `GITHUB_SHA`, `VERCEL_GIT_COMMIT_SHA`, `COMMIT_SHA`, or `REVISION` so the backend can associate sessions and errors with the right release.
+
+Juicebox also emits structured tracing spans for every HTTP request via `tower-http`'s `TraceLayer`, and the main handlers are annotated with `#[tracing::instrument]` so the spans arrive in Sentry as nested operations under the request transaction. If your setup includes reverse proxies or additional services, make sure the `sentry-trace` and `baggage` headers are allowed to pass through so distributed traces can flow between components. During local profiling, feel free to temporarily set `SENTRY_TRACES_SAMPLE_RATE=1.0` to capture every request; dial the value back down before production rollout if throughput is high.
+
+The `/api/config` endpoint now surfaces Sentry release, environment, DSN, and trace-propagation targets to the browser bundle. When telemetry is enabled, the frontend initialises the Sentry Browser SDK during app bootstrap, automatically propagates trace headers on API calls, and captures handled failures during the upload flow. Disable or override telemetry by adjusting the environment variables above; the client respects the same `SENTRY_DSN` flag as the backend.
+
+When Sentry is enabled, shutdown waits briefly to flush any buffered events before exiting.
+
 ---
 
 ## Usage

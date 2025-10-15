@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use tera::Context;
 use tokio::fs;
+use tracing::{debug, error, trace, warn};
 
 use crate::state::{AppState, BanSubject};
 use crate::util::{
@@ -30,23 +31,30 @@ pub struct LangQuery {
 
 async fn apply_manifest_assets(state: &AppState, ctx: &mut Context) {
     let manifest_path = state.static_dir.join("dist/manifest.json");
-    if let Ok(manifest_str) = fs::read_to_string(&manifest_path).await {
-        if let Ok(manifest_map) = serde_json::from_str::<HashMap<String, String>>(&manifest_str) {
-            if let Some(app_bundle) = manifest_map.get("app") {
-                ctx.insert("app_bundle", app_bundle);
+    match fs::read_to_string(&manifest_path).await {
+        Ok(manifest_str) => match serde_json::from_str::<HashMap<String, String>>(&manifest_str) {
+            Ok(manifest_map) => {
+                if let Some(app_bundle) = manifest_map.get("app") {
+                    ctx.insert("app_bundle", app_bundle);
+                }
+                if let Some(css_bundle) = manifest_map.get("css") {
+                    ctx.insert("css_bundle", css_bundle);
+                }
+                trace!(path = ?manifest_path, "applied manifest assets");
             }
-            if let Some(css_bundle) = manifest_map.get("css") {
-                ctx.insert("css_bundle", css_bundle);
-            }
-        }
+            Err(err) => warn!(?err, path = ?manifest_path, "failed to parse asset manifest"),
+        },
+        Err(err) => debug!(?err, path = ?manifest_path, "asset manifest not available"),
     }
 }
 
+#[tracing::instrument(name = "web.root", skip(state), fields(lang = %query.lang.as_deref().unwrap_or("en")))]
 pub async fn root_handler(
     State(state): State<AppState>,
     Query(query): Query<LangQuery>,
 ) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
+    trace!(lang, "rendering root page");
     let t_map = load_translation_map(lang).await;
     let mut ctx = Context::new();
     ctx.insert("lang", lang);
@@ -56,17 +64,17 @@ pub async fn root_handler(
     apply_manifest_assets(&state, &mut ctx).await;
     let tera = &state.tera;
     match tera.render("index.html.tera", &ctx) {
-        Ok(rendered) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "text/html")],
-            rendered,
-        )
-            .into_response(),
+        Ok(rendered) => {
+            debug!(lang, "rendered root page");
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "text/html")],
+                rendered,
+            )
+                .into_response()
+        }
         Err(e) => {
-            eprintln!(
-                "[Tera] Error rendering template 'index.html.tera': {e}\n{:#?}",
-                e
-            );
+            error!(?e, "failed to render index template");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("template error: {}", e),
@@ -89,6 +97,7 @@ pub async fn debug_ip_handler(
         .get("X-Forwarded-For")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("-");
+    debug!(edge, cf, xff, "debug ip request");
     Json(json!({"edge": edge, "cf": cf, "xff": xff})).into_response()
 }
 
@@ -99,8 +108,10 @@ pub async fn trusted_handler(
     let edge = addr.ip().to_string();
     let trusted = headers_trusted(&headers, Some(addr.ip()));
     if trusted {
+        debug!(edge, "headers trusted for request");
         Json(json!({"trusted": true, "message": "HEADERS TRUSTED"})).into_response()
     } else {
+        warn!(edge, "headers not trusted; falling back to edge ip");
         // return simple HTML with silly red message when untrusted
         let body = format!(
             "<html><body><h1 style=\"color:red\">ENDPOINT IS UNTRUSTED AND THE EDGE IP WILL BE USED</h1><p>edge: {}</p><p>cf: {}</p><p>xff: {}</p></body></html>",
@@ -137,6 +148,10 @@ pub async fn visitor_debug_handler(
     let real_ip = real_client_ip(&headers, &addr);
     let extracted_ip = extract_client_ip(&headers, Some(addr.ip()));
     let trusted = headers_trusted(&headers, Some(addr.ip()));
+    trace!(
+        edge_ip,
+        real_ip, extracted_ip, trusted, "visitor debug requested"
+    );
 
     let version_label = |version: IpVersion| match version {
         IpVersion::V4 => "v4",
@@ -272,6 +287,13 @@ pub async fn visitor_debug_handler(
         "headers": header_dump,
     });
 
+    debug!(
+        edge_ip,
+        real_ip,
+        owned_total,
+        banned = ban_json.is_some(),
+        "visitor debug response prepared"
+    );
     Json(payload).into_response()
 }
 
@@ -280,6 +302,7 @@ pub async fn faq_handler(
     Query(query): Query<LangQuery>,
 ) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
+    trace!(lang, "rendering faq page");
     render_tera_page(&state, "faq.html.tera", lang, None).await
 }
 
@@ -288,6 +311,7 @@ pub async fn terms_handler(
     Query(query): Query<LangQuery>,
 ) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
+    trace!(lang, "rendering terms page");
     render_tera_page(&state, "terms.html.tera", lang, None).await
 }
 
@@ -296,6 +320,7 @@ pub async fn report_page_handler_i18n(
     Query(query): Query<LangQuery>,
 ) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
+    trace!(lang, "rendering report page");
     render_tera_page(&state, "report.html.tera", lang, None).await
 }
 
@@ -306,6 +331,7 @@ pub async fn simple_handler(
     Query(query): Query<LangQuery>,
 ) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
+    trace!(lang, "rendering simple upload page");
 
     let message = if let Some(_) = query.deleted {
         Some("File DEleted Successfully.".to_string())
@@ -317,6 +343,7 @@ pub async fn simple_handler(
     let owner_hash = match state.hash_ip_to_string(&client_ip) {
         Some(hash) => hash,
         None => {
+            warn!(%client_ip, "simple page access denied: unable to hash ip");
             return (
                 StatusCode::FORBIDDEN,
                 [(axum::http::header::CONTENT_TYPE, "text/html")],
@@ -374,17 +401,17 @@ pub async fn simple_handler(
     apply_manifest_assets(&state, &mut ctx).await;
     let tera = &state.tera;
     match tera.render("simple.html.tera", &ctx) {
-        Ok(rendered) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "text/html")],
-            rendered,
-        )
-            .into_response(),
+        Ok(rendered) => {
+            debug!(lang, files = files.len(), "rendered simple page");
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "text/html")],
+                rendered,
+            )
+                .into_response()
+        }
         Err(e) => {
-            eprintln!(
-                "[Tera] Error rendering template 'simple.html.tera': {e}\n{:#?}",
-                e
-            );
+            error!(?e, "failed to render simple template");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("template error: {}", e),
@@ -399,6 +426,7 @@ pub async fn banned_handler(
     Query(query): Query<LangQuery>,
 ) -> Response {
     let lang = query.lang.as_deref().unwrap_or("en");
+    trace!(lang, "rendering banned page");
     render_tera_page(&state, "banned.html.tera", lang, None).await
 }
 
@@ -448,6 +476,7 @@ pub async fn render_tera_page(
     extra: Option<(&str, &tera::Value)>,
 ) -> Response {
     let t_map = load_translation_map(lang).await;
+    trace!(template, lang, "rendering tera page");
     let mut ctx = Context::new();
     ctx.insert("lang", lang);
     ctx.insert("t", &t_map);
@@ -459,17 +488,17 @@ pub async fn render_tera_page(
     }
     let tera = &state.tera;
     match tera.render(template, &ctx) {
-        Ok(rendered) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "text/html")],
-            rendered,
-        )
-            .into_response(),
+        Ok(rendered) => {
+            debug!(template, lang, "rendered tera page");
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "text/html")],
+                rendered,
+            )
+                .into_response()
+        }
         Err(e) => {
-            eprintln!(
-                "[Tera] Error rendering template '{}': {e}\n{:#?}",
-                template, e
-            );
+            error!(?e, template, "failed to render tera page");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("template error: {}", e),

@@ -9,6 +9,7 @@ use mime_guess::MimeGuess;
 use serde::Serialize;
 use std::env;
 use tokio::fs;
+use tracing::{debug, info, trace, warn};
 
 use crate::state::{AppState, cleanup_expired};
 use crate::util::{format_bytes, json_error, max_file_bytes, now_secs};
@@ -18,14 +19,37 @@ pub struct ConfigResponse {
     pub max_file_bytes: u64,
     pub max_file_size_str: String,
     pub enable_streaming_uploads: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<FrontendTelemetry>,
+}
+
+#[derive(Serialize)]
+pub struct FrontendTelemetry {
+    pub sentry: FrontendSentryTelemetry,
+}
+
+#[derive(Serialize)]
+pub struct FrontendSentryTelemetry {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dsn: Option<String>,
+    pub release: String,
+    pub environment: String,
+    #[serde(rename = "traces_sample_rate")]
+    pub traces_sample_rate: f32,
+    #[serde(default)]
+    pub trace_propagation_targets: Vec<String>,
 }
 
 #[axum::debug_handler]
+#[tracing::instrument(name = "files.fetch", skip(state), fields(file = %file))]
 pub async fn fetch_file_handler(
     State(state): State<AppState>,
     Path(file): Path<String>,
 ) -> Response {
+    trace!(file = %file, "fetch file request received");
     if file.contains('/') {
+        warn!(file = %file, "fetch rejected: invalid path");
         return (StatusCode::BAD_REQUEST, "bad file").into_response();
     }
     cleanup_expired(&state).await;
@@ -39,10 +63,12 @@ pub async fn fetch_file_handler(
         }
     };
     if !exists || expired {
+        debug!(file = %file, expired, "fetch request for missing or expired file");
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     let file_path = state.upload_dir.join(&file);
     if !file_path.exists() {
+        warn!(path = ?file_path, "fetch request missing file on disk");
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     match fs::read(&file_path).await {
@@ -73,6 +99,7 @@ pub async fn fetch_file_handler(
                     HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap(),
                 );
             }
+            info!(file = %file, size = bytes.len(), "serving file");
             (headers, bytes).into_response()
         }
         Err(_) => json_error(
@@ -90,6 +117,7 @@ pub async fn file_handler(
 ) -> Response {
     let rel = path.trim_start_matches('/');
     if rel.contains("..") || rel.contains('\\') {
+        warn!(path = %path, "static file request rejected: traversal attempt");
         return (StatusCode::BAD_REQUEST, "bad path").into_response();
     }
     let mut candidate = state.static_dir.join(rel);
@@ -99,9 +127,11 @@ pub async fn file_handler(
             if alt.exists() {
                 candidate = alt;
             } else {
+                debug!(request = %rel, "static asset not found");
                 return (StatusCode::NOT_FOUND, "not found").into_response();
             }
         } else {
+            debug!(request = %rel, "static asset not found");
             return (StatusCode::NOT_FOUND, "not found").into_response();
         }
     }
@@ -142,6 +172,7 @@ pub async fn file_handler(
                 EXPIRES,
                 HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap(),
             );
+            trace!(path = ?candidate, max_age, "applied cache headers to static asset");
         }
     }
 
@@ -153,6 +184,7 @@ pub async fn file_handler(
                     Ok(bytes) => {
                         resp_headers.insert(CONTENT_ENCODING, HeaderValue::from_static("br"));
                         resp_headers.insert(VARY, HeaderValue::from_static("Accept-Encoding"));
+                        debug!(path = ?br_path, encoding = "br", "serving precompressed asset");
                         return (resp_headers, bytes).into_response();
                     }
                     Err(_) => {}
@@ -168,6 +200,7 @@ pub async fn file_handler(
                     Ok(bytes) => {
                         resp_headers.insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
                         resp_headers.insert(VARY, HeaderValue::from_static("Accept-Encoding"));
+                        debug!(path = ?gz_path, encoding = "gzip", "serving precompressed asset");
                         return (resp_headers, bytes).into_response();
                     }
                     Err(_) => {}
@@ -177,19 +210,44 @@ pub async fn file_handler(
     }
 
     match fs::read(&candidate).await {
-        Ok(bytes) => (resp_headers, bytes).into_response(),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "cant read file").into_response(),
+        Ok(bytes) => {
+            info!(path = ?candidate, size = bytes.len(), "serving static asset");
+            (resp_headers, bytes).into_response()
+        }
+        Err(err) => {
+            warn!(?err, path = ?candidate, "failed to read static asset");
+            (StatusCode::INTERNAL_SERVER_ERROR, "cant read file").into_response()
+        }
     }
 }
 
-pub async fn config_handler() -> Response {
+pub async fn config_handler(State(state): State<AppState>) -> Response {
     let streaming_opt_in = env::var("ENABLE_STREAMING_UPLOADS")
         .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false);
+    let telemetry = state.telemetry.as_ref();
+    let sentry_enabled = telemetry.sentry_enabled();
+    let telemetry_payload = FrontendTelemetry {
+        sentry: FrontendSentryTelemetry {
+            enabled: sentry_enabled,
+            dsn: telemetry.sentry_dsn.clone(),
+            release: telemetry.release.clone(),
+            environment: telemetry.environment.clone(),
+            traces_sample_rate: telemetry.traces_sample_rate,
+            trace_propagation_targets: telemetry.trace_propagation_targets.clone(),
+        },
+    };
     let resp = ConfigResponse {
         max_file_bytes: max_file_bytes(),
         max_file_size_str: format_bytes(max_file_bytes()),
         enable_streaming_uploads: streaming_opt_in,
+        telemetry: Some(telemetry_payload),
     };
+    debug!(
+        enable_streaming_uploads = resp.enable_streaming_uploads,
+        max_file_bytes = resp.max_file_bytes,
+        sentry_enabled,
+        "serving config"
+    );
     Json(resp).into_response()
 }

@@ -12,6 +12,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc, time::SystemTime};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock, Semaphore};
+use tracing::{debug, error, info, trace, warn};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FileMeta {
@@ -67,6 +68,87 @@ pub struct IpBan {
     pub label: Option<String>,
     pub reason: String,
     pub time: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct TelemetryState {
+    pub sentry_dsn: Option<String>,
+    pub release: String,
+    pub environment: String,
+    pub traces_sample_rate: f32,
+    pub trace_propagation_targets: Vec<String>,
+}
+
+impl TelemetryState {
+    #[inline]
+    pub fn sentry_enabled(&self) -> bool {
+        self.sentry_dsn
+            .as_ref()
+            .map(|dsn| !dsn.trim().is_empty())
+            .unwrap_or(false)
+    }
+
+    #[inline]
+    pub fn sentry_connect_origin(&self) -> Option<String> {
+        let dsn = self.sentry_dsn.as_ref()?.trim();
+        if dsn.is_empty() {
+            return None;
+        }
+        let (scheme, rest) = dsn.split_once("://")?;
+        let host_part = rest.split('@').nth(1).unwrap_or(rest);
+        let host = host_part.split('/').next().unwrap_or(host_part).trim();
+        if host.is_empty() {
+            return None;
+        }
+        Some(format!("{}://{}", scheme, host))
+    }
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::TelemetryState;
+
+    #[test]
+    fn parses_standard_sentry_dsn() {
+        let state = TelemetryState {
+            sentry_dsn: Some("https://123@example.ingest.sentry.io/4500000000000000".into()),
+            release: "rel".into(),
+            environment: "env".into(),
+            traces_sample_rate: 1.0,
+            trace_propagation_targets: Vec::new(),
+        };
+        assert_eq!(
+            state.sentry_connect_origin().as_deref(),
+            Some("https://example.ingest.sentry.io")
+        );
+    }
+
+    #[test]
+    fn returns_none_for_empty_dsn() {
+        let state = TelemetryState {
+            sentry_dsn: Some(" ".into()),
+            release: String::new(),
+            environment: String::new(),
+            traces_sample_rate: 0.0,
+            trace_propagation_targets: Vec::new(),
+        };
+        assert!(state.sentry_connect_origin().is_none());
+    }
+
+    #[test]
+    fn handles_missing_credentials() {
+        let state = TelemetryState {
+            sentry_dsn: Some("https://o123.ingest.sentry.io/1".into()),
+            release: String::new(),
+            environment: String::new(),
+            traces_sample_rate: 0.0,
+            trace_propagation_targets: Vec::new(),
+        };
+        assert_eq!(
+            state.sentry_connect_origin().as_deref(),
+            Some("https://o123.ingest.sentry.io")
+        );
+    }
 }
 
 #[derive(Debug)]
@@ -195,6 +277,7 @@ pub struct AppState {
     pub chunk_sessions: Arc<DashMap<String, Arc<ChunkSession>>>,
     pub ip_hash_secret: Arc<Vec<u8>>,
     pub owners_persist_lock: Arc<Mutex<()>>,
+    pub telemetry: Arc<TelemetryState>,
 }
 
 impl AppState {
@@ -247,34 +330,51 @@ impl AppState {
         })
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn active_file_count(&self, owner_hash: &str, now: u64) -> usize {
-        self.owners
+        let count = self
+            .owners
             .iter()
             .filter(|entry| {
                 let meta = entry.value();
                 meta.owner_hash.as_str() == owner_hash && meta.expires > now
             })
-            .count()
+            .count();
+        trace!(owner_hash, count, "active file count computed");
+        count
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn pending_chunk_count(&self, owner_hash: &str) -> usize {
-        self.chunk_sessions
+        let count = self
+            .chunk_sessions
             .iter()
             .filter(|entry| {
                 let session = entry.value();
                 session.owner_hash.as_str() == owner_hash && !session.is_completed()
             })
-            .count()
+            .count();
+        trace!(owner_hash, count, "pending chunk count computed");
+        count
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn reserved_file_slots(&self, owner_hash: &str, now: u64) -> usize {
-        self.active_file_count(owner_hash, now) + self.pending_chunk_count(owner_hash)
+        let reserved =
+            self.active_file_count(owner_hash, now) + self.pending_chunk_count(owner_hash);
+        debug!(owner_hash, reserved, "reserved file slots computed");
+        reserved
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn remaining_file_slots(&self, owner_hash: &str, now: u64) -> usize {
-        MAX_ACTIVE_FILES_PER_IP.saturating_sub(self.reserved_file_slots(owner_hash, now))
+        let remaining =
+            MAX_ACTIVE_FILES_PER_IP.saturating_sub(self.reserved_file_slots(owner_hash, now));
+        debug!(owner_hash, remaining, "remaining file slots computed");
+        remaining
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn persist_owners_inner(&self) {
         // DashMap is not directly serializable, so collect to HashMap
         let owners: HashMap<String, FileMeta> = self
@@ -282,93 +382,202 @@ impl AppState {
             .iter()
             .map(|r| (r.key().clone(), r.value().clone()))
             .collect();
-        if let Ok(json) = serde_json::to_vec(&owners) {
-            let tmp = self.metadata_path.with_extension("tmp");
-            if let Ok(mut f) = fs::File::create(&tmp).await {
-                if f.write_all(&json).await.is_ok() {
-                    let _ = f.sync_all().await;
-                    let _ = fs::rename(&tmp, &*self.metadata_path).await;
-                    if let Ok(md) = fs::metadata(&*self.metadata_path).await {
-                        if let Ok(modified) = md.modified() {
-                            let mut lm = self.last_meta_mtime.write().await;
-                            *lm = modified;
+        match serde_json::to_vec(&owners) {
+            Ok(json) => {
+                let tmp = self.metadata_path.with_extension("tmp");
+                match fs::File::create(&tmp).await {
+                    Ok(mut f) => {
+                        if let Err(err) = f.write_all(&json).await {
+                            error!(?err, path = ?tmp, "failed to write owners metadata temp file");
+                            return;
                         }
+                        if let Err(err) = f.sync_all().await {
+                            warn!(?err, path = ?tmp, "failed to sync owners metadata temp file");
+                        }
+                        if let Err(err) = fs::rename(&tmp, &*self.metadata_path).await {
+                            error!(?err, from = ?tmp, to = ?self.metadata_path, "failed to replace owners metadata");
+                            return;
+                        }
+                        if let Ok(md) = fs::metadata(&*self.metadata_path).await {
+                            if let Ok(modified) = md.modified() {
+                                let mut lm = self.last_meta_mtime.write().await;
+                                *lm = modified;
+                                debug!(modified = ?modified, "updated owners metadata mtime");
+                            }
+                        }
+                        debug!(count = owners.len(), "persisted owners metadata");
+                    }
+                    Err(err) => {
+                        error!(?err, path = ?tmp, "failed to create owners metadata temp file");
                     }
                 }
+            }
+            Err(err) => {
+                error!(?err, "failed to serialize owners metadata");
             }
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn persist_owners(&self) {
         let _guard = self.owners_persist_lock.lock().await;
         self.persist_owners_inner().await;
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn spawn_persist_owners(&self) {
         let state = self.clone();
         tokio::spawn(async move {
             state.persist_owners().await;
         });
     }
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn persist_reports(&self) {
         let reports = self.reports.read().await;
-        if let Ok(json) = serde_json::to_vec(&*reports) {
-            let tmp = self.reports_path.with_extension("tmp");
-            if let Ok(mut f) = fs::File::create(&tmp).await {
-                if f.write_all(&json).await.is_ok() {
-                    let _ = f.sync_all().await;
-                    let _ = fs::rename(&tmp, &*self.reports_path).await;
+        match serde_json::to_vec(&*reports) {
+            Ok(json) => {
+                let tmp = self.reports_path.with_extension("tmp");
+                match fs::File::create(&tmp).await {
+                    Ok(mut file) => {
+                        if let Err(err) = file.write_all(&json).await {
+                            error!(?err, path = ?tmp, "failed to write reports temp file");
+                            return;
+                        }
+                        if let Err(err) = file.sync_all().await {
+                            warn!(?err, path = ?tmp, "failed to sync reports temp file");
+                        }
+                        if let Err(err) = fs::rename(&tmp, &*self.reports_path).await {
+                            error!(?err, from = ?tmp, to = ?self.reports_path, "failed to replace reports file");
+                            return;
+                        }
+                        debug!(count = reports.len(), "persisted reports metadata");
+                    }
+                    Err(err) => {
+                        error!(?err, path = ?tmp, "failed to create reports temp file");
+                    }
                 }
+            }
+            Err(err) => {
+                error!(?err, "failed to serialize reports metadata");
             }
         }
     }
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn persist_admin_sessions(&self) {
         let map = self.admin_sessions.read().await;
-        if let Ok(json) = serde_json::to_vec(&*map) {
-            let tmp = self.admin_sessions_path.with_extension("tmp");
-            if let Ok(mut f) = fs::File::create(&tmp).await {
-                if f.write_all(&json).await.is_ok() {
-                    let _ = f.sync_all().await;
-                    let _ = fs::rename(&tmp, &*self.admin_sessions_path).await;
+        match serde_json::to_vec(&*map) {
+            Ok(json) => {
+                let tmp = self.admin_sessions_path.with_extension("tmp");
+                match fs::File::create(&tmp).await {
+                    Ok(mut file) => {
+                        if let Err(err) = file.write_all(&json).await {
+                            error!(?err, path = ?tmp, "failed to write admin sessions temp file");
+                            return;
+                        }
+                        if let Err(err) = file.sync_all().await {
+                            warn!(?err, path = ?tmp, "failed to sync admin sessions temp file");
+                        }
+                        if let Err(err) = fs::rename(&tmp, &*self.admin_sessions_path).await {
+                            error!(?err, from = ?tmp, to = ?self.admin_sessions_path, "failed to replace admin sessions file");
+                            return;
+                        }
+                        debug!(count = map.len(), "persisted admin sessions");
+                    }
+                    Err(err) => {
+                        error!(?err, path = ?tmp, "failed to create admin sessions temp file");
+                    }
                 }
+            }
+            Err(err) => {
+                error!(?err, "failed to serialize admin sessions");
             }
         }
     }
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn persist_bans(&self) {
         let bans = self.bans.read().await;
-        if let Ok(json) = serde_json::to_vec(&*bans) {
-            let tmp = self.bans_path.with_extension("tmp");
-            if let Ok(mut f) = fs::File::create(&tmp).await {
-                if f.write_all(&json).await.is_ok() {
-                    let _ = f.sync_all().await;
-                    let _ = fs::rename(&tmp, &*self.bans_path).await;
+        match serde_json::to_vec(&*bans) {
+            Ok(json) => {
+                let tmp = self.bans_path.with_extension("tmp");
+                match fs::File::create(&tmp).await {
+                    Ok(mut file) => {
+                        if let Err(err) = file.write_all(&json).await {
+                            error!(?err, path = ?tmp, "failed to write bans temp file");
+                            return;
+                        }
+                        if let Err(err) = file.sync_all().await {
+                            warn!(?err, path = ?tmp, "failed to sync bans temp file");
+                        }
+                        if let Err(err) = fs::rename(&tmp, &*self.bans_path).await {
+                            error!(?err, from = ?tmp, to = ?self.bans_path, "failed to replace bans file");
+                            return;
+                        }
+                        debug!(count = bans.len(), "persisted bans list");
+                    }
+                    Err(err) => {
+                        error!(?err, path = ?tmp, "failed to create bans temp file");
+                    }
                 }
+            }
+            Err(err) => {
+                error!(?err, "failed to serialize bans metadata");
             }
         }
     }
 
-    pub async fn persist_chunk_session(&self, _id: &str, session: &ChunkSession) -> Result<()> {
+    #[tracing::instrument(level = "debug", skip(self, session))]
+    pub async fn persist_chunk_session(&self, id: &str, session: &ChunkSession) -> Result<()> {
         let _guard = session.persist_lock.lock().await;
         let snapshot = session.snapshot().await;
-        let json = serde_json::to_vec(&snapshot)?;
+        let json = serde_json::to_vec(&snapshot).map_err(|err| {
+            error!(
+                ?err,
+                session_id = id,
+                "failed to serialize chunk session snapshot"
+            );
+            err
+        })?;
         let path = session.storage_dir.join("session.json");
         let tmp = path.with_extension("tmp");
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).await?;
+            fs::create_dir_all(parent).await.map_err(|err| {
+                error!(?err, session_id = id, dir = ?parent, "failed to create chunk session directory");
+                err
+            })?;
         }
-        let mut file = fs::File::create(&tmp).await?;
-        file.write_all(&json).await?;
-        file.sync_all().await?;
-        fs::rename(&tmp, &path).await?;
+        let mut file = fs::File::create(&tmp).await.map_err(|err| {
+            error!(?err, session_id = id, path = ?tmp, "failed to create chunk session temp file");
+            err
+        })?;
+        file.write_all(&json).await.map_err(|err| {
+            error!(?err, session_id = id, path = ?tmp, "failed to write chunk session temp file");
+            err
+        })?;
+        if let Err(err) = file.sync_all().await {
+            warn!(?err, session_id = id, path = ?tmp, "failed to sync chunk session temp file");
+        }
+        fs::rename(&tmp, &path).await.map_err(|err| {
+            error!(?err, session_id = id, from = ?tmp, to = ?path, "failed to replace chunk session metadata");
+            err
+        })?;
+        debug!(session_id = id, "persisted chunk session metadata");
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn load_chunk_sessions_from_disk(&self) -> Result<()> {
         let mut dirs = match fs::read_dir(&*self.chunk_dir).await {
             Ok(d) => d,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(err.into()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                debug!(dir = ?self.chunk_dir, "chunk session directory missing; skipping load");
+                return Ok(());
+            }
+            Err(err) => {
+                error!(?err, dir = ?self.chunk_dir, "failed to read chunk sessions directory");
+                return Err(err.into());
+            }
         };
+        let mut loaded = 0usize;
         while let Some(entry) = dirs.next_entry().await? {
             if !entry.file_type().await?.is_dir() {
                 continue;
@@ -378,7 +587,7 @@ impl AppState {
             let bytes = match fs::read(&meta_path).await {
                 Ok(bytes) => bytes,
                 Err(err) => {
-                    tracing::warn!(?err, session_id = %id, "chunk session metadata missing; removing directory");
+                    warn!(?err, session_id = %id, path = ?meta_path, "chunk session metadata missing; removing directory");
                     let _ = fs::remove_dir_all(entry.path()).await;
                     continue;
                 }
@@ -387,51 +596,74 @@ impl AppState {
                 Ok(record) => {
                     let session = Arc::new(ChunkSession::from_record(record, entry.path()));
                     self.chunk_sessions.insert(id, session);
+                    loaded += 1;
                 }
                 Err(err) => {
-                    tracing::warn!(?err, session_id = %id, "failed to parse chunk session metadata; removing directory");
+                    warn!(?err, session_id = %id, "failed to parse chunk session metadata; removing directory");
                     let _ = fs::remove_dir_all(entry.path()).await;
                 }
             }
         }
+        debug!(loaded, "restored chunk sessions from disk");
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn persist_all_chunk_sessions(&self) {
         let sessions: Vec<(String, Arc<ChunkSession>)> = self
             .chunk_sessions
             .iter()
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
+        let count = sessions.len();
         for (id, session) in sessions {
             if let Err(err) = self.persist_chunk_session(&id, &session).await {
-                tracing::warn!(?err, session_id = %id, "failed to persist chunk session");
+                warn!(?err, session_id = %id, "failed to persist chunk session");
             }
         }
+        debug!(count, "persisted chunk sessions snapshot");
     }
+
+    #[tracing::instrument(level = "trace", skip(self))]
     pub async fn is_admin(&self, token: &str) -> bool {
         let map = self.admin_sessions.read().await;
         if let Some(exp) = map.get(token) {
             if *exp > now_secs() {
+                trace!("admin session valid");
                 return true;
             }
         }
+        trace!("admin session missing or expired");
         false
     }
+
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn create_admin_session(&self, token: String) {
         let mut map = self.admin_sessions.write().await;
         map.insert(token, now_secs() + ADMIN_SESSION_TTL);
+        debug!(count = map.len(), "created admin session");
     }
+
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn cleanup_admin_sessions(&self) {
         let mut map = self.admin_sessions.write().await;
         let now = now_secs();
         map.retain(|_, exp| *exp > now);
+        debug!(remaining = map.len(), "cleaned up admin sessions");
     }
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn load_or_create_admin_key(&self, path: &PathBuf) -> anyhow::Result<AdminKeyFile> {
         if let Ok(bytes) = fs::read(path).await {
-            if let Ok(parsed) = serde_json::from_slice::<AdminKeyFile>(&bytes) {
-                if parsed.expires > now_secs() && !parsed.key.is_empty() {
+            match serde_json::from_slice::<AdminKeyFile>(&bytes) {
+                Ok(parsed) if parsed.expires > now_secs() && !parsed.key.is_empty() => {
+                    debug!("loaded existing admin key");
                     return Ok(parsed);
+                }
+                Ok(_) => {
+                    warn!("existing admin key expired or empty; rotating");
+                }
+                Err(err) => {
+                    warn!(?err, "failed to parse admin key file; rotating");
                 }
             }
         }
@@ -440,13 +672,24 @@ impl AppState {
             key: new_id(),
             expires: now_secs() + ADMIN_KEY_TTL,
         };
-        let json = serde_json::to_vec_pretty(&new)?;
+        let json = serde_json::to_vec_pretty(&new).map_err(|err| {
+            error!(?err, "failed to serialize admin key");
+            err
+        })?;
         if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent).await;
+            if let Err(err) = fs::create_dir_all(parent).await {
+                error!(?err, dir = ?parent, "failed to create admin key directory");
+            }
         }
-        fs::write(path, json).await?;
+        fs::write(path, json).await.map_err(|err| {
+            error!(?err, path = ?path, "failed to write admin key file");
+            err
+        })?;
+        info!(expires = new.expires, "generated new admin key");
         Ok(new)
     }
+
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn is_banned(&self, ip: &str) -> bool {
         let parsed_ip = ip.parse::<IpAddr>().ok();
         let mut ip_hash = None;
@@ -487,8 +730,13 @@ impl AppState {
                 }
             }
         }
+        if parsed_ip.is_none() {
+            trace!(ip, "ban lookup completed (raw hash)");
+        }
         false
     }
+
+    #[tracing::instrument(level = "info", skip(self, ban))]
     pub async fn add_ban(&self, mut ban: IpBan) {
         if ban.time == 0 {
             ban.time = now_secs();
@@ -496,15 +744,21 @@ impl AppState {
         let key = ban.subject.key().to_string();
         let mut bans = self.bans.write().await;
         if bans.iter().any(|b| b.subject.key() == key) {
+            warn!(ban_key = key, "ban already exists; skipping");
             return;
         }
         bans.push(ban);
+        info!(ban_key = key, total = bans.len(), "ban added");
     }
+
+    #[tracing::instrument(level = "info", skip(self))]
     pub async fn remove_ban(&self, key: &str) {
         let mut bans = self.bans.write().await;
         bans.retain(|b| b.subject.key() != key);
+        info!(ban_key = key, remaining = bans.len(), "ban removed");
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn find_ban_for_input(&self, input: &str) -> Option<IpBan> {
         let parsed_ip = input.parse::<IpAddr>().ok();
         let ip_hash = parsed_ip.as_ref().map(|addr| self.hash_ip_addr(addr).1);
@@ -553,17 +807,22 @@ impl AppState {
         None
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn remove_chunk_session(&self, id: &str) {
         if let Some((_, session)) = self.chunk_sessions.remove(id) {
             let dir = (*session.storage_dir).clone();
             tokio::spawn(async move {
                 if let Err(err) = fs::remove_dir_all(&dir).await {
-                    tracing::warn!(?err, path = ?dir, "failed to remove chunk session directory");
+                    warn!(?err, path = ?dir, "failed to remove chunk session directory");
                 }
             });
+            debug!(session_id = id, "removed chunk session from memory");
+        } else {
+            trace!(session_id = id, "attempted to remove missing chunk session");
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn cleanup_chunk_sessions(&self) {
         const STALE_GRACE: u64 = 30 * 60; // 30 minutes
         let now = now_secs();
@@ -580,12 +839,19 @@ impl AppState {
                 expired_ids.push(entry.key().clone());
             }
         }
-        for id in expired_ids {
-            self.remove_chunk_session(&id).await;
+        for id in expired_ids.iter() {
+            self.remove_chunk_session(id).await;
+        }
+        let removed = expired_ids.len();
+        if removed > 0 {
+            info!(removed, "cleaned up stale chunk sessions");
+        } else {
+            trace!("no stale chunk sessions found");
         }
     }
 }
 
+#[tracing::instrument(level = "debug", skip(state))]
 pub async fn check_storage_integrity(state: &AppState) {
     let mut to_remove = Vec::new();
     for entry in state.owners.iter() {
@@ -595,19 +861,27 @@ pub async fn check_storage_integrity(state: &AppState) {
         }
     }
     if to_remove.is_empty() {
+        trace!("storage integrity verified (no missing files)");
         return;
     }
     for f in &to_remove {
         state.owners.remove(f);
     }
     state.persist_owners().await;
+    warn!(
+        removed = to_remove.len(),
+        "removed orphaned metadata entries"
+    );
 }
+
+#[tracing::instrument(level = "trace", skip(state))]
 pub fn spawn_integrity_check(state: AppState) {
     tokio::spawn(async move {
         check_storage_integrity(&state).await;
     });
 }
 
+#[tracing::instrument(level = "debug", skip(state))]
 pub async fn cleanup_expired(state: &AppState) {
     let now = now_secs();
     let mut to_delete = Vec::new();
@@ -618,17 +892,22 @@ pub async fn cleanup_expired(state: &AppState) {
         }
     }
     if to_delete.is_empty() {
+        trace!("no expired files found");
         return;
     }
     for f in &to_delete {
         state.owners.remove(f);
     }
     for f in &to_delete {
-        let _ = fs::remove_file(state.upload_dir.join(f)).await;
+        if let Err(err) = fs::remove_file(state.upload_dir.join(f)).await {
+            warn!(?err, file = f, "failed to remove expired file from disk");
+        }
     }
     state.persist_owners().await;
+    info!(removed = to_delete.len(), "cleanup expired files completed");
 }
 
+#[tracing::instrument(level = "debug", skip(state))]
 pub async fn reload_metadata_if_changed(state: &AppState) {
     let meta_res = fs::metadata(&*state.metadata_path).await;
     let md = match meta_res {
@@ -670,10 +949,12 @@ pub async fn reload_metadata_if_changed(state: &AppState) {
         }
         let mut lm = state.last_meta_mtime.write().await;
         *lm = modified;
+        info!(?modified, "reloaded metadata from disk");
     }
 }
 
 // Simplified: delegate to the already tested reconcile implementation, ignore its report.
+#[tracing::instrument(level = "debug", skip(state))]
 pub async fn verify_user_entries(state: &AppState, owner_hash: &str) {
     let _ = verify_user_entries_with_report(state, owner_hash).await;
 } // Simplified: delegate to the already tested reconcile implementation, ignore its report.
@@ -685,6 +966,7 @@ pub struct ReconcileReport {
     pub updated: Vec<String>,
 }
 
+#[tracing::instrument(level = "debug", skip(state))]
 pub async fn verify_user_entries_with_report(
     state: &AppState,
     owner_hash: &str,
@@ -727,12 +1009,21 @@ pub async fn verify_user_entries_with_report(
             for (f, m) in &to_add {
                 state.owners.insert(f.clone(), m.clone());
             }
-            return Some(ReconcileReport {
+            let report = ReconcileReport {
                 added: to_add.into_iter().map(|(f, _)| f).collect(),
                 removed: to_remove,
                 updated: to_update.into_iter().map(|(f, _)| f).collect(),
-            });
+            };
+            info!(
+                owner_hash,
+                added = report.added.len(),
+                removed = report.removed.len(),
+                updated = report.updated.len(),
+                "reconciled user entries"
+            );
+            return Some(report);
         }
     }
+    trace!(owner_hash, "no reconciliation needed for owner");
     None
 }

@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::env;
 use std::net::SocketAddr as ClientAddr;
 use tokio::fs;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::state::{AppState, cleanup_expired};
 use crate::util::{PROD_HOST, json_error, real_client_ip};
@@ -16,6 +16,11 @@ pub struct SimpleDeleteForm {
 }
 
 #[axum::debug_handler]
+#[tracing::instrument(
+    name = "files.delete",
+    skip(state, headers),
+    fields(client_ip = tracing::field::Empty, file = %file)
+)]
 pub async fn delete_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<ClientAddr>,
@@ -23,13 +28,17 @@ pub async fn delete_handler(
     Path(file): Path<String>,
 ) -> Response {
     let ip = real_client_ip(&headers, &addr);
+    tracing::Span::current().record("client_ip", tracing::field::display(&ip));
+    trace!(%ip, file, "delete request received");
     if state.is_banned(&ip).await {
+        warn!(%ip, file, "delete rejected: banned ip");
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
     let Some((_, owner_hash)) = state.hash_ip(&ip) else {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
     if file.contains('/') || file.contains("..") || file.contains('\\') {
+        warn!(%ip, file, "delete rejected: invalid file name");
         return json_error(StatusCode::BAD_REQUEST, "bad_file", "invalid file name");
     }
     cleanup_expired(&state).await;
@@ -41,6 +50,7 @@ pub async fn delete_handler(
     let path = state.upload_dir.join(&file);
     let _ = fs::remove_file(&path).await;
     state.persist_owners().await;
+    info!(%ip, file, owner_hash = %owner_hash, "file delete completed");
     // attempt to purge Cloudflare cache for this file in the background
     let file_clone = file.clone();
     tokio::spawn(async move {
@@ -59,6 +69,7 @@ pub async fn simple_delete_handler(
     headers: HeaderMap,
     Query(frm): Query<SimpleDeleteForm>,
 ) -> Response {
+    trace!(file = %frm.f, "simple delete GET request received");
     handle_simple_delete(state, addr, headers, frm.f).await
 }
 
@@ -69,6 +80,7 @@ pub async fn simple_delete_post_handler(
     headers: HeaderMap,
     Form(frm): Form<SimpleDeleteForm>,
 ) -> Response {
+    trace!(file = %frm.f, "simple delete POST request received");
     handle_simple_delete(state, addr, headers, frm.f).await
 }
 
@@ -79,6 +91,7 @@ async fn handle_simple_delete(
     f: String,
 ) -> Response {
     let ip = real_client_ip(&headers, &addr);
+    trace!(%ip, file = %f, "simple delete handling");
     let Some((_, owner_hash)) = state.hash_ip(&ip) else {
         let url = format!(
             "/simple?m={}",
@@ -102,6 +115,7 @@ async fn handle_simple_delete(
         let path = state.upload_dir.join(fname);
         let _ = fs::remove_file(&path).await;
         state.persist_owners().await;
+        info!(%ip, file = fname, owner_hash = %owner_hash, "simple delete completed");
         // background purge for Cloudflare
         let fname_clone = fname.to_string();
         tokio::spawn(async move {

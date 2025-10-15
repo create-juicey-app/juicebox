@@ -11,6 +11,7 @@ import {
 import { getTTL } from "./ui.js";
 import { ownedHandler } from "./owned.js";
 import { deleteHandler } from "./delete.js";
+import { captureException } from "./telemetry.js";
 
 const MIN_CHUNK_SIZE = 64 * 1024; // 64 KiB (backend minimum)
 const MAX_CHUNK_SIZE = 32 * 1024 * 1024; // 32 MiB (backend maximum)
@@ -477,6 +478,12 @@ export const uploadHandler = {
         return;
       }
       if (window.DEBUG_LOGS) console.error("Upload failed", err);
+      captureException(err, {
+        phase: "uploadOne",
+        strategy: this.shouldUseChunk(f.file) ? "chunked" : "multipart",
+        file_name: f?.file?.name || null,
+        file_size: f?.file?.size ?? null,
+      });
       const message = err?.message || "Upload failed.";
       if (!f.failed) {
         this.markUploadFailed(f, batch, message);
@@ -957,6 +964,11 @@ export const uploadHandler = {
       if (err?.name === "AbortError") throw err;
       showSnack("Failed to start chunked upload.");
       f.container?.classList.add("error");
+      captureException(err, {
+        phase: "chunk.init",
+        file_name: f?.file?.name || null,
+        file_size: f?.file?.size ?? null,
+      });
       throw err;
     }
 
@@ -1022,6 +1034,14 @@ export const uploadHandler = {
       this.removeLinkForFile(f);
       f.lastProgressPercent = -1;
       await this.cancelChunkSession(f);
+      if (err?.name !== "AbortError" && !err?.forbiddenUpload) {
+        captureException(err, {
+          phase: "chunk.sequence",
+          file_name: f?.file?.name || null,
+          file_size: f?.file?.size ?? null,
+          chunk_session: f?.chunkSessionId || null,
+        });
+      }
       throw err;
     }
 
@@ -1084,6 +1104,12 @@ export const uploadHandler = {
       this.setStatusMessage(f, "");
       this.removeLinkForFile(f);
       f.lastProgressPercent = -1;
+      captureException(err, {
+        phase: "chunk.complete",
+        file_name: f?.file?.name || null,
+        file_size: f?.file?.size ?? null,
+        chunk_session: f?.chunkSessionId || null,
+      });
       throw err;
     }
 

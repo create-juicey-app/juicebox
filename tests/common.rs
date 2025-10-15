@@ -1,6 +1,6 @@
 mod common {}
 
-use juicebox::state::{AppState, ReportRecord};
+use juicebox::state::{AppState, ReportRecord, TelemetryState};
 use juicebox::util::{UPLOAD_CONCURRENCY, hash_ip_string};
 use std::{collections::HashMap, path::Path, sync::Arc, time::SystemTime};
 use tempfile::TempDir;
@@ -13,6 +13,16 @@ pub fn hash_fixture_ip(ip: &str) -> String {
     hash_ip_string(&PRIMARY_HASH_SECRET, ip)
         .map(|(_, hash)| hash)
         .expect("hash fixture ip")
+}
+
+fn test_telemetry_state() -> Arc<TelemetryState> {
+    Arc::new(TelemetryState {
+        sentry_dsn: None,
+        release: "test-release".to_string(),
+        environment: "test".to_string(),
+        traces_sample_rate: 0.0,
+        trace_propagation_targets: vec!["^/".to_string()],
+    })
 }
 
 pub fn setup_test_app() -> (AppState, TempDir) {
@@ -75,6 +85,7 @@ pub fn setup_test_app() -> (AppState, TempDir) {
         chunk_sessions: Arc::new(dashmap::DashMap::new()),
         ip_hash_secret,
         owners_persist_lock: Arc::new(tokio::sync::Mutex::new(())),
+        telemetry: test_telemetry_state(),
     };
 
     (state, temp_dir)
@@ -132,5 +143,6 @@ pub fn recreate_state(base_path: &Path) -> AppState {
         chunk_sessions: Arc::new(dashmap::DashMap::new()),
         ip_hash_secret,
         owners_persist_lock: Arc::new(tokio::sync::Mutex::new(())),
+        telemetry: test_telemetry_state(),
     }
 }

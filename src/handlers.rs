@@ -1,6 +1,7 @@
 use axum::Router;
 use axum::routing::{delete, get, post, put};
 use tower_http::services::ServeDir;
+use tracing::{debug, info};
 
 use crate::state::AppState;
 
@@ -36,13 +37,14 @@ pub use web::{
     visitor_debug_handler,
 };
 
+#[tracing::instrument(level = "info", skip(state))]
 pub fn build_router(state: AppState) -> Router {
     let static_root = state.static_dir.clone();
+    info!(?static_root, "building application router");
     let css_service = ServeDir::new(static_root.join("css"));
     let js_service = ServeDir::new(static_root.join("js"));
     let dist_service = ServeDir::new(static_root.join("dist"));
-
-    Router::new()
+    let router = Router::new()
         .route("/checkhash", get(checkhash_handler))
         .route("/upload", post(upload_handler))
         .route("/chunk/init", post(init_chunk_upload_handler))
@@ -88,5 +90,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest_service("/dist", dist_service.clone())
         .route("/", get(root_handler))
         .route("/{*path}", get(file_handler))
-        .with_state(state)
+        .with_state(state);
+    debug!("router configured with static assets and handlers");
+    router
 }

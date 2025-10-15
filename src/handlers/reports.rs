@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use time::OffsetDateTime;
+use tracing::{debug, info, trace, warn};
 
 use crate::state::{AppState, ReportRecord};
 use crate::util::{json_error, now_secs, real_client_ip};
@@ -33,17 +34,26 @@ pub struct ReportForm {
 }
 
 #[axum::debug_handler]
+#[tracing::instrument(
+    name = "reports.submit",
+    skip(state, headers, form),
+    fields(client_ip = tracing::field::Empty, file = %form.file)
+)]
 pub async fn report_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Form(form): Form<ReportForm>,
 ) -> Response {
-    if state.is_banned(&real_client_ip(&headers, &addr)).await {
+    let ip = real_client_ip(&headers, &addr);
+    tracing::Span::current().record("client_ip", tracing::field::display(&ip));
+    trace!(%ip, file = %form.file, "report submission received");
+    if state.is_banned(&ip).await {
+        warn!(%ip, file = %form.file, "report rejected: banned ip");
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
-    let ip = real_client_ip(&headers, &addr);
     let Some(reporter_hash) = state.hash_ip_to_string(&ip) else {
+        warn!(%ip, "report rejected: unable to hash ip");
         return json_error(
             StatusCode::FORBIDDEN,
             "invalid_ip",
@@ -79,6 +89,7 @@ pub async fn report_handler(
         reporter_hash: reporter_hash.clone(),
         time: now,
     };
+    debug!(file = %record.file, reporter = %record.reporter_hash, "report record created");
     let (owner_hash, original_name, expires, size) = {
         if let Some(meta) = state.owners.get(&record.file) {
             let meta = meta.value();
@@ -113,7 +124,7 @@ pub async fn report_handler(
                     .unwrap_or_default()
             })
             .unwrap_or_default();
-        let _ = tx
+        match tx
             .send(ReportRecordEmail {
                 file: record.file.clone(),
                 reason: record.reason.clone(),
@@ -129,7 +140,21 @@ pub async fn report_handler(
                 total_reports_for_file,
                 total_reports,
             })
-            .await;
+            .await
+        {
+            Ok(_) => debug!(file = %record.file, "queued report notification email"),
+            Err(err) => {
+                warn!(?err, file = %record.file, "failed to queue report notification email")
+            }
+        }
     }
+    info!(
+        reporter = %reporter_hash,
+        file = %record.file,
+        reason = %record.reason,
+        count_for_file = total_reports_for_file,
+        total_reports,
+        "report accepted"
+    );
     (StatusCode::NO_CONTENT, ()).into_response()
 }

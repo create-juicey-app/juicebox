@@ -1,17 +1,23 @@
 use anyhow::anyhow;
-use axum::{Router, middleware};
+use axum::http::{Request, Response};
+use axum::{Router, extract::MatchedPath, middleware};
 use axum_server::Handle;
 use dashmap::DashMap;
 use juicebox::handlers::ban_gate;
 use juicebox::handlers::{add_cache_headers, add_security_headers, build_router, enforce_host};
 use juicebox::rate_limit::{RateLimiterInner, build_rate_limiter};
-use juicebox::state::{AppState, BanSubject, FileMeta, IpBan, ReportRecord, cleanup_expired};
+use juicebox::state::{
+    AppState, BanSubject, FileMeta, IpBan, ReportRecord, TelemetryState, cleanup_expired,
+};
 use juicebox::util::{
     IpVersion, PROD_HOST, UPLOAD_CONCURRENCY, hash_ip_string, hash_network_from_cidr,
     looks_like_hash, now_secs, ttl_to_duration,
 };
+use sentry::{ClientInitGuard, SessionMode};
+use sentry_tower::{NewSentryLayer, SentryHttpLayer};
 use serde::Deserialize;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     io::ErrorKind,
     net::SocketAddr,
@@ -25,8 +31,13 @@ use tokio::signal::ctrl_c;
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Notify, RwLock, Semaphore};
-use tower_http::compression::CompressionLayer;
+use tower_http::{compression::CompressionLayer, trace::TraceLayer};
+use tracing::Instrument;
+use tracing::field::Empty;
+use tracing::{debug, error, info, info_span, warn};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+#[tracing::instrument(skip(secret))]
 async fn load_owners_with_migration(
     path: &PathBuf,
     secret: &[u8],
@@ -89,6 +100,7 @@ struct LegacyReportRecord {
     time: u64,
 }
 
+#[tracing::instrument(skip(secret))]
 async fn load_reports_with_migration(
     path: &PathBuf,
     secret: &[u8],
@@ -172,6 +184,7 @@ enum LegacyBanSubject {
     },
 }
 
+#[tracing::instrument(skip(secret))]
 async fn load_bans_with_migration(
     path: &PathBuf,
     secret: &[u8],
@@ -341,15 +354,227 @@ fn load_hash_secret_from_env() -> anyhow::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+const DEFAULT_SENTRY_DSN: &str = "https://2445be48039c81563cf6d34b49f709fd@o4510195308691456.ingest.de.sentry.io/4510195328286800";
+const SENTRY_FLUSH_TIMEOUT_SECS: u64 = 2;
+
+fn read_trimmed_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn resolve_sentry_release() -> Cow<'static, str> {
+    if let Some(release) = read_trimmed_env("SENTRY_RELEASE") {
+        return Cow::Owned(release);
+    }
+
+    const COMMIT_ENV_VARS: [&str; 7] = [
+        "SOURCE_VERSION",
+        "GIT_COMMIT",
+        "GIT_SHA",
+        "GITHUB_SHA",
+        "VERCEL_GIT_COMMIT_SHA",
+        "COMMIT_SHA",
+        "REVISION",
+    ];
+
+    if let Some(commit_raw) = COMMIT_ENV_VARS.iter().find_map(|key| read_trimmed_env(key)) {
+        let normalized: String = commit_raw
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+            .collect();
+        let candidate = if normalized.is_empty() {
+            commit_raw.clone()
+        } else {
+            normalized
+        };
+        let short_commit: String = candidate.chars().take(12).collect();
+        if !short_commit.is_empty() {
+            let release = format!("{}+{}", env!("CARGO_PKG_VERSION"), short_commit);
+            return Cow::Owned(release);
+        }
+    }
+
+    if let Some(release) = sentry::release_name!() {
+        return release;
+    }
+
+    Cow::Borrowed(env!("CARGO_PKG_VERSION"))
+}
+
+struct SentryRuntime {
+    guard: ClientInitGuard,
+    release: String,
+    environment: String,
+    traces_sample_rate: f32,
+    session_mode: SessionMode,
+    auto_session_tracking: bool,
+}
+
+fn resolve_sentry_dsn(production: bool) -> Option<String> {
+    match std::env::var("SENTRY_DSN") {
+        Ok(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty()
+                || trimmed.eq_ignore_ascii_case("disabled")
+                || trimmed.eq_ignore_ascii_case("off")
+                || trimmed.eq_ignore_ascii_case("false")
+            {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Err(_) => {
+            if production {
+                Some(DEFAULT_SENTRY_DSN.to_string())
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn resolve_sentry_environment(production: bool) -> String {
+    std::env::var("SENTRY_ENV")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| {
+            if production {
+                "production".to_string()
+            } else {
+                "development".to_string()
+            }
+        })
+}
+
+fn resolve_sentry_traces_sample_rate(production: bool) -> f32 {
+    std::env::var("SENTRY_TRACES_SAMPLE_RATE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .and_then(|value| value.parse::<f32>().ok())
+        .map(|value| value.clamp(0.0, 1.0))
+        .unwrap_or(if production { 0.1 } else { 0.0 })
+}
+
+fn init_sentry(
+    production: bool,
+    dsn: Option<String>,
+    release: String,
+    environment: String,
+    traces_sample_rate: f32,
+) -> Option<SentryRuntime> {
+    let dsn = dsn?;
+    let session_mode = SessionMode::Request;
+    let auto_session_tracking = true;
+    let release_for_scope = release.clone();
+    let environment_for_scope = environment.clone();
+    let guard = sentry::init((
+        dsn.clone(),
+        sentry::ClientOptions {
+            release: Some(release.clone().into()),
+            environment: Some(environment.clone().into()),
+            send_default_pii: production,
+            traces_sample_rate,
+            session_mode,
+            auto_session_tracking,
+            ..Default::default()
+        },
+    ));
+    sentry::configure_scope(|scope| {
+        scope.set_tag("service", "juicebox-backend");
+        scope.set_tag("runtime", "rust");
+        scope.set_tag("environment", &environment_for_scope);
+        scope.set_extra("release", release_for_scope.clone().into());
+        scope.set_extra("traces_sample_rate", traces_sample_rate.into());
+        scope.set_extra("session_mode", format!("{:?}", session_mode).into());
+        scope.set_extra("auto_session_tracking", auto_session_tracking.into());
+    });
+    Some(SentryRuntime {
+        guard,
+        release,
+        environment,
+        traces_sample_rate,
+        session_mode,
+        auto_session_tracking,
+    })
+}
+
+fn init_tracing_subscriber() {
+    let env_filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(sentry_tracing::layer())
+        .init();
+}
+
+fn should_trigger_sentry_verify_panic() -> bool {
+    std::env::var("SENTRY_VERIFY_PANIC")
+        .map(|value| {
+            let trimmed = value.trim();
+            trimmed.eq_ignore_ascii_case("1")
+                || trimmed.eq_ignore_ascii_case("true")
+                || trimmed.eq_ignore_ascii_case("yes")
+        })
+        .unwrap_or(false)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing subscriber for logging
-    tracing_subscriber::fmt::init();
-    // load env (non-fatal)
     let _ = dotenvy::dotenv();
     let production = std::env::var("APP_ENV")
         .map(|v| v.eq_ignore_ascii_case("production"))
         .unwrap_or(false);
+
+    let release = resolve_sentry_release().into_owned();
+    let environment = resolve_sentry_environment(production);
+    let traces_sample_rate = resolve_sentry_traces_sample_rate(production);
+    let sentry_dsn = resolve_sentry_dsn(production);
+    let sentry_runtime = init_sentry(
+        production,
+        sentry_dsn.clone(),
+        release.clone(),
+        environment.clone(),
+        traces_sample_rate,
+    );
+    init_tracing_subscriber();
+    info!(
+        production,
+        pid = std::process::id(),
+        "starting juicebox backend"
+    );
+
+    if let Some(ref sentry_info) = sentry_runtime {
+        info!(
+            release = %sentry_info.release,
+            environment = %sentry_info.environment,
+            traces_sample_rate = sentry_info.traces_sample_rate,
+            session_mode = ?sentry_info.session_mode,
+            auto_session_tracking = sentry_info.auto_session_tracking,
+            "Sentry telemetry enabled"
+        );
+    } else {
+        info!("Sentry telemetry disabled");
+    }
+
+    let telemetry_state = TelemetryState {
+        sentry_dsn: sentry_dsn.clone(),
+        release,
+        environment,
+        traces_sample_rate,
+        trace_propagation_targets: vec!["^/".to_string()],
+    };
+
+    if should_trigger_sentry_verify_panic() {
+        warn!("SENTRY_VERIFY_PANIC enabled; panicking to verify telemetry");
+        panic!("SENTRY_VERIFY_PANIC triggered");
+    }
 
     let static_dir = Arc::new(PathBuf::from("./public"));
     let upload_dir = Arc::new(PathBuf::from("./files"));
@@ -366,6 +591,13 @@ async fn main() -> anyhow::Result<()> {
     fs::create_dir_all(&*upload_dir).await?;
     fs::create_dir_all(&*data_dir).await?;
     fs::create_dir_all(&*chunk_dir).await?;
+    debug!(
+        static_dir = ?static_dir,
+        upload_dir = ?upload_dir,
+        data_dir = ?data_dir,
+        chunk_dir = ?chunk_dir,
+        "ensured storage directories exist"
+    );
     let ip_hash_secret = Arc::new(load_hash_secret_from_env()?);
     // ensure bans file presence
     let _ = fs::OpenOptions::new()
@@ -384,18 +616,45 @@ async fn main() -> anyhow::Result<()> {
     };
     let (bans_vec, bans_migrated) =
         load_bans_with_migration(bans_path.as_ref(), &ip_hash_secret).await?;
+    info!(
+        owners = owners_map.len(),
+        migrated = owners_migrated,
+        "loaded owner metadata"
+    );
+    info!(
+        reports = reports_vec.len(),
+        migrated = reports_migrated,
+        "loaded reports metadata"
+    );
+    info!(
+        bans = bans_vec.len(),
+        migrated = bans_migrated,
+        "loaded ban metadata"
+    );
+    debug!(
+        admin_sessions = admin_sessions_map.len(),
+        "loaded admin sessions"
+    );
 
     let initial_mtime = fs::metadata(&*metadata_path)
         .await
         .ok()
         .and_then(|m| m.modified().ok())
         .unwrap_or(SystemTime::UNIX_EPOCH);
+    debug!(?initial_mtime, "metadata last modified timestamp loaded");
 
     // gather email config early
     let mailgun_api_key = std::env::var("MAILGUN_API_KEY").ok();
     let mailgun_domain = std::env::var("MAILGUN_DOMAIN").ok();
     let report_email_to = std::env::var("REPORT_EMAIL_TO").ok();
     let report_email_from = std::env::var("REPORT_EMAIL_FROM").ok();
+    debug!(
+        mail_configured = mailgun_api_key.is_some()
+            && mailgun_domain.is_some()
+            && report_email_to.is_some()
+            && report_email_from.is_some(),
+        "email notification configuration evaluated"
+    );
 
     // Initialize Tera
     let tera = match Tera::new("templates/**/*.tera") {
@@ -428,6 +687,7 @@ async fn main() -> anyhow::Result<()> {
         chunk_sessions: Arc::new(DashMap::new()),
         ip_hash_secret: ip_hash_secret.clone(),
         owners_persist_lock: Arc::new(tokio::sync::Mutex::new(())),
+        telemetry: Arc::new(telemetry_state.clone()),
     };
 
     if owners_migrated {
@@ -441,7 +701,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if let Err(err) = state.load_chunk_sessions_from_disk().await {
-        tracing::warn!(?err, "failed to restore chunk upload sessions from disk");
+        warn!(?err, "failed to restore chunk upload sessions from disk");
     }
 
     // Load or create admin key after state so helper can use now_secs etc
@@ -458,22 +718,25 @@ async fn main() -> anyhow::Result<()> {
     let cleanup_state = state.clone();
     let cleanup_shutdown = shutdown_notify.clone();
     let cleanup_rate = rate_handle.clone();
-    let cleanup_handle = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(600));
-        loop {
-            tokio::select! {
-                _ = cleanup_shutdown.notified() => {
-                    break;
-                }
-                _ = interval.tick() => {
-                    cleanup_expired(&cleanup_state).await;
-                    cleanup_state.cleanup_admin_sessions().await;
-                    cleanup_state.cleanup_chunk_sessions().await;
-                    cleanup_rate.prune_idle(Duration::from_secs(1800)).await;
+    let cleanup_handle = tokio::spawn(
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(600));
+            loop {
+                tokio::select! {
+                    _ = cleanup_shutdown.notified() => {
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        cleanup_expired(&cleanup_state).await;
+                        cleanup_state.cleanup_admin_sessions().await;
+                        cleanup_state.cleanup_chunk_sessions().await;
+                        cleanup_rate.prune_idle(Duration::from_secs(1800)).await;
+                    }
                 }
             }
         }
-    });
+        .instrument(info_span!("maintenance.cleanup")),
+    );
 
     // setup email worker if config present
     let mut email_handle = None;
@@ -634,7 +897,8 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             }
-        });
+        }
+        .instrument(info_span!("mailgun.dispatcher")));
         email_handle = Some(handle);
     } else {
         println!("mail: disabled (missing env vars)");
@@ -642,9 +906,44 @@ async fn main() -> anyhow::Result<()> {
 
     let router = build_router(state.clone());
     let mut app: Router = router
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &Request<_>| {
+                    let matched_path = request
+                        .extensions()
+                        .get::<MatchedPath>()
+                        .map(|p| p.as_str())
+                        .unwrap_or("<unmatched>");
+                    tracing::info_span!(
+                        "http.server.request",
+                        method = %request.method(),
+                        matched_path,
+                        uri = %request.uri(),
+                        http.status_code = Empty,
+                        latency_ms = Empty
+                    )
+                })
+                .on_response(
+                    |response: &Response<_>, latency: Duration, span: &tracing::Span| {
+                        span.record("http.status_code", response.status().as_u16() as i64);
+                        span.record("latency_ms", latency.as_millis() as i64);
+                        tracing::debug!(
+                            parent: span,
+                            status = %response.status(),
+                            latency_ms = latency.as_millis(),
+                            "response sent"
+                        );
+                    },
+                ),
+        )
+        .layer(SentryHttpLayer::new().enable_transaction())
+        .layer(NewSentryLayer::new_from_top())
         .layer(CompressionLayer::new())
         .layer(middleware::from_fn(add_cache_headers))
-        .layer(middleware::from_fn(add_security_headers))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            add_security_headers,
+        ))
         .layer(middleware::from_fn_with_state(state.clone(), ban_gate))
         .layer(rate_layer.clone())
         .layer(axum::extract::DefaultBodyLimit::max(
@@ -664,13 +963,16 @@ async fn main() -> anyhow::Result<()> {
     let shutdown_rate = rate_handle.clone();
     let shutdown_handle = Handle::new();
     let shutdown_cancel = Arc::new(Notify::new());
-    let shutdown_task = tokio::spawn(wait_for_shutdown(
-        shutdown_state,
-        shutdown_notify_clone,
-        shutdown_rate.clone(),
-        shutdown_handle.clone(),
-        shutdown_cancel.clone(),
-    ));
+    let shutdown_task = tokio::spawn(
+        wait_for_shutdown(
+            shutdown_state,
+            shutdown_notify_clone,
+            shutdown_rate.clone(),
+            shutdown_handle.clone(),
+            shutdown_cancel.clone(),
+        )
+        .instrument(info_span!("graceful_shutdown")),
+    );
 
     let server = axum_server::bind(addr)
         .handle(shutdown_handle.clone())
@@ -683,17 +985,17 @@ async fn main() -> anyhow::Result<()> {
     let shutdown_handled = match shutdown_task.await {
         Ok(result) => result,
         Err(err) => {
-            tracing::warn!(?err, "shutdown task terminated unexpectedly");
+            warn!(?err, "shutdown task terminated unexpectedly");
             false
         }
     };
     if let Err(err) = cleanup_handle.await {
-        tracing::warn!(?err, "cleanup task terminated unexpectedly");
+        warn!(?err, "cleanup task terminated unexpectedly");
     }
     if let Some(handle) = email_handle {
         match handle.await {
             Ok(_) => {}
-            Err(err) => tracing::warn!(?err, "email task terminated unexpectedly"),
+            Err(err) => warn!(?err, "email task terminated unexpectedly"),
         }
     }
     if !shutdown_handled {
@@ -706,9 +1008,15 @@ async fn main() -> anyhow::Result<()> {
         rate_handle.prune_idle(Duration::from_secs(0)).await;
     }
     server_result?;
+    if let Some(sentry_info) = sentry_runtime {
+        sentry_info
+            .guard
+            .close(Some(Duration::from_secs(SENTRY_FLUSH_TIMEOUT_SECS)));
+    }
     Ok(())
 }
 
+#[tracing::instrument(skip(state, notify, rate, handle, cancel))]
 async fn wait_for_shutdown(
     state: AppState,
     notify: Arc<Notify>,
@@ -723,7 +1031,7 @@ async fn wait_for_shutdown(
     if !triggered {
         return false;
     }
-    tracing::info!("shutdown signal received; commencing graceful shutdown");
+    info!("shutdown signal received; commencing graceful shutdown");
     notify.notify_waiters();
     handle.shutdown();
     state.cleanup_admin_sessions().await;
@@ -736,10 +1044,11 @@ async fn wait_for_shutdown(
     true
 }
 
+#[tracing::instrument(skip_all)]
 async fn listen_for_shutdown() {
     let ctrl_c = async {
         if let Err(err) = ctrl_c().await {
-            tracing::error!(?err, "failed to install ctrl+c handler"); // this shouldn't happen.
+            error!(?err, "failed to install ctrl+c handler"); // this shouldn't happen.
         }
     };
     #[cfg(unix)]
@@ -748,7 +1057,7 @@ async fn listen_for_shutdown() {
             Ok(mut sigterm) => {
                 sigterm.recv().await;
             }
-            Err(err) => tracing::error!(?err, "failed to install SIGTERM handler"), //this shouldn't happen either
+            Err(err) => error!(?err, "failed to install SIGTERM handler"), //this shouldn't happen either
         }
     };
     #[cfg(not(unix))]

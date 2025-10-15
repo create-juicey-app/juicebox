@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, RwLock};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::state::{
     AppState, ChunkSession, FileMeta, ReconcileReport, check_storage_integrity, cleanup_expired,
@@ -176,16 +177,16 @@ pub async fn init_chunk_upload_handler(
     headers: HeaderMap,
     Json(req): Json<ChunkInitRequest>,
 ) -> Response {
-    if state.is_banned(&real_client_ip(&headers, &addr)).await {
+    let client_ip = real_client_ip(&headers, &addr);
+    trace!(%client_ip, "chunk upload init request received");
+    if state.is_banned(&client_ip).await {
+        warn!(%client_ip, "chunk upload init rejected: banned ip");
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
-    let ip = real_client_ip(&headers, &addr);
-    if state.is_banned(&ip).await {
-        return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
-    }
-    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&client_ip) {
         hash
     } else {
+        warn!(%client_ip, "chunk upload init failed: unable to hash ip");
         return json_error(
             StatusCode::FORBIDDEN,
             "invalid_ip",
@@ -193,9 +194,16 @@ pub async fn init_chunk_upload_handler(
         );
     };
     if req.size == 0 {
+        warn!(%client_ip, "chunk upload init rejected: empty size");
         return json_error(StatusCode::BAD_REQUEST, "empty", "file size required");
     }
     if req.size > max_file_bytes() {
+        warn!(
+            %client_ip,
+            requested = req.size,
+            limit = max_file_bytes(),
+            "chunk upload init rejected: size over limit"
+        );
         return json_error(
             StatusCode::PAYLOAD_TOO_LARGE,
             "too_large",
@@ -212,6 +220,12 @@ pub async fn init_chunk_upload_handler(
         if let Some(layout) = compute_chunk_layout(req.size, req.chunk_size) {
             layout
         } else {
+            warn!(
+                %client_ip,
+                requested_size = req.size,
+                requested_chunk = ?req.chunk_size,
+                "chunk upload init rejected: unable to compute chunk layout"
+            );
             return json_error(
                 StatusCode::BAD_REQUEST,
                 "chunk_layout",
@@ -221,6 +235,7 @@ pub async fn init_chunk_upload_handler(
 
     if let Some(hash) = req.hash.as_ref() {
         if let Some((file, meta)) = find_duplicate_by_hash(&state, hash) {
+            info!(%client_ip, file = %file, "chunk upload init detected duplicate hash");
             return (
                 StatusCode::CONFLICT,
                 Json(json!({
@@ -234,7 +249,7 @@ pub async fn init_chunk_upload_handler(
     }
 
     if state.remaining_file_slots(owner_hash.as_str(), now) == 0 {
-        tracing::warn!(owner_hash = %owner_hash, "Chunk upload rejected: active file limit reached");
+        warn!(owner_hash = %owner_hash, "chunk upload rejected: active file limit reached");
         return file_limit_response();
     }
 
@@ -242,7 +257,7 @@ pub async fn init_chunk_upload_handler(
     let storage_name = make_storage_name(Some(&req.filename));
     let storage_dir_path = state.chunk_dir.join(&session_id);
     if let Err(err) = fs::create_dir_all(&storage_dir_path).await {
-        tracing::error!(?err, "Failed to create chunk directory");
+        error!(?err, session_id = %session_id, dir = ?storage_dir_path, "failed to create chunk directory");
         return json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "chunk_dir",
@@ -251,7 +266,7 @@ pub async fn init_chunk_upload_handler(
     }
 
     let session = Arc::new(ChunkSession {
-        owner_hash: owner_hash,
+        owner_hash: owner_hash.clone(),
         original_name: req.filename.clone(),
         storage_name: storage_name.clone(),
         ttl_code: ttl_code.clone(),
@@ -275,14 +290,14 @@ pub async fn init_chunk_upload_handler(
     let reserved_after = state.reserved_file_slots(session.owner_hash.as_str(), post_insert_now);
     if reserved_after > MAX_ACTIVE_FILES_PER_IP {
         state.remove_chunk_session(&session_id).await;
-        tracing::warn!(owner_hash = %session.owner_hash, "Chunk upload rejected: active file limit reached (post-init)");
+        warn!(owner_hash = %session.owner_hash, "chunk upload rejected after init: active file limit reached");
         return file_limit_response();
     }
     if let Err(err) = state
         .persist_chunk_session(&session_id, session.as_ref())
         .await
     {
-        tracing::error!(?err, session_id = %session_id, "failed to persist chunk session metadata");
+        error!(?err, session_id = %session_id, "failed to persist chunk session metadata");
         state.remove_chunk_session(&session_id).await;
         return json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -290,6 +305,17 @@ pub async fn init_chunk_upload_handler(
             "failed to initialize chunk upload",
         );
     }
+
+    info!(
+        %client_ip,
+        owner_hash = %owner_hash,
+        session_id = %session_id,
+        filename = %req.filename,
+        size = req.size,
+        chunk_size,
+        total_chunks,
+        "chunk upload session initialized"
+    );
 
     Json(ChunkInitResponse {
         session_id,
@@ -309,13 +335,16 @@ pub async fn upload_chunk_part_handler(
     Path(params): Path<ChunkPathParams>,
     body: Bytes,
 ) -> Response {
-    if state.is_banned(&real_client_ip(&headers, &addr)).await {
+    let client_ip = real_client_ip(&headers, &addr);
+    trace!(%client_ip, session_id = %params.id, index = params.index, size = body.len(), "chunk upload part received");
+    if state.is_banned(&client_ip).await {
+        warn!(%client_ip, session_id = %params.id, "chunk upload part rejected: banned ip");
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
-    let ip = real_client_ip(&headers, &addr);
-    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&client_ip) {
         hash
     } else {
+        warn!(%client_ip, "chunk upload part rejected: unable to hash ip");
         return json_error(
             StatusCode::FORBIDDEN,
             "invalid_ip",
@@ -358,6 +387,7 @@ pub async fn upload_chunk_part_handler(
         return json_error(StatusCode::BAD_REQUEST, "chunk_size", "invalid chunk size");
     }
     if body.is_empty() || body.len() as u64 != expected {
+        warn!(session_id = %params.id, owner_hash = %owner_hash, ?expected, got = body.len(), "chunk upload part rejected: length mismatch");
         return json_error(
             StatusCode::BAD_REQUEST,
             "chunk_size",
@@ -368,7 +398,7 @@ pub async fn upload_chunk_part_handler(
         .storage_dir
         .join(format!("{:06}.chunk", params.index));
     if let Err(err) = fs::write(&chunk_path, &body).await {
-        tracing::error!(?err, ?chunk_path, "failed to persist chunk");
+        error!(?err, session_id = %params.id, chunk_index = params.index, path = ?chunk_path, "failed to persist chunk");
         return json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "chunk_write",
@@ -385,8 +415,14 @@ pub async fn upload_chunk_part_handler(
         .persist_chunk_session(&params.id, session.as_ref())
         .await
     {
-        tracing::warn!(?err, session_id = %params.id, "failed to persist chunk session after part");
+        warn!(?err, session_id = %params.id, "failed to persist chunk session after part");
     }
+    info!(
+        session_id = %params.id,
+        owner_hash = %owner_hash,
+        chunk_index = params.index,
+        "chunk upload part stored"
+    );
     Response::builder()
         .status(StatusCode::NO_CONTENT)
         .body(axum::body::Body::empty())
@@ -394,6 +430,17 @@ pub async fn upload_chunk_part_handler(
 }
 
 #[axum::debug_handler]
+#[tracing::instrument(
+    name = "upload.chunk.complete",
+    skip(state, headers, req),
+    fields(
+        client_ip = tracing::field::Empty,
+        session = %path.id,
+        owner_hash = tracing::field::Empty,
+        storage = tracing::field::Empty,
+        expected_hash = tracing::field::Empty
+    )
+)]
 pub async fn complete_chunk_upload_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<ClientAddr>,
@@ -401,19 +448,24 @@ pub async fn complete_chunk_upload_handler(
     Path(path): Path<ChunkCompletePath>,
     Json(req): Json<ChunkCompleteRequest>,
 ) -> Response {
-    if state.is_banned(&real_client_ip(&headers, &addr)).await {
+    let client_ip = real_client_ip(&headers, &addr);
+    tracing::Span::current().record("client_ip", tracing::field::display(&client_ip));
+    trace!(%client_ip, session_id = %path.id, "chunk completion requested");
+    if state.is_banned(&client_ip).await {
+        warn!(%client_ip, session_id = %path.id, "chunk completion rejected: banned ip");
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
-    let ip = real_client_ip(&headers, &addr);
-    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&client_ip) {
         hash
     } else {
+        warn!(%client_ip, session_id = %path.id, "chunk completion rejected: unable to hash ip");
         return json_error(
             StatusCode::FORBIDDEN,
             "invalid_ip",
             "unable to fingerprint client",
         );
     };
+    tracing::Span::current().record("owner_hash", tracing::field::display(&owner_hash));
     let Some(session_entry) = state.chunk_sessions.get(&path.id) else {
         return json_error(
             StatusCode::NOT_FOUND,
@@ -424,6 +476,7 @@ pub async fn complete_chunk_upload_handler(
     let session = session_entry.value().clone();
     drop(session_entry);
     if session.owner_hash != owner_hash {
+        warn!(session_id = %path.id, owner_hash = %owner_hash, "chunk completion rejected: ownership mismatch");
         return json_error(
             StatusCode::FORBIDDEN,
             "not_owner",
@@ -431,6 +484,7 @@ pub async fn complete_chunk_upload_handler(
         );
     }
     if session.is_completed() {
+        debug!(session_id = %path.id, "chunk completion called on already completed session");
         return json_error(
             StatusCode::BAD_REQUEST,
             "completed",
@@ -440,6 +494,7 @@ pub async fn complete_chunk_upload_handler(
     {
         let received = session.received.read().await;
         if received.iter().any(|r| !*r) {
+            warn!(session_id = %path.id, "chunk completion rejected: missing chunks");
             return json_error(
                 StatusCode::BAD_REQUEST,
                 "incomplete",
@@ -460,6 +515,7 @@ pub async fn complete_chunk_upload_handler(
         }
     };
     let storage_name = session.storage_name.clone();
+    tracing::Span::current().record("storage", tracing::field::display(&storage_name));
     let final_path = state.upload_dir.join(&storage_name);
     let mut tmp_path = final_path.clone();
     tmp_path.set_extension("part");
@@ -468,7 +524,7 @@ pub async fn complete_chunk_upload_handler(
         Ok(f) => f,
         Err(err) => {
             drop(permit);
-            tracing::error!(?err, ?tmp_path, "failed to create assembled file");
+            error!(?err, ?tmp_path, session_id = %path.id, "failed to create assembled file");
             return json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "final_create",
@@ -480,7 +536,7 @@ pub async fn complete_chunk_upload_handler(
     let mut hasher = Sha256::new();
     let mut chunk_buf = Vec::with_capacity(session.chunk_size as usize);
     let open_elapsed = start.elapsed();
-    tracing::debug!(session = %path.id, elapsed_ms = open_elapsed.as_millis(), "complete: file create ready");
+    debug!(session = %path.id, elapsed_ms = open_elapsed.as_millis(), "chunk completion: file create ready");
     for idx in 0..session.total_chunks {
         let chunk_start = tokio::time::Instant::now();
         let chunk_path = session.storage_dir.join(format!("{:06}.chunk", idx));
@@ -489,7 +545,7 @@ pub async fn complete_chunk_upload_handler(
             Err(err) => {
                 drop(permit);
                 let _ = fs::remove_file(&tmp_path).await;
-                tracing::error!(?err, ?chunk_path, "missing chunk during assembly");
+                error!(?err, ?chunk_path, session_id = %path.id, chunk = idx, "missing chunk during assembly");
                 return json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "chunk_missing",
@@ -503,10 +559,12 @@ pub async fn complete_chunk_upload_handler(
             drop(permit);
             let _ = fs::remove_file(&tmp_path).await;
             let code = if err.kind() == std::io::ErrorKind::UnexpectedEof {
-                tracing::error!(
+                error!(
                     actual = chunk_buf.len(),
                     expected = expected_len,
                     ?chunk_path,
+                    session_id = %path.id,
+                    chunk = idx,
                     "chunk length mismatch during assembly"
                 );
                 json_error(
@@ -515,7 +573,7 @@ pub async fn complete_chunk_upload_handler(
                     "chunk length mismatch",
                 )
             } else {
-                tracing::error!(?err, ?chunk_path, "failed reading chunk");
+                error!(?err, ?chunk_path, session_id = %path.id, chunk = idx, "failed reading chunk");
                 json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "chunk_read",
@@ -527,7 +585,7 @@ pub async fn complete_chunk_upload_handler(
         if let Err(err) = file.write_all(&chunk_buf).await {
             drop(permit);
             let _ = fs::remove_file(&tmp_path).await;
-            tracing::error!(?err, ?chunk_path, "failed writing assembled file");
+            error!(?err, ?chunk_path, session_id = %path.id, chunk = idx, "failed writing assembled file");
             return json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "write",
@@ -541,11 +599,11 @@ pub async fn complete_chunk_upload_handler(
         );
         let chunk_elapsed = chunk_start.elapsed();
         if chunk_elapsed.as_millis() >= 25 {
-            tracing::warn!(session = %path.id, chunk = idx, elapsed_ms = chunk_elapsed.as_millis(), "complete: slow chunk assembly");
+            warn!(session = %path.id, chunk = idx, elapsed_ms = chunk_elapsed.as_millis(), "chunk completion: slow chunk assembly");
         }
     }
     let assemble_elapsed = start.elapsed();
-    tracing::debug!(session = %path.id, elapsed_ms = assemble_elapsed.as_millis(), "complete: chunks assembled");
+    debug!(session = %path.id, elapsed_ms = assemble_elapsed.as_millis(), "chunk completion: chunks assembled");
     if file.flush().await.is_err() {
         drop(permit);
         let _ = fs::remove_file(&tmp_path).await;
@@ -569,7 +627,7 @@ pub async fn complete_chunk_upload_handler(
         .assembled_chunks
         .store(session.total_chunks, Ordering::Relaxed);
     let finalize_elapsed = start.elapsed();
-    tracing::debug!(session = %path.id, elapsed_ms = finalize_elapsed.as_millis(), "complete: file moved");
+    debug!(session = %path.id, elapsed_ms = finalize_elapsed.as_millis(), "chunk completion: file moved");
 
     let digest = format!("{:x}", hasher.finalize());
     let expected_hash = req
@@ -578,6 +636,7 @@ pub async fn complete_chunk_upload_handler(
         .or_else(|| session.hash.as_ref())
         .map(|s| s.as_str());
     if let Some(exp) = expected_hash {
+        tracing::Span::current().record("expected_hash", tracing::field::display(exp));
         if exp != digest {
             let _ = fs::remove_file(&final_path).await;
             state.remove_chunk_session(&path.id).await;
@@ -614,22 +673,30 @@ pub async fn complete_chunk_upload_handler(
         .persist_chunk_session(&path.id, session.as_ref())
         .await
     {
-        tracing::warn!(?err, session_id = %path.id, "failed to persist completed chunk session before cleanup");
+        warn!(?err, session_id = %path.id, "failed to persist completed chunk session before cleanup");
     }
     state.owners.insert(storage_name.clone(), meta);
     let persist_start = tokio::time::Instant::now();
     state.spawn_persist_owners();
     let persist_latency = persist_start.elapsed();
-    tracing::debug!(session = %path.id, elapsed_ms = persist_latency.as_micros(), "complete: spawned owner persist");
+    debug!(session = %path.id, elapsed_us = persist_latency.as_micros(), "chunk completion: spawned owner persist");
     let cleanup_start = tokio::time::Instant::now();
     state.remove_chunk_session(&path.id).await;
     let cleanup_elapsed = cleanup_start.elapsed();
     if cleanup_elapsed.as_millis() >= 50 {
-        tracing::warn!(session = %path.id, elapsed_ms = cleanup_elapsed.as_millis(), "complete: slow cleanup");
+        warn!(session = %path.id, elapsed_ms = cleanup_elapsed.as_millis(), "chunk completion: slow cleanup");
     } else {
-        tracing::debug!(session = %path.id, elapsed_ms = cleanup_elapsed.as_millis(), "complete: cleanup complete");
+        debug!(session = %path.id, elapsed_ms = cleanup_elapsed.as_millis(), "chunk completion: cleanup complete");
     }
-    tracing::info!(session = %path.id, storage = %storage_name, total_ms = start.elapsed().as_millis(), "complete: finished");
+    info!(
+        %client_ip,
+        session_id = %path.id,
+        storage = %storage_name,
+        size = session.total_bytes,
+        hash = %digest,
+        total_ms = start.elapsed().as_millis(),
+        "chunk completion finished"
+    );
     spawn_integrity_check(state.clone());
 
     Json(UploadResponse {
@@ -648,13 +715,16 @@ pub async fn cancel_chunk_upload_handler(
     headers: HeaderMap,
     Path(path): Path<ChunkCompletePath>,
 ) -> Response {
-    if state.is_banned(&real_client_ip(&headers, &addr)).await {
+    let client_ip = real_client_ip(&headers, &addr);
+    trace!(%client_ip, session_id = %path.id, "chunk cancel requested");
+    if state.is_banned(&client_ip).await {
+        warn!(%client_ip, session_id = %path.id, "chunk cancel rejected: banned ip");
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
-    let ip = real_client_ip(&headers, &addr);
-    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&client_ip) {
         hash
     } else {
+        warn!(%client_ip, session_id = %path.id, "chunk cancel rejected: unable to hash ip");
         return json_error(
             StatusCode::FORBIDDEN,
             "invalid_ip",
@@ -677,6 +747,7 @@ pub async fn cancel_chunk_upload_handler(
     }
     drop(entry);
     state.remove_chunk_session(&path.id).await;
+    info!(%client_ip, session_id = %path.id, "chunk session cancelled");
     Response::builder()
         .status(StatusCode::NO_CONTENT)
         .body(axum::body::Body::empty())
@@ -684,25 +755,39 @@ pub async fn cancel_chunk_upload_handler(
 }
 
 #[axum::debug_handler]
+#[tracing::instrument(
+    name = "upload.chunk.status",
+    skip(state, headers),
+    fields(
+        client_ip = tracing::field::Empty,
+        session = %path.id,
+        owner_hash = tracing::field::Empty
+    )
+)]
 pub async fn chunk_status_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<ClientAddr>,
     headers: HeaderMap,
     Path(path): Path<ChunkCompletePath>,
 ) -> Response {
-    if state.is_banned(&real_client_ip(&headers, &addr)).await {
+    let client_ip = real_client_ip(&headers, &addr);
+    tracing::Span::current().record("client_ip", tracing::field::display(&client_ip));
+    trace!(%client_ip, session_id = %path.id, "chunk status requested");
+    if state.is_banned(&client_ip).await {
+        warn!(%client_ip, session_id = %path.id, "chunk status rejected: banned ip");
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
-    let ip = real_client_ip(&headers, &addr);
-    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&client_ip) {
         hash
     } else {
+        warn!(%client_ip, session_id = %path.id, "chunk status rejected: unable to hash ip");
         return json_error(
             StatusCode::FORBIDDEN,
             "invalid_ip",
             "unable to fingerprint client",
         );
     };
+    tracing::Span::current().record("owner_hash", tracing::field::display(&owner_hash));
     let Some(session_entry) = state.chunk_sessions.get(&path.id) else {
         return json_error(
             StatusCode::NOT_FOUND,
@@ -721,6 +806,7 @@ pub async fn chunk_status_handler(
     }
     let total = session.total_chunks;
     let assembled = session.assembled_chunks.load(Ordering::Relaxed).min(total);
+    debug!(%client_ip, session_id = %path.id, total, assembled, completed = session.is_completed(), "chunk status returned");
     Json(ChunkStatusResponse {
         total_chunks: total,
         assembled_chunks: assembled,
@@ -738,23 +824,33 @@ pub async fn checkhash_handler(
         .owners
         .iter()
         .any(|entry| entry.value().hash == query.hash);
+    debug!(hash = %query.hash, exists, "hash check performed");
     Json(json!({ "exists": exists })).into_response()
 }
 
 #[axum::debug_handler]
+#[tracing::instrument(
+    name = "upload.multipart",
+    skip(state, headers, multipart),
+    fields(client_ip = tracing::field::Empty)
+)]
 pub async fn upload_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<ClientAddr>,
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Response {
-    if state.is_banned(&real_client_ip(&headers, &addr)).await {
+    let client_ip = real_client_ip(&headers, &addr);
+    tracing::Span::current().record("client_ip", tracing::field::display(&client_ip));
+    trace!(%client_ip, "multipart upload request received");
+    if state.is_banned(&client_ip).await {
+        warn!(%client_ip, "upload rejected: banned ip");
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
-    let ip = real_client_ip(&headers, &addr);
-    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
+    let owner_hash = if let Some(hash) = state.hash_ip_to_string(&client_ip) {
         hash
     } else {
+        warn!(%client_ip, "upload rejected: unable to hash ip");
         return json_error(
             StatusCode::FORBIDDEN,
             "invalid_ip",
@@ -951,6 +1047,11 @@ pub async fn upload_handler(
 }
 
 #[axum::debug_handler]
+#[tracing::instrument(
+    name = "files.list",
+    skip(state, headers),
+    fields(client_ip = tracing::field::Empty)
+)]
 pub async fn list_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<ClientAddr>,
@@ -961,6 +1062,7 @@ pub async fn list_handler(
     }
     cleanup_expired(&state).await;
     let client_ip = real_client_ip(&headers, &addr);
+    tracing::Span::current().record("client_ip", tracing::field::display(&client_ip));
     let Some(owner_hash) = state.hash_ip_to_string(&client_ip) else {
         return json_error(
             StatusCode::FORBIDDEN,
@@ -1022,6 +1124,11 @@ pub async fn simple_list_handler() -> Response {
 }
 
 #[axum::debug_handler]
+#[tracing::instrument(
+    name = "upload.simple",
+    skip(state, headers, multipart),
+    fields(client_ip = tracing::field::Empty)
+)]
 pub async fn simple_upload_handler(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<ClientAddr>,
@@ -1029,9 +1136,16 @@ pub async fn simple_upload_handler(
     mut multipart: Multipart,
 ) -> Response {
     let ip = real_client_ip(&headers, &addr);
+    tracing::Span::current().record("client_ip", tracing::field::display(&ip));
+    trace!(%ip, "simple upload request received");
+    if state.is_banned(&ip).await {
+        warn!(%ip, "simple upload rejected: banned ip");
+        return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
+    }
     let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
         hash
     } else {
+        warn!(%ip, "simple upload rejected: unable to hash ip");
         return json_error(
             StatusCode::FORBIDDEN,
             "invalid_ip",
