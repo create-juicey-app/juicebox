@@ -471,11 +471,170 @@ export const uploadHandler = {
   shouldUseChunk,
 
   selectChunkSize,
-
   updateProgressBar(f, loaded, total) {
     if (!f.barSpan || !total) return;
     const pct = Math.min(100, Math.max(0, (loaded / total) * 100));
     f.barSpan.style.width = pct.toFixed(2) + "%";
+  },
+
+  now() {
+    if (
+      typeof performance !== "undefined" &&
+      typeof performance.now === "function"
+    ) {
+      return performance.now();
+    }
+    return Date.now();
+  },
+
+  initChunkSmoothing(f) {
+    f.chunkSmoothing = {
+      avgBps: null,
+      sampleCount: 0,
+      lastDurationMs: null,
+      lastChunkBytes: null,
+      predictedPercent: -1,
+      active: null,
+    };
+  },
+
+  beginChunkSmoothing(f, { baseStatus, startBytes, endBytes, isLastChunk }) {
+    if (!f?.barSpan || !f?.file) return;
+    if (
+      typeof requestAnimationFrame !== "function" ||
+      typeof cancelAnimationFrame !== "function"
+    ) {
+      return;
+    }
+    if (!f.chunkSmoothing) this.initChunkSmoothing(f);
+    const smoothing = f.chunkSmoothing;
+    const chunkBytes = Math.max(0, (endBytes || 0) - (startBytes || 0));
+    if (!chunkBytes) {
+      smoothing.active = null;
+      return;
+    }
+
+    const avgBps = smoothing.avgBps;
+    let expectedMs = null;
+    if (avgBps && avgBps > 0) {
+      expectedMs = (chunkBytes / avgBps) * 1000;
+    } else if (smoothing.lastDurationMs && smoothing.lastDurationMs > 0) {
+      const baselineBytes = smoothing.lastChunkBytes || chunkBytes;
+      const ratio = baselineBytes ? chunkBytes / baselineBytes : 1;
+      expectedMs = smoothing.lastDurationMs * Math.max(0.2, Math.min(5, ratio));
+    }
+
+    if (!expectedMs || !Number.isFinite(expectedMs) || expectedMs <= 16) {
+      smoothing.active = null;
+      return;
+    }
+
+    const activeId = Symbol("chunkPrediction");
+    const handler = this;
+    const maxHoldRatio = isLastChunk ? 0.995 : 0.985;
+    smoothing.predictedPercent = Math.max(
+      smoothing.predictedPercent ?? -1,
+      f.lastProgressPercent ?? -1
+    );
+
+    const active = {
+      id: activeId,
+      baseStatus,
+      startBytes,
+      endBytes,
+      expectedMs,
+      isLastChunk,
+      startTime: this.now(),
+      raf: null,
+    };
+
+    const step = () => {
+      if (!f.chunkSmoothing || f.chunkSmoothing.active?.id !== activeId) {
+        return;
+      }
+      const nowTs = handler.now();
+      const elapsed = nowTs - active.startTime;
+      const chunkSize = active.endBytes - active.startBytes;
+      let ratio = elapsed / active.expectedMs;
+      if (ratio >= 1) {
+        const overtime = elapsed - active.expectedMs;
+        const easing = 1 - Math.exp(-overtime / (active.expectedMs * 0.75 + 1));
+        ratio = Math.min(maxHoldRatio, 0.99 * easing + 0.01);
+      }
+      ratio = Math.min(maxHoldRatio, Math.max(0, ratio));
+      const predictedBytes = active.startBytes + chunkSize * ratio;
+      handler.applyPredictedProgress(f, predictedBytes, {
+        baseStatus: active.baseStatus,
+      });
+      active.raf = requestAnimationFrame(step);
+    };
+
+    smoothing.active = active;
+    active.raf = requestAnimationFrame(step);
+  },
+
+  applyPredictedProgress(f, predictedBytes, { baseStatus }) {
+    if (!f?.file || !f.barSpan) return;
+    const total = f.file.size || 1;
+    const capped = Math.min(predictedBytes, total * 0.9999);
+    this.updateProgressBar(f, capped, total);
+
+    const smoothing = f.chunkSmoothing;
+    if (!smoothing) return;
+    const percent = Math.floor(
+      Math.min(99, Math.max(0, (capped / total) * 100))
+    );
+    if (percent <= (f.lastProgressPercent ?? -1)) return;
+    if (percent <= smoothing.predictedPercent) return;
+    smoothing.predictedPercent = percent;
+    if (baseStatus) {
+      this.setStatusMessage(f, `${baseStatus} (${percent}%)`, {
+        state: "uploading",
+        ariaLive: "off",
+      });
+    }
+  },
+
+  stopChunkSmoothing(f, { actualBytes = null } = {}) {
+    const smoothing = f?.chunkSmoothing;
+    if (!smoothing?.active) return;
+    const { raf } = smoothing.active;
+    if (raf && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(raf);
+    }
+    smoothing.active = null;
+    const fallbackBytes =
+      typeof actualBytes === "number"
+        ? actualBytes
+        : typeof f?.uploadedBytes === "number"
+        ? f.uploadedBytes
+        : null;
+    if (f?.file && typeof fallbackBytes === "number") {
+      this.updateProgressBar(f, fallbackBytes, f.file.size || 1);
+    }
+  },
+
+  recordChunkTiming(f, { chunkBytes, durationMs }) {
+    if (!f?.chunkSmoothing || !chunkBytes || !durationMs) return;
+    if (!(durationMs > 0)) return;
+    const smoothing = f.chunkSmoothing;
+    const durationSec = durationMs / 1000;
+    const bps = chunkBytes / durationSec;
+    if (bps && Number.isFinite(bps) && bps > 0) {
+      if (smoothing.avgBps) {
+        smoothing.avgBps = smoothing.avgBps * 0.65 + bps * 0.35;
+      } else {
+        smoothing.avgBps = bps;
+      }
+    }
+    smoothing.sampleCount += 1;
+    smoothing.lastDurationMs = durationMs;
+    smoothing.lastChunkBytes = chunkBytes;
+    const total = f.file?.size || 1;
+    const actualPercent = Math.floor(
+      Math.min(99, Math.max(0, (f.uploadedBytes / total) * 100))
+    );
+    smoothing.predictedPercent = actualPercent;
   },
 
   setStatusMessage(f, message, options = {}) {
@@ -701,9 +860,12 @@ export const uploadHandler = {
       initData.total_chunks || Math.ceil(f.file.size / f.chunkSize);
     f.uploadedBytes = 0;
 
+    this.initChunkSmoothing(f);
+
     try {
       await this.uploadChunksSequentially(f, abort);
     } catch (err) {
+      this.stopChunkSmoothing(f);
       if (err?.name !== "AbortError") {
         const message = err.message || "Chunk upload failed.";
         showSnack(message);
@@ -825,6 +987,15 @@ export const uploadHandler = {
         state: "uploading",
         ariaLive: humanIndex === 1 ? "assertive" : "off",
       });
+      const startBytes = start;
+      const chunkSize = end - startBytes;
+      this.beginChunkSmoothing(f, {
+        baseStatus,
+        startBytes,
+        endBytes: end,
+        isLastChunk: humanIndex === totalChunks,
+      });
+      const chunkStartTime = this.now();
       const send = async (useStream) => {
         const body =
           useStream && typeof slice.stream === "function"
@@ -887,18 +1058,26 @@ export const uploadHandler = {
         try {
           response = await send(false);
         } catch (err) {
+          this.stopChunkSmoothing(f);
           throw streamError || err;
         }
       }
 
       if (!response.ok) {
+        this.stopChunkSmoothing(f);
         const message = await this.extractError(
           response,
           "Chunk upload failed."
         );
         throw new Error(message);
       }
+      const durationMs = this.now() - chunkStartTime;
       f.uploadedBytes = end;
+      this.stopChunkSmoothing(f, { actualBytes: end });
+      this.recordChunkTiming(f, {
+        chunkBytes: chunkSize,
+        durationMs,
+      });
       this.updateProgressBar(f, f.uploadedBytes, f.file.size);
       const percent = Math.round(
         Math.min(100, Math.max(0, (f.uploadedBytes / (f.file.size || 1)) * 100))
@@ -915,6 +1094,7 @@ export const uploadHandler = {
         f.lastProgressPercent = percent;
       }
     }
+    this.stopChunkSmoothing(f, { actualBytes: f.uploadedBytes });
   },
 
   startChunkStatusPolling(f) {
@@ -925,15 +1105,42 @@ export const uploadHandler = {
     let stopped = false;
     let timer = null;
     let inFlight = false;
-    const pollIntervalMs = 600;
-    const safeSetTimeout = (fn, delay) => {
-      timer = setTimeout(fn, delay);
+    const BASE_INTERVAL_MS = 360;
+    const FAST_INTERVAL_MS = 200;
+    const MAX_INTERVAL_MS = 2000;
+    let currentInterval = FAST_INTERVAL_MS;
+    let lastAssembled = 0;
+    let lastProgressAt = Date.now();
+    const scheduleNext = (delay) => {
+      if (stopped) return;
+      const clamped = Math.max(
+        FAST_INTERVAL_MS,
+        Math.min(MAX_INTERVAL_MS, delay)
+      );
+      if (timer) {
+        clearTimeout(timer);
+      }
+      timer = setTimeout(() => {
+        timer = null;
+        runPoll();
+      }, clamped);
+    };
+    const applyProgressTiming = (assembled) => {
+      if (assembled > lastAssembled) {
+        lastAssembled = assembled;
+        lastProgressAt = Date.now();
+        currentInterval = FAST_INTERVAL_MS;
+      } else {
+        const elapsed = Date.now() - lastProgressAt;
+        const backoffSteps = Math.max(0, Math.floor(elapsed / 1200));
+        currentInterval = Math.min(
+          MAX_INTERVAL_MS,
+          BASE_INTERVAL_MS + backoffSteps * 160
+        );
+      }
     };
     const runPoll = async () => {
       if (stopped || inFlight) {
-        if (!stopped && !inFlight) {
-          safeSetTimeout(runPoll, pollIntervalMs);
-        }
         return;
       }
       inFlight = true;
@@ -949,12 +1156,20 @@ export const uploadHandler = {
           return;
         }
         if (!response.ok) {
-          safeSetTimeout(runPoll, pollIntervalMs * 2);
+          currentInterval = Math.min(
+            MAX_INTERVAL_MS,
+            Math.max(BASE_INTERVAL_MS, currentInterval * 1.5)
+          );
+          scheduleNext(currentInterval);
           return;
         }
         const data = await response.json().catch(() => null);
         if (!data) {
-          safeSetTimeout(runPoll, pollIntervalMs * 2);
+          currentInterval = Math.min(
+            MAX_INTERVAL_MS,
+            Math.max(BASE_INTERVAL_MS, currentInterval * 1.5)
+          );
+          scheduleNext(currentInterval);
           return;
         }
         const total = data.total_chunks || f.totalChunks || 0;
@@ -974,13 +1189,18 @@ export const uploadHandler = {
           stopped = true;
           return;
         }
-        safeSetTimeout(runPoll, pollIntervalMs);
+        applyProgressTiming(assembled);
+        scheduleNext(currentInterval);
       } catch (err) {
         if (window?.DEBUG_LOGS) {
           console.warn("chunk status poll failed", err);
         }
         if (!stopped) {
-          safeSetTimeout(runPoll, pollIntervalMs * 2);
+          currentInterval = Math.min(
+            MAX_INTERVAL_MS,
+            Math.max(BASE_INTERVAL_MS, currentInterval * 1.5 + 120)
+          );
+          scheduleNext(currentInterval);
         }
       } finally {
         inFlight = false;
@@ -1043,6 +1263,7 @@ export const uploadHandler = {
     try {
       showSnack("Upload canceled.");
     } catch {}
+    this.stopChunkSmoothing(f);
     if (f.xhr) {
       try {
         f.xhr.abort();
