@@ -28,8 +28,10 @@ pub use security::{add_cache_headers, add_security_headers, ban_gate, enforce_ho
 pub use upload::{
     CheckHashQuery, ChunkCompleteRequest, ChunkInitRequest, ChunkInitResponse, FileMetaEntry,
     ListResponse, UploadResponse, cancel_chunk_upload_handler, checkhash_handler,
-    chunk_status_handler, complete_chunk_upload_handler, init_chunk_upload_handler, list_handler,
-    simple_list_handler, simple_upload_handler, upload_chunk_part_handler, upload_handler,
+    chunk_cancel_options_handler, chunk_complete_options_handler, chunk_part_options_handler,
+    chunk_status_handler, complete_chunk_upload_handler, init_chunk_options_handler,
+    init_chunk_upload_handler, list_handler, simple_list_handler, simple_upload_handler,
+    upload_chunk_part_handler, upload_handler, upload_head_handler, upload_options_handler,
 };
 pub use web::{
     LangQuery, SimpleQuery, banned_handler, debug_ip_handler, faq_handler,
@@ -46,12 +48,29 @@ pub fn build_router(state: AppState) -> Router {
     let dist_service = ServeDir::new(static_root.join("dist"));
     let router = Router::new()
         .route("/checkhash", get(checkhash_handler))
-        .route("/upload", post(upload_handler))
-        .route("/chunk/init", post(init_chunk_upload_handler))
+        .route(
+            "/upload",
+            post(upload_handler)
+                .head(upload_head_handler)
+                .options(upload_options_handler),
+        )
+        .route(
+            "/chunk/init",
+            post(init_chunk_upload_handler).options(init_chunk_options_handler),
+        )
         .route("/chunk/{id}/status", get(chunk_status_handler))
-        .route("/chunk/{id}/complete", post(complete_chunk_upload_handler))
-        .route("/chunk/{id}/cancel", delete(cancel_chunk_upload_handler))
-        .route("/chunk/{id}/{index}", put(upload_chunk_part_handler))
+        .route(
+            "/chunk/{id}/complete",
+            post(complete_chunk_upload_handler).options(chunk_complete_options_handler),
+        )
+        .route(
+            "/chunk/{id}/cancel",
+            delete(cancel_chunk_upload_handler).options(chunk_cancel_options_handler),
+        )
+        .route(
+            "/chunk/{id}/{index}",
+            put(upload_chunk_part_handler).options(chunk_part_options_handler),
+        )
         .route("/list", get(list_handler))
         .route("/mine", get(list_handler))
         .route("/f/{file}", get(fetch_file_handler).delete(delete_handler))

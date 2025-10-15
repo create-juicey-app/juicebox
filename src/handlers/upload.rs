@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Multipart, Path, Query as AxumQuery, State};
-use axum::http::header::CACHE_CONTROL;
+use axum::http::header::{ALLOW, CACHE_CONTROL};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use infer;
@@ -104,6 +104,44 @@ pub struct ChunkStatusResponse {
     pub total_chunks: u32,
     pub assembled_chunks: u32,
     pub completed: bool,
+}
+
+#[axum::debug_handler]
+pub async fn init_chunk_options_handler() -> Response {
+    no_content_with_allow("POST, OPTIONS")
+}
+
+#[axum::debug_handler]
+pub async fn chunk_part_options_handler(Path(_): Path<ChunkPathParams>) -> Response {
+    no_content_with_allow("PUT, OPTIONS")
+}
+
+#[axum::debug_handler]
+pub async fn chunk_complete_options_handler(Path(_): Path<ChunkCompletePath>) -> Response {
+    no_content_with_allow("POST, OPTIONS")
+}
+
+#[axum::debug_handler]
+pub async fn chunk_cancel_options_handler(Path(_): Path<ChunkCompletePath>) -> Response {
+    no_content_with_allow("DELETE, OPTIONS")
+}
+
+fn no_content_with_allow(methods: &str) -> Response {
+    let mut headers = HeaderMap::new();
+    if let Ok(value) = HeaderValue::from_str(methods) {
+        headers.insert(ALLOW, value);
+    }
+    (StatusCode::NO_CONTENT, headers).into_response()
+}
+
+#[axum::debug_handler]
+pub async fn upload_head_handler() -> Response {
+    no_content_with_allow("POST, HEAD, OPTIONS")
+}
+
+#[axum::debug_handler]
+pub async fn upload_options_handler() -> Response {
+    no_content_with_allow("POST, HEAD, OPTIONS")
 }
 
 fn file_limit_response() -> Response {

@@ -31,8 +31,11 @@
   <meta name="twitter:image" content="https://box.juicey.dev/silly.gif" />
   <meta name="twitter:image:alt" content="JuiceBox, Temporary File Host, the silly file share." />
   <!-- End social meta -->
-  <link rel="preload" href="{{ css_bundle | default(value='/css/app.css') }}" as="style" />
-  <link rel="stylesheet" href="{{ css_bundle | default(value='/css/app.css') }}" />
+  {% set css_href = css_bundle | default(value='/css/app.css') %}
+  {% set app_src = app_bundle | default(value='/dist/app.js') %}
+  <link rel="preload" href="{{ css_href }}" as="style" />
+  <link rel="stylesheet" href="{{ css_href }}" />
+  <link rel="modulepreload" href="{{ app_src }}" crossorigin="anonymous" />
   <style>
     :root {
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
@@ -197,6 +200,6 @@
   </nav>
   <br><span id="ipNote" style="display:block;font-size:.55rem;opacity:.45;margin-top:.4rem;letter-spacing:.3px"></span></footer>
  
-  <script type="module" src="{{ app_bundle | default(value='/dist/app.js') }}" defer></script>
+  <script type="module" src="{{ app_src }}" defer crossorigin="anonymous"></script>
 </body>
 </html>
