@@ -411,7 +411,7 @@ pub fn set_trusted_proxy_config_for_tests(allow_headers: bool, cidrs: Vec<String
 }
 
 // new: max simultaneous active files per IP
-pub const MAX_ACTIVE_FILES_PER_IP: usize = 5;
+pub const MAX_ACTIVE_FILES_PER_IP: usize = 10;
 
 // admin session ttl (seconds)
 pub const ADMIN_SESSION_TTL: u64 = 24 * 3600;

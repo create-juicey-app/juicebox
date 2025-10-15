@@ -1,6 +1,7 @@
 use crate::util::{
-    ADMIN_KEY_TTL, ADMIN_SESSION_TTL, IpVersion, hash_ip_addr, hash_ip_string,
-    hash_network_from_cidr, hash_network_from_ip, new_id, now_secs, ttl_to_duration,
+    ADMIN_KEY_TTL, ADMIN_SESSION_TTL, IpVersion, MAX_ACTIVE_FILES_PER_IP, hash_ip_addr,
+    hash_ip_string, hash_network_from_cidr, hash_network_from_ip, new_id, now_secs,
+    ttl_to_duration,
 };
 use anyhow::Result;
 use dashmap::DashMap;
@@ -244,6 +245,34 @@ impl AppState {
         Some(BanSubject::Exact {
             hash: trimmed.to_string(),
         })
+    }
+
+    pub fn active_file_count(&self, owner_hash: &str, now: u64) -> usize {
+        self.owners
+            .iter()
+            .filter(|entry| {
+                let meta = entry.value();
+                meta.owner_hash.as_str() == owner_hash && meta.expires > now
+            })
+            .count()
+    }
+
+    pub fn pending_chunk_count(&self, owner_hash: &str) -> usize {
+        self.chunk_sessions
+            .iter()
+            .filter(|entry| {
+                let session = entry.value();
+                session.owner_hash.as_str() == owner_hash && !session.is_completed()
+            })
+            .count()
+    }
+
+    pub fn reserved_file_slots(&self, owner_hash: &str, now: u64) -> usize {
+        self.active_file_count(owner_hash, now) + self.pending_chunk_count(owner_hash)
+    }
+
+    pub fn remaining_file_slots(&self, owner_hash: &str, now: u64) -> usize {
+        MAX_ACTIVE_FILES_PER_IP.saturating_sub(self.reserved_file_slots(owner_hash, now))
     }
 
     async fn persist_owners_inner(&self) {

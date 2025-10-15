@@ -21,8 +21,9 @@ use crate::state::{
     spawn_integrity_check, verify_user_entries_with_report,
 };
 use crate::util::{
-    FORBIDDEN_EXTENSIONS, is_forbidden_extension, json_error, make_storage_name, max_file_bytes,
-    new_id, now_secs, qualify_path, real_client_ip, ttl_to_duration,
+    FORBIDDEN_EXTENSIONS, MAX_ACTIVE_FILES_PER_IP, is_forbidden_extension, json_error,
+    make_storage_name, max_file_bytes, new_id, now_secs, qualify_path, real_client_ip,
+    ttl_to_duration,
 };
 
 #[derive(Deserialize)]
@@ -35,6 +36,8 @@ pub struct UploadResponse {
     pub files: Vec<String>,
     pub truncated: bool,
     pub remaining: usize,
+    #[serde(default)]
+    pub limit_reached: bool,
 }
 
 #[derive(Serialize)]
@@ -102,6 +105,20 @@ pub struct ChunkStatusResponse {
     pub completed: bool,
 }
 
+fn file_limit_response() -> Response {
+    let message = format!(
+        "Active file limit reached. Delete an existing upload to free one of the {MAX_ACTIVE_FILES_PER_IP} slots."
+    );
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(json!({
+            "code": "file_limit",
+            "message": message,
+        })),
+    )
+        .into_response()
+}
+
 fn compute_chunk_layout(total_size: u64, requested: Option<u64>) -> Option<(u64, u32)> {
     if total_size == 0 {
         return None;
@@ -163,6 +180,9 @@ pub async fn init_chunk_upload_handler(
         return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
     }
     let ip = real_client_ip(&headers, &addr);
+    if state.is_banned(&ip).await {
+        return json_error(StatusCode::FORBIDDEN, "banned", "ip banned");
+    }
     let owner_hash = if let Some(hash) = state.hash_ip_to_string(&ip) {
         hash
     } else {
@@ -182,6 +202,7 @@ pub async fn init_chunk_upload_handler(
             "file exceeds configured max size",
         );
     }
+    cleanup_expired(&state).await;
     let now = now_secs();
     let ttl_code = req.ttl.clone().unwrap_or_else(|| "24h".to_string());
     let ttl = ttl_to_duration(&ttl_code).as_secs();
@@ -210,6 +231,11 @@ pub async fn init_chunk_upload_handler(
             )
                 .into_response();
         }
+    }
+
+    if state.remaining_file_slots(owner_hash.as_str(), now) == 0 {
+        tracing::warn!(owner_hash = %owner_hash, "Chunk upload rejected: active file limit reached");
+        return file_limit_response();
     }
 
     let session_id = new_id();
@@ -245,6 +271,13 @@ pub async fn init_chunk_upload_handler(
     state
         .chunk_sessions
         .insert(session_id.clone(), session.clone());
+    let post_insert_now = now_secs();
+    let reserved_after = state.reserved_file_slots(session.owner_hash.as_str(), post_insert_now);
+    if reserved_after > MAX_ACTIVE_FILES_PER_IP {
+        state.remove_chunk_session(&session_id).await;
+        tracing::warn!(owner_hash = %session.owner_hash, "Chunk upload rejected: active file limit reached (post-init)");
+        return file_limit_response();
+    }
     if let Err(err) = state
         .persist_chunk_session(&session_id, session.as_ref())
         .await
@@ -603,6 +636,7 @@ pub async fn complete_chunk_upload_handler(
         files: vec![storage_name],
         truncated: false,
         remaining: 0,
+        limit_reached: false,
     })
     .into_response()
 }
@@ -825,13 +859,24 @@ pub async fn upload_handler(
         );
     }
 
+    cleanup_expired(&state).await;
     let now = now_secs();
+    let mut slots_remaining = state.remaining_file_slots(owner_hash.as_str(), now);
+    if slots_remaining == 0 {
+        tracing::warn!(owner_hash = %owner_hash, "Upload rejected: active file limit reached");
+        return file_limit_response();
+    }
     let ttl = ttl_to_duration(&ttl_code).as_secs();
     let expires = now + ttl;
     let mut saved_files = Vec::new();
     let mut duplicate_info = None;
+    let mut limit_reached = false;
 
     for (original_name, data) in &files_to_process {
+        if slots_remaining == 0 {
+            limit_reached = true;
+            break;
+        }
         if data.len() as u64 > max_file_bytes() {
             tracing::warn!(owner_hash = %owner_hash, ?original_name, size = data.len(), "Upload rejected: file too large");
             continue;
@@ -863,8 +908,21 @@ pub async fn upload_handler(
                 original: original_name.clone().unwrap_or_default(),
             };
             state.owners.insert(storage_name.clone(), meta);
+            let check_now = now_secs();
+            let total_reserved = state.reserved_file_slots(owner_hash.as_str(), check_now);
+            if total_reserved > MAX_ACTIVE_FILES_PER_IP {
+                state.owners.remove(&storage_name);
+                let _ = fs::remove_file(&path).await;
+                tracing::warn!(
+                    owner_hash = %owner_hash,
+                    file = %storage_name,
+                    "Upload rejected: active file limit reached (post-write)",
+                );
+                return file_limit_response();
+            }
             tracing::info!(owner_hash = %owner_hash, file = %storage_name, size = data.len(), "File uploaded successfully");
-            saved_files.push(storage_name);
+            saved_files.push(storage_name.clone());
+            slots_remaining = slots_remaining.saturating_sub(1);
         } else {
             tracing::error!(owner_hash = %owner_hash, file = %storage_name, "Failed to write uploaded file");
         }
@@ -886,6 +944,7 @@ pub async fn upload_handler(
             files: saved_files,
             truncated,
             remaining,
+            limit_reached,
         }),
     )
         .into_response()
@@ -1082,11 +1141,24 @@ pub async fn simple_upload_handler(
         );
     }
 
-    let expires = now_secs() + ttl_to_duration(&ttl_code).as_secs();
-    let mut saved_files = Vec::new();
+    cleanup_expired(&state).await;
+    let now = now_secs();
+    let mut slots_remaining = state.remaining_file_slots(owner_hash.as_str(), now);
+    if slots_remaining == 0 {
+        tracing::warn!(owner_hash = %owner_hash, "Simple upload rejected: active file limit reached");
+        return file_limit_response();
+    }
+
+    let expires = now + ttl_to_duration(&ttl_code).as_secs();
+    let mut saved_files: Vec<String> = Vec::new();
+    let mut limit_reached = false;
 
     for (original_name, data) in &files_to_process {
-        let now = now_secs();
+        if slots_remaining == 0 {
+            limit_reached = true;
+            break;
+        }
+        let created = now_secs();
         if data.len() as u64 > max_file_bytes() {
             tracing::warn!(owner_hash = %owner_hash, ?original_name, size = data.len(), "Simple upload rejected: file too large");
             continue;
@@ -1105,28 +1177,49 @@ pub async fn simple_upload_handler(
                 owner_hash: owner_hash.clone(),
                 expires,
                 original: original_name.clone().unwrap_or_default(),
-                created: now,
+                created,
                 hash: hash.clone(),
             };
             state.owners.insert(storage_name.clone(), meta);
+            let check_now = now_secs();
+            let total_reserved = state.reserved_file_slots(owner_hash.as_str(), check_now);
+            if total_reserved > MAX_ACTIVE_FILES_PER_IP {
+                state.owners.remove(storage_name.as_str());
+                let _ = fs::remove_file(&path).await;
+                tracing::warn!(owner_hash = %owner_hash, file = %storage_name, "Simple upload rejected: active file limit reached (post-write)");
+                limit_reached = true;
+                break;
+            }
             tracing::info!(owner_hash = %owner_hash, file = %storage_name, size = data.len(), "Simple file uploaded successfully");
-            saved_files.push(storage_name);
+            saved_files.push(storage_name.clone());
+            slots_remaining = slots_remaining.saturating_sub(1);
         } else {
             tracing::error!(owner_hash = %owner_hash, file = %storage_name, "Failed to write simple uploaded file");
         }
+    }
+
+    if limit_reached && saved_files.is_empty() {
+        state.persist_owners().await;
+        spawn_integrity_check(state.clone());
+        return file_limit_response();
     }
 
     state.persist_owners().await;
     spawn_integrity_check(state.clone());
 
     let truncated = saved_files.len() < files_to_process.len();
-    let msg = if saved_files.is_empty() {
-        "No files uploaded."
+    let msg = if limit_reached {
+        format!(
+            "Some files were discarded because you reached the {} active file limit.",
+            MAX_ACTIVE_FILES_PER_IP
+        )
+    } else if saved_files.is_empty() {
+        "No files uploaded.".to_string()
     } else if truncated {
-        "Some files were too large or invalid and were skipped."
+        "Some files were too large or invalid and were skipped.".to_string()
     } else {
-        "Upload successful!"
+        "Upload successful!".to_string()
     };
-    let url = format!("/simple?m={}", urlencoding::encode(msg));
+    let url = format!("/simple?m={}", urlencoding::encode(&msg));
     (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response()
 }

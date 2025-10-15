@@ -12,15 +12,8 @@ use tokio::fs;
 
 use crate::state::{AppState, BanSubject};
 use crate::util::{
-    extract_client_ip,
-    format_bytes,
-    headers_trusted,
-    max_file_bytes,
-    now_secs,
-    qualify_path,
-    real_client_ip,
-    IpVersion,
-    MAX_ACTIVE_FILES_PER_IP,
+    IpVersion, MAX_ACTIVE_FILES_PER_IP, extract_client_ip, format_bytes, headers_trusted,
+    max_file_bytes, now_secs, qualify_path, real_client_ip,
 };
 
 #[derive(Deserialize)]
@@ -155,17 +148,17 @@ pub async fn visitor_debug_handler(
         .map(|(version, hash)| json!({ "version": version_label(version), "value": hash }));
 
     let real_hash_tuple = state.hash_ip(&real_ip);
-    let real_hash = real_hash_tuple.as_ref().map(|(version, hash)| {
-        json!({ "version": version_label(*version), "value": hash })
-    });
+    let real_hash = real_hash_tuple
+        .as_ref()
+        .map(|(version, hash)| json!({ "version": version_label(*version), "value": hash }));
     let owner_hash = real_hash_tuple.as_ref().map(|(_, hash)| hash.clone());
 
     let extracted_hash = if extracted_ip == real_ip {
         real_hash.clone()
     } else {
-        state.hash_ip(&extracted_ip).map(|(version, hash)| {
-            json!({ "version": version_label(version), "value": hash })
-        })
+        state
+            .hash_ip(&extracted_ip)
+            .map(|(version, hash)| json!({ "version": version_label(version), "value": hash }))
     };
 
     let forwarded = json!({
@@ -192,7 +185,12 @@ pub async fn visitor_debug_handler(
         header_dump
             .entry(name.to_string())
             .or_insert_with(Vec::new)
-            .push(value.to_str().map(|s| s.to_string()).unwrap_or_else(|_| format!("{:?}", value)));
+            .push(
+                value
+                    .to_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|_| format!("{:?}", value)),
+            );
     }
 
     let now = now_secs();

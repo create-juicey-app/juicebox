@@ -5,7 +5,9 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use http_body_util::BodyExt;
 use juicebox::handlers::{admin_files_handler, visitor_debug_handler};
 use juicebox::state::FileMeta;
-use juicebox::util::{extract_client_ip, headers_trusted, now_secs, set_trusted_proxy_config_for_tests};
+use juicebox::util::{
+    extract_client_ip, headers_trusted, now_secs, set_trusted_proxy_config_for_tests,
+};
 use once_cell::sync::Lazy;
 use serde_json::Value;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};

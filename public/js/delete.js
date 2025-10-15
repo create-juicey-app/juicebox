@@ -12,6 +12,11 @@ export const deleteHandler = {
       f.deleteBtn.textContent = "…";
       f.deleteBtn.title = "Deleting...";
       f.deleteBtn.setAttribute("aria-label", "Deleting file");
+    } else if (f.failed) {
+      f.deleteBtn.textContent = "❌";
+      f.deleteBtn.disabled = false;
+      f.deleteBtn.title = "Remove failed upload";
+      f.deleteBtn.setAttribute("aria-label", "Remove failed upload from queue");
     } else if (!f.remoteName) {
       f.deleteBtn.textContent = "❌";
       f.deleteBtn.disabled = false;
@@ -28,24 +33,6 @@ export const deleteHandler = {
       f.deleteBtn.title = "Delete from server";
       f.deleteBtn.setAttribute("aria-label", "Delete uploaded file");
     }
-  },
-
-  removeGroupedEntry(batch, f) {
-    // Remove file from batch.files directly
-    batch.files = batch.files.filter((x) => x !== f);
-    const finalize = () => {
-      if (!batch.files.length) {
-        animateRemove(batch.groupLi);
-        uploadHandler.batches = uploadHandler.batches.filter(
-          (b) => b !== batch
-        );
-      } else {
-        // Optionally update group header/UI here if needed
-      }
-    };
-    if (f.container) {
-      animateRemove(f.container, finalize);
-    } else finalize();
   },
 
   handleDeleteClick(f, batch) {
@@ -78,10 +65,7 @@ export const deleteHandler = {
           ownedHandler.ownedMeta.delete(f.remoteName);
           ownedHandler.renderOwned();
           this.removeFromUploads(f.remoteName); // <-- Ensure removal from upload section
-          // Always use removeGroupedEntry if batch and groupLi exist
-          if (batch && batch.groupLi) {
-            this.removeGroupedEntry(batch, f);
-          } else if (f.container) {
+          if (f.container) {
             animateRemove(f.container, () => {
               batch.files = batch.files.filter((x) => x !== f);
               if (!batch.files.length) {
@@ -90,6 +74,13 @@ export const deleteHandler = {
                 );
               }
             });
+          } else {
+            batch.files = batch.files.filter((x) => x !== f);
+            if (!batch.files.length) {
+              uploadHandler.batches = uploadHandler.batches.filter(
+                (b) => b !== batch
+              );
+            }
           }
         } else {
           let msg = "Delete failed.";

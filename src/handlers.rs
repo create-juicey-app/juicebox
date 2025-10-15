@@ -69,7 +69,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth", get(auth_get_handler).post(auth_post_handler))
         .route("/isadmin", get(is_admin_handler))
         .route("/debug-ip", get(debug_ip_handler))
-    .route("/visitor-debug", get(visitor_debug_handler))
+        .route("/visitor-debug", get(visitor_debug_handler))
         .route("/trusted", get(trusted_handler))
         .route("/admin/ban", get(ban_page_handler).post(ban_post_handler))
         .route(

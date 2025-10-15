@@ -1,7 +1,13 @@
 // js/upload.js
 
 import { list } from "./ui.js";
-import { fmtBytes, showSnack, copyToClipboard, flashCopied } from "./utils.js";
+import {
+  fmtBytes,
+  showSnack,
+  copyToClipboard,
+  flashCopied,
+  animateRemove,
+} from "./utils.js";
 import { getTTL } from "./ui.js";
 import { ownedHandler } from "./owned.js";
 import { deleteHandler } from "./delete.js";
@@ -76,6 +82,7 @@ export const uploadHandler = {
         done: false,
         deleting: false,
         removed: false,
+        failed: false,
         bar: null,
         barSpan: null,
         container: null,
@@ -96,7 +103,6 @@ export const uploadHandler = {
         lastProgressPercent: -1,
         inProgress: false,
       })),
-      isGroup: cleaned.length > 1,
     };
     this.batches.push(batch);
     this.renderList();
@@ -106,50 +112,6 @@ export const uploadHandler = {
 
   renderList() {
     this.batches.forEach((batch) => {
-      if (batch.isGroup) {
-        if (!batch.groupLi) {
-          const li = document.createElement("li");
-          li.className = "group-batch";
-          li.innerHTML =
-            '<div class="file-row group-head"><div class="name"></div><div class="size"></div><div class="actions"></div></div><div class="group-files"></div>';
-          li.querySelector(".group-head .name").textContent =
-            batch.files.length + " files";
-          list.appendChild(li);
-          batch.groupLi = li;
-          li.classList.add("adding");
-          requestAnimationFrame(() => li.classList.add("in"));
-        }
-        const filesWrap = batch.groupLi.querySelector(".group-files");
-        const frag = document.createDocumentFragment();
-        batch.files.forEach((f) => {
-          if (f.container) return;
-          const entry = document.createElement("div");
-          entry.className = "file-entry";
-          entry.innerHTML =
-            '<div class="file-row"><div class="name"></div><div class="size"></div><div class="actions"></div></div><div class="bar"><span></span></div>';
-          entry.querySelector(".name").textContent = f.file.name;
-          entry.querySelector(".size").textContent = fmtBytes(f.file.size);
-          const del = document.createElement("button");
-          del.type = "button";
-          del.className = "remove";
-          del.textContent = "❌";
-          del.title = "Remove";
-          del.setAttribute("aria-label", "Remove file from queue");
-          del.addEventListener("click", (e) => {
-            e.stopPropagation();
-            deleteHandler.handleDeleteClick(f, batch);
-          });
-          f.deleteBtn = del;
-          entry.querySelector(".actions").appendChild(del);
-          f.bar = entry.querySelector(".bar");
-          f.barSpan = f.bar.querySelector("span");
-          f.container = entry;
-          frag.appendChild(entry);
-        });
-        filesWrap.appendChild(frag);
-        return;
-      }
-      // Legacy single-file path
       const frag = document.createDocumentFragment();
       batch.files.forEach((f) => {
         if (f.container) return;
@@ -164,7 +126,7 @@ export const uploadHandler = {
         const del = document.createElement("button");
         del.type = "button";
         del.className = "remove";
-        del.textContent = "❌";
+        del.textContent = "x";
         del.title = "Remove";
         del.setAttribute("aria-label", "Remove file from queue");
         del.addEventListener("click", (e) => {
@@ -179,7 +141,9 @@ export const uploadHandler = {
         li.classList.add("adding");
         requestAnimationFrame(() => li.classList.add("in"));
       });
-      list.appendChild(frag);
+      if (frag.childElementCount) {
+        list.appendChild(frag);
+      }
     });
   },
 
@@ -213,16 +177,6 @@ export const uploadHandler = {
 
   ensureLinkContainer(f, batch) {
     if (!f?.container) return null;
-    if (batch?.isGroup) {
-      let linksRow = f.container.querySelector(".links");
-      if (!linksRow) {
-        linksRow = document.createElement("div");
-        linksRow.className = "links";
-        f.container.appendChild(linksRow);
-      }
-      f.linkContainer = linksRow;
-      return linksRow;
-    }
     if (!f.linkContainer || !f.linkContainer.isConnected) {
       const links = document.createElement("div");
       links.className = "links";
@@ -298,7 +252,7 @@ export const uploadHandler = {
     const entries = [];
     for (const batch of this.batches) {
       for (const f of batch.files) {
-        if (f.removed || f.done || f.deleting) continue;
+        if (f.removed || f.done || f.deleting || f.failed) continue;
         entries.push({ f, batch });
       }
     }
@@ -308,7 +262,8 @@ export const uploadHandler = {
   hasPendingUploads() {
     for (const batch of this.batches) {
       for (const f of batch.files) {
-        if (f.removed || f.done || f.deleting || f.canceled) continue;
+        if (f.removed || f.done || f.deleting || f.canceled || f.failed)
+          continue;
         return true;
       }
     }
@@ -328,7 +283,14 @@ export const uploadHandler = {
   takeNextPendingEntry() {
     for (const batch of this.batches) {
       for (const f of batch.files) {
-        if (f.inProgress || f.removed || f.done || f.deleting || f.canceled) {
+        if (
+          f.inProgress ||
+          f.removed ||
+          f.done ||
+          f.deleting ||
+          f.canceled ||
+          f.failed
+        ) {
           continue;
         }
         f.inProgress = true;
@@ -339,7 +301,9 @@ export const uploadHandler = {
   },
 
   refreshQueueStatuses() {
-    const entries = this.collectPendingEntries().filter(({ f }) => !f.canceled);
+    const entries = this.collectPendingEntries().filter(
+      ({ f }) => !f.canceled && !f.failed
+    );
     const waiting = entries.filter(
       ({ f }) => !ACTIVE_STATUS_STATES.has(f.statusState || "")
     );
@@ -513,6 +477,10 @@ export const uploadHandler = {
         return;
       }
       if (window.DEBUG_LOGS) console.error("Upload failed", err);
+      const message = err?.message || "Upload failed.";
+      if (!f.failed) {
+        this.markUploadFailed(f, batch, message);
+      }
     }
   },
 
@@ -929,10 +897,15 @@ export const uploadHandler = {
         if (xhr.status >= 200 && xhr.status < 300) {
           this.handleUploadSuccess(f, batch, payload);
         } else {
-          const msg = (payload && payload.message) || "Upload failed.";
-          showSnack(msg);
-          f.container?.classList.add("error");
-          deleteHandler.updateDeleteButton(f);
+          const details = this.normalizeErrorDetails(payload, "Upload failed.");
+          if (this.isForbiddenError(details, xhr.status)) {
+            this.rejectForbiddenFile(f, batch, details.message, {
+              reason: details.code || "bad_filetype",
+            });
+          } else {
+            showSnack(details.message);
+            this.markUploadFailed(f, batch, details.message);
+          }
         }
         resolve();
       };
@@ -941,8 +914,9 @@ export const uploadHandler = {
         if (finished) return;
         finished = true;
         f.lastProgressPercent = -1;
-        if (!f.canceled) f.container?.classList.add("error");
-        deleteHandler.updateDeleteButton(f);
+        if (!f.canceled) {
+          this.markUploadFailed(f, batch, "Upload failed.");
+        }
         resolve();
       };
 
@@ -994,14 +968,20 @@ export const uploadHandler = {
     }
 
     if (!initResponse.ok) {
-      const message = await this.extractError(
+      const details = await this.extractError(
         initResponse,
         "Failed to start chunked upload."
       );
-      showSnack(message);
-      f.container?.classList.add("error");
       this.setStatusMessage(f, "");
-      throw new Error(message);
+      if (this.isForbiddenError(details, initResponse.status)) {
+        this.rejectForbiddenFile(f, batch, details.message, {
+          reason: details.code || "bad_filetype",
+        });
+        return;
+      }
+      showSnack(details.message);
+      f.container?.classList.add("error");
+      throw this.buildUploadError(details);
     }
 
     const initData = await initResponse.json().catch(() => ({}));
@@ -1023,9 +1003,16 @@ export const uploadHandler = {
     this.initChunkSmoothing(f);
 
     try {
-      await this.uploadChunksSequentially(f, abort);
+      await this.uploadChunksSequentially(f, batch, abort);
     } catch (err) {
       this.stopChunkSmoothing(f);
+      if (err?.forbiddenUpload) {
+        this.setStatusMessage(f, "");
+        this.removeLinkForFile(f);
+        f.lastProgressPercent = -1;
+        await this.cancelChunkSession(f);
+        return;
+      }
       if (err?.name !== "AbortError") {
         const message = err.message || "Chunk upload failed.";
         showSnack(message);
@@ -1085,6 +1072,12 @@ export const uploadHandler = {
         await this.cancelChunkSession(f);
         throw err;
       }
+      if (err?.forbiddenUpload) {
+        this.setStatusMessage(f, "");
+        f.lastProgressPercent = -1;
+        await this.cancelChunkSession(f);
+        return;
+      }
       showSnack("Failed to finalize upload.");
       f.container?.classList.add("error");
       await this.cancelChunkSession(f);
@@ -1110,17 +1103,27 @@ export const uploadHandler = {
     }
 
     if (!completeResponse.ok) {
-      const message = await this.extractError(
+      const details = await this.extractError(
         completeResponse,
         "Upload failed."
       );
-      showSnack(message);
+      if (this.isForbiddenError(details, completeResponse.status)) {
+        await this.cancelChunkSession(f);
+        this.setStatusMessage(f, "");
+        this.removeLinkForFile(f);
+        f.lastProgressPercent = -1;
+        this.rejectForbiddenFile(f, batch, details.message, {
+          reason: details.code || "bad_filetype",
+        });
+        return;
+      }
+      showSnack(details.message);
       f.container?.classList.add("error");
       await this.cancelChunkSession(f);
       this.setStatusMessage(f, "");
       this.removeLinkForFile(f);
       f.lastProgressPercent = -1;
-      throw new Error(message);
+      throw this.buildUploadError(details);
     }
 
     const payload = await completeResponse.json().catch(() => ({}));
@@ -1129,7 +1132,7 @@ export const uploadHandler = {
     f.abortController = null;
   },
 
-  async uploadChunksSequentially(f, abort) {
+  async uploadChunksSequentially(f, batch, abort) {
     const sessionId = encodeURIComponent(f.chunkSessionId);
     const chunkBytes = f.chunkSize || this.selectChunkSize(f.file.size);
     const totalChunks = f.totalChunks || Math.ceil(f.file.size / chunkBytes);
@@ -1226,11 +1229,17 @@ export const uploadHandler = {
 
       if (!response.ok) {
         this.stopChunkSmoothing(f);
-        const message = await this.extractError(
+        const details = await this.extractError(
           response,
           "Chunk upload failed."
         );
-        throw new Error(message);
+        if (this.isForbiddenError(details, response.status)) {
+          this.rejectForbiddenFile(f, batch, details.message, {
+            reason: details.code || "bad_filetype",
+          });
+          throw this.buildUploadError(details, { forbidden: true });
+        }
+        throw this.buildUploadError(details);
       }
       const durationMs = this.now() - chunkStartTime;
       f.uploadedBytes = end;
@@ -1390,13 +1399,28 @@ export const uploadHandler = {
   },
 
   async extractError(response, fallback) {
-    try {
-      const data = await response.json();
-      if (data && data.message) return data.message;
-    } catch {
-      // ignore JSON errors
+    if (!response) {
+      return this.normalizeErrorDetails(null, fallback);
     }
-    return fallback;
+    let data = null;
+    if (typeof response.clone === "function") {
+      const clone = response.clone();
+      try {
+        data = await clone.json();
+      } catch {
+        try {
+          const text = await clone.text();
+          if (text) {
+            data = { message: text };
+          }
+        } catch {}
+      }
+    } else {
+      try {
+        data = await response.json();
+      } catch {}
+    }
+    return this.normalizeErrorDetails(data, fallback);
   },
 
   findFileEntryByRemoteName(remoteName) {
@@ -1433,9 +1457,11 @@ export const uploadHandler = {
     f.canceled = true;
     f.removed = true;
     f.inProgress = false;
-    try {
-      showSnack("Upload canceled.");
-    } catch {}
+    if (!f.failed) {
+      try {
+        showSnack("Upload canceled.");
+      } catch {}
+    }
     this.stopChunkSmoothing(f);
     if (f.xhr) {
       try {
@@ -1501,17 +1527,171 @@ export const uploadHandler = {
       }, 400);
     }
     batch.files = batch.files.filter((x) => x !== f);
-    if (batch.isGroup && batch.files.length === 0 && batch.groupLi) {
-      batch.groupLi.classList.add("dupe-remove");
-      setTimeout(
-        () => batch.groupLi?.parentNode?.removeChild(batch.groupLi),
-        400
-      );
-    }
     if (!batch.files.length) {
       this.batches = this.batches.filter((b) => b !== batch);
     }
     deleteHandler.updateDeleteButton(f);
+  },
+
+  isForbiddenError(details, status) {
+    if (!details) return false;
+    if (details.code === "bad_filetype") return true;
+    const message = (details.message || "").toLowerCase();
+    if (message.includes("file type not allowed")) return true;
+    if (status === 415) return true;
+    return false;
+  },
+
+  normalizeErrorDetails(source, fallbackMessage) {
+    const details = {
+      message:
+        typeof fallbackMessage === "string" && fallbackMessage
+          ? fallbackMessage
+          : "Upload failed.",
+      code: null,
+    };
+    if (!source) {
+      return details;
+    }
+    if (typeof source === "string") {
+      const trimmed = source.trim();
+      if (trimmed) {
+        details.message = trimmed;
+      }
+      return details;
+    }
+    if (typeof source === "object") {
+      if (typeof source.message === "string" && source.message.trim()) {
+        details.message = source.message;
+      }
+      if (typeof source.code === "string" && source.code.trim()) {
+        details.code = source.code;
+      }
+    }
+    return details;
+  },
+
+  buildUploadError(details, extra = {}) {
+    const message = details?.message || "Upload failed.";
+    const err = new Error(message);
+    if (details?.code) {
+      err.code = details.code;
+    }
+    if (extra.forbidden) {
+      err.forbiddenUpload = true;
+    }
+    return err;
+  },
+
+  rejectForbiddenFile(f, batch, message, meta = {}) {
+    if (!f) return;
+    const finalMessage =
+      typeof message === "string" && message.trim()
+        ? message
+        : "File type not allowed. Upload discarded.";
+    try {
+      showSnack(finalMessage, { code: meta.reason || "bad_filetype" });
+    } catch {}
+    f.failed = false;
+    f.canceled = true;
+    f.done = false;
+    f.inProgress = false;
+    f.removed = true;
+    f.errorMessage = null;
+    f.lastProgressPercent = -1;
+    this.stopChunkSmoothing(f);
+    if (f.xhr) {
+      try {
+        f.xhr.abort();
+      } catch {}
+      f.xhr = null;
+    }
+    if (f.abortController) {
+      try {
+        f.abortController.abort();
+      } catch {}
+      f.abortController = null;
+    }
+    if (f.chunkSessionId) {
+      this.cancelChunkSession(f).catch(() => {});
+    }
+    this.removeLinkForFile(f);
+    this.setStatusMessage(f, "");
+    if (f.barSpan) {
+      f.barSpan.style.width = "0%";
+      f.barSpan.classList.remove("complete");
+    }
+    if (f.bar) {
+      f.bar.classList.remove("divider");
+    }
+    if (f.deleteBtn) {
+      f.deleteBtn.disabled = true;
+    }
+    this.refreshQueueStatuses();
+    const finalizeRemoval = () => {
+      if (f.container) {
+        try {
+          f.container.remove();
+        } catch {}
+      }
+      f.container = null;
+      f.deleteBtn = null;
+      f.bar = null;
+      f.barSpan = null;
+      f.linkContainer = null;
+      f.linkInput = null;
+      f.statusEl = null;
+      f.statusIcon = null;
+      f.statusText = null;
+      if (batch && Array.isArray(batch.files)) {
+        batch.files = batch.files.filter((x) => x !== f);
+        if (!batch.files.length) {
+          this.batches = this.batches.filter((b) => b !== batch);
+        }
+      }
+      this.refreshQueueStatuses();
+    };
+    if (f.container) {
+      animateRemove(f.container, finalizeRemoval);
+    } else {
+      finalizeRemoval();
+    }
+  },
+
+  markUploadFailed(f, batch, message) {
+    if (!f) return;
+    if (f.failed) {
+      this.setStatusMessage(f, message || f.errorMessage || "Upload failed.", {
+        state: "error",
+        ariaLive: "assertive",
+        persist: true,
+      });
+      return;
+    }
+    f.failed = true;
+    f.errorMessage = message || "Upload failed.";
+    f.inProgress = false;
+    f.canceled = false;
+    f.done = false;
+    f.lastProgressPercent = -1;
+    this.stopChunkSmoothing(f);
+    this.removeLinkForFile(f);
+    if (f.barSpan) {
+      f.barSpan.classList.remove("complete");
+    }
+    if (f.bar) {
+      f.bar.classList.remove("divider");
+    }
+    if (f.container) {
+      f.container.classList.add("error");
+    }
+    this.setStatusMessage(f, f.errorMessage, {
+      state: "error",
+      ariaLive: "assertive",
+      persist: true,
+    });
+    deleteHandler.updateDeleteButton(f);
+    this.refreshQueueStatuses();
   },
 
   handlePreUploadDuplicate(f, batch) {
