@@ -31,7 +31,8 @@ pub use upload::{
     chunk_cancel_options_handler, chunk_complete_options_handler, chunk_part_options_handler,
     chunk_status_handler, complete_chunk_upload_handler, init_chunk_options_handler,
     init_chunk_upload_handler, list_handler, simple_list_handler, simple_upload_handler,
-    upload_chunk_part_handler, upload_handler, upload_head_handler, upload_options_handler,
+    upload_chunk_part_handler, upload_get_handler, upload_handler, upload_head_handler,
+    upload_options_handler,
 };
 pub use web::{
     LangQuery, SimpleQuery, banned_handler, debug_ip_handler, faq_handler,
@@ -52,7 +53,8 @@ pub fn build_router(state: AppState) -> Router {
             "/upload",
             post(upload_handler)
                 .head(upload_head_handler)
-                .options(upload_options_handler),
+                .options(upload_options_handler)
+                .get(upload_get_handler),
         )
         .route(
             "/chunk/init",

@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Multipart, Path, Query as AxumQuery, State};
-use axum::http::header::{ALLOW, CACHE_CONTROL};
+use axum::http::header::{ALLOW, CACHE_CONTROL, PRAGMA};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use infer;
@@ -108,40 +108,50 @@ pub struct ChunkStatusResponse {
 
 #[axum::debug_handler]
 pub async fn init_chunk_options_handler() -> Response {
-    no_content_with_allow("POST, OPTIONS")
+    empty_response_with_allow(StatusCode::NO_CONTENT, "POST, OPTIONS")
 }
 
 #[axum::debug_handler]
 pub async fn chunk_part_options_handler(Path(_): Path<ChunkPathParams>) -> Response {
-    no_content_with_allow("PUT, OPTIONS")
+    empty_response_with_allow(StatusCode::NO_CONTENT, "PUT, OPTIONS")
 }
 
 #[axum::debug_handler]
 pub async fn chunk_complete_options_handler(Path(_): Path<ChunkCompletePath>) -> Response {
-    no_content_with_allow("POST, OPTIONS")
+    empty_response_with_allow(StatusCode::NO_CONTENT, "POST, OPTIONS")
 }
 
 #[axum::debug_handler]
 pub async fn chunk_cancel_options_handler(Path(_): Path<ChunkCompletePath>) -> Response {
-    no_content_with_allow("DELETE, OPTIONS")
+    empty_response_with_allow(StatusCode::NO_CONTENT, "DELETE, OPTIONS")
 }
 
-fn no_content_with_allow(methods: &str) -> Response {
+fn empty_response_with_allow(status: StatusCode, methods: &str) -> Response {
     let mut headers = HeaderMap::new();
     if let Ok(value) = HeaderValue::from_str(methods) {
         headers.insert(ALLOW, value);
     }
-    (StatusCode::NO_CONTENT, headers).into_response()
+    headers.insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
+    (status, headers).into_response()
 }
 
 #[axum::debug_handler]
 pub async fn upload_head_handler() -> Response {
-    no_content_with_allow("POST, HEAD, OPTIONS")
+    empty_response_with_allow(StatusCode::NO_CONTENT, "POST, HEAD, OPTIONS")
 }
 
 #[axum::debug_handler]
 pub async fn upload_options_handler() -> Response {
-    no_content_with_allow("POST, HEAD, OPTIONS")
+    empty_response_with_allow(StatusCode::NO_CONTENT, "POST, HEAD, OPTIONS")
+}
+
+#[axum::debug_handler]
+pub async fn upload_get_handler() -> Response {
+    empty_response_with_allow(StatusCode::METHOD_NOT_ALLOWED, "POST, HEAD, OPTIONS")
 }
 
 fn file_limit_response() -> Response {
@@ -1072,7 +1082,7 @@ pub async fn upload_handler(
     let truncated = saved_files.len() < files_to_process.len();
     let remaining = files_to_process.len() - saved_files.len();
 
-    (
+    let mut resp = (
         StatusCode::OK,
         Json(UploadResponse {
             files: saved_files,
@@ -1081,7 +1091,10 @@ pub async fn upload_handler(
             limit_reached,
         }),
     )
-        .into_response()
+        .into_response();
+    resp.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp
 }
 
 #[axum::debug_handler]
