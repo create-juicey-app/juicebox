@@ -494,6 +494,7 @@ export const uploadHandler = {
       lastDurationMs: null,
       lastChunkBytes: null,
       predictedPercent: -1,
+      predictedBytes: null,
       active: null,
     };
   },
@@ -521,20 +522,36 @@ export const uploadHandler = {
     } else if (smoothing.lastDurationMs && smoothing.lastDurationMs > 0) {
       const baselineBytes = smoothing.lastChunkBytes || chunkBytes;
       const ratio = baselineBytes ? chunkBytes / baselineBytes : 1;
-      expectedMs = smoothing.lastDurationMs * Math.max(0.2, Math.min(5, ratio));
+      expectedMs =
+        smoothing.lastDurationMs * Math.max(0.25, Math.min(5, ratio));
+    }
+    if (!expectedMs || !Number.isFinite(expectedMs) || expectedMs <= 24) {
+      const fallbackBps = Math.max(256 * 1024, chunkBytes / 3);
+      expectedMs = Math.max(400, (chunkBytes / fallbackBps) * 1000);
     }
 
-    if (!expectedMs || !Number.isFinite(expectedMs) || expectedMs <= 16) {
+    if (!expectedMs || !Number.isFinite(expectedMs) || expectedMs <= 0) {
       smoothing.active = null;
       return;
     }
 
     const activeId = Symbol("chunkPrediction");
     const handler = this;
-    const maxHoldRatio = isLastChunk ? 0.995 : 0.985;
+    const maxHoldRatio = isLastChunk ? 0.999 : 0.996;
+    const expectedBps = chunkBytes / (expectedMs / 1000);
+    const baselineBps =
+      smoothing.avgBps && smoothing.avgBps > 0 ? smoothing.avgBps : expectedBps;
+    const maxDisplayBps = Math.max(8 * 1024 * 1024, baselineBps * 4);
+    const minBps = Math.max(128, baselineBps * 0.12);
     smoothing.predictedPercent = Math.max(
       smoothing.predictedPercent ?? -1,
       f.lastProgressPercent ?? -1
+    );
+    const actualUploaded =
+      typeof f.uploadedBytes === "number" ? f.uploadedBytes : startBytes;
+    smoothing.predictedBytes = Math.max(
+      actualUploaded,
+      smoothing.predictedBytes ?? actualUploaded
     );
 
     const active = {
@@ -545,6 +562,11 @@ export const uploadHandler = {
       expectedMs,
       isLastChunk,
       startTime: this.now(),
+      lastTick: this.now(),
+      targetSpeedBps: Math.min(Math.max(baselineBps, minBps), maxDisplayBps),
+      currentSpeedBps: Math.min(Math.max(baselineBps, minBps), maxDisplayBps),
+      minSpeedBps: minBps,
+      maxSpeedBps: maxDisplayBps,
       raf: null,
     };
 
@@ -553,17 +575,57 @@ export const uploadHandler = {
         return;
       }
       const nowTs = handler.now();
+      const dtMs = nowTs - active.lastTick;
+      if (dtMs <= 0) {
+        active.raf = requestAnimationFrame(step);
+        return;
+      }
+      active.lastTick = nowTs;
+      const dtSec = dtMs / 1000;
       const elapsed = nowTs - active.startTime;
       const chunkSize = active.endBytes - active.startBytes;
-      let ratio = elapsed / active.expectedMs;
-      if (ratio >= 1) {
-        const overtime = elapsed - active.expectedMs;
-        const easing = 1 - Math.exp(-overtime / (active.expectedMs * 0.75 + 1));
-        ratio = Math.min(maxHoldRatio, 0.99 * easing + 0.01);
+
+      let targetSpeed = active.targetSpeedBps;
+      if (smoothing.avgBps && smoothing.avgBps > 0) {
+        targetSpeed = targetSpeed * 0.4 + smoothing.avgBps * 0.6;
       }
-      ratio = Math.min(maxHoldRatio, Math.max(0, ratio));
-      const predictedBytes = active.startBytes + chunkSize * ratio;
-      handler.applyPredictedProgress(f, predictedBytes, {
+      if (elapsed > active.expectedMs) {
+        const overtime = elapsed - active.expectedMs;
+        const overRatio = overtime / (active.expectedMs + 1);
+        const slowFactor = 1 / (1 + overRatio * 1.9);
+        targetSpeed = Math.max(active.minSpeedBps, targetSpeed * slowFactor);
+      }
+      targetSpeed = Math.min(
+        active.maxSpeedBps,
+        Math.max(active.minSpeedBps, targetSpeed)
+      );
+      active.currentSpeedBps = active.currentSpeedBps * 0.7 + targetSpeed * 0.3;
+
+      const cushionBytes = Math.max(
+        256,
+        chunkSize * (active.isLastChunk ? 0.0015 : 0.004)
+      );
+      const limitedCushion = Math.min(cushionBytes, chunkSize * 0.5);
+      const upperBound = Math.max(
+        active.startBytes,
+        active.endBytes - limitedCushion
+      );
+      let predictedBytes = smoothing.predictedBytes ?? active.startBytes;
+      predictedBytes += active.currentSpeedBps * dtSec;
+      const actualBytes =
+        typeof f.uploadedBytes === "number"
+          ? f.uploadedBytes
+          : active.startBytes;
+      predictedBytes = Math.max(
+        actualBytes,
+        Math.min(upperBound, predictedBytes)
+      );
+      const ratio = chunkSize
+        ? (predictedBytes - active.startBytes) / chunkSize
+        : 0;
+      const clampedRatio = Math.min(maxHoldRatio, Math.max(0, ratio));
+      smoothing.predictedBytes = active.startBytes + chunkSize * clampedRatio;
+      handler.applyPredictedProgress(f, smoothing.predictedBytes, {
         baseStatus: active.baseStatus,
       });
       active.raf = requestAnimationFrame(step);
@@ -597,10 +659,13 @@ export const uploadHandler = {
 
   stopChunkSmoothing(f, { actualBytes = null } = {}) {
     const smoothing = f?.chunkSmoothing;
-    if (!smoothing?.active) return;
-    const { raf } = smoothing.active;
-    if (raf && typeof cancelAnimationFrame === "function") {
-      cancelAnimationFrame(raf);
+    if (!smoothing) return;
+    const active = smoothing.active;
+    if (active) {
+      const { raf } = active;
+      if (raf && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(raf);
+      }
     }
     smoothing.active = null;
     const fallbackBytes =
@@ -611,6 +676,15 @@ export const uploadHandler = {
         : null;
     if (f?.file && typeof fallbackBytes === "number") {
       this.updateProgressBar(f, fallbackBytes, f.file.size || 1);
+    }
+    if (typeof fallbackBytes === "number") {
+      smoothing.predictedBytes = fallbackBytes;
+      const total = f?.file?.size || 1;
+      if (total > 0) {
+        smoothing.predictedPercent = Math.floor(
+          Math.min(100, Math.max(0, (fallbackBytes / total) * 100))
+        );
+      }
     }
   },
 
@@ -635,6 +709,10 @@ export const uploadHandler = {
       Math.min(99, Math.max(0, (f.uploadedBytes / total) * 100))
     );
     smoothing.predictedPercent = actualPercent;
+    smoothing.predictedBytes = Math.max(
+      smoothing.predictedBytes ?? f.uploadedBytes,
+      f.uploadedBytes
+    );
   },
 
   setStatusMessage(f, message, options = {}) {
