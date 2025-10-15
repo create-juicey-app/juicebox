@@ -91,8 +91,10 @@ export const uploadHandler = {
         hashChecked: false,
         statusEl: null,
         statusState: null,
+        statusPercent: null,
         canceled: false,
         lastProgressPercent: -1,
+        inProgress: false,
       })),
       isGroup: cleaned.length > 1,
     };
@@ -130,7 +132,7 @@ export const uploadHandler = {
           const del = document.createElement("button");
           del.type = "button";
           del.className = "remove";
-          del.textContent = "x";
+          del.textContent = "❌";
           del.title = "Remove";
           del.setAttribute("aria-label", "Remove file from queue");
           del.addEventListener("click", (e) => {
@@ -162,7 +164,7 @@ export const uploadHandler = {
         const del = document.createElement("button");
         del.type = "button";
         del.className = "remove";
-        del.textContent = "x";
+        del.textContent = "❌";
         del.title = "Remove";
         del.setAttribute("aria-label", "Remove file from queue");
         del.addEventListener("click", (e) => {
@@ -303,6 +305,39 @@ export const uploadHandler = {
     return entries;
   },
 
+  hasPendingUploads() {
+    for (const batch of this.batches) {
+      for (const f of batch.files) {
+        if (f.removed || f.done || f.deleting || f.canceled) continue;
+        return true;
+      }
+    }
+    return false;
+  },
+
+  countActiveUploads() {
+    let count = 0;
+    for (const batch of this.batches) {
+      for (const f of batch.files) {
+        if (f.inProgress && !f.canceled) count += 1;
+      }
+    }
+    return count;
+  },
+
+  takeNextPendingEntry() {
+    for (const batch of this.batches) {
+      for (const f of batch.files) {
+        if (f.inProgress || f.removed || f.done || f.deleting || f.canceled) {
+          continue;
+        }
+        f.inProgress = true;
+        return { f, batch };
+      }
+    }
+    return null;
+  },
+
   refreshQueueStatuses() {
     const entries = this.collectPendingEntries().filter(({ f }) => !f.canceled);
     const waiting = entries.filter(
@@ -329,92 +364,105 @@ export const uploadHandler = {
 
   // --- Concurrency Patch ---
   async uploadConcurrent(concurrency = 4) {
-    if (this.uploading) return;
-    this.uploading = true;
-    const allFiles = this.collectPendingEntries();
-    if (!allFiles.length) {
-      this.uploading = false;
+    if (this.uploading) {
+      this.refreshQueueStatuses();
       return;
     }
-    let idx = 0;
+    if (!this.hasPendingUploads()) {
+      this.refreshQueueStatuses();
+      return;
+    }
+    this.uploading = true;
     this.refreshQueueStatuses();
-    const uploadNext = async () => {
+
+    const runWorker = async () => {
       while (true) {
-        const current = idx++;
-        if (current >= allFiles.length) return;
-        const { f, batch } = allFiles[current];
-        if (f.canceled || f.removed) {
-          this.refreshQueueStatuses();
-          continue;
+        const entry = this.takeNextPendingEntry();
+        if (!entry) {
+          return;
         }
+        const { f, batch } = entry;
+        const activeCount = this.countActiveUploads();
+        const isPrimary = activeCount === 1;
+        const shouldShowStatus =
+          !f.hashChecked && this.shouldUseChunk(f.file) && !f.canceled;
 
-        if (!f.hashChecked) {
-          const shouldShowStatus = this.shouldUseChunk(f.file) && !f.canceled;
-          try {
-            if (shouldShowStatus) {
-              this.setStatusMessage(f, "Calculating checksum…", {
-                state: "hashing",
-                ariaLive: current === 0 ? "assertive" : "polite",
-              });
-            }
-            if (!f.hashPromise) {
-              f.hashPromise = this.calculateFileHash(f.file);
-            }
-            const hash = await f.hashPromise;
-            if (f.canceled) {
-              if (shouldShowStatus) this.setStatusMessage(f, "");
-              this.refreshQueueStatuses();
-              continue;
-            }
-            f.hash = hash;
-            const exists = await this.checkFileHash(hash);
-            if (f.canceled) {
-              if (shouldShowStatus) this.setStatusMessage(f, "");
-              this.refreshQueueStatuses();
-              continue;
-            }
-            f.hashChecked = true;
-            if (exists) {
-              if (shouldShowStatus) this.setStatusMessage(f, "");
-              this.handlePreUploadDuplicate(f, batch);
-              this.refreshQueueStatuses();
-              continue;
-            }
-          } catch (e) {
-            f.hashChecked = true;
-            if (window.DEBUG_LOGS)
-              console.warn("Hash check failed, proceeding with upload", e);
-          } finally {
-            if (shouldShowStatus && !f.canceled) {
-              this.setStatusMessage(f, "");
-            }
+        try {
+          if (f.canceled || f.removed) {
             this.refreshQueueStatuses();
+            continue;
           }
-        }
 
-        if (f.canceled || f.removed) {
+          if (shouldShowStatus) {
+            this.setStatusMessage(f, "Calculating checksum…", {
+              state: "hashing",
+              ariaLive: isPrimary ? "assertive" : "polite",
+            });
+          }
+
+          if (!f.hashChecked) {
+            try {
+              if (!f.hashPromise) {
+                f.hashPromise = this.calculateFileHash(f.file);
+              }
+              const hash = await f.hashPromise;
+              if (f.canceled) {
+                continue;
+              }
+              f.hash = hash;
+              const exists = await this.checkFileHash(hash);
+              if (f.canceled) {
+                continue;
+              }
+              f.hashChecked = true;
+              if (exists) {
+                this.handlePreUploadDuplicate(f, batch);
+                continue;
+              }
+            } catch (e) {
+              f.hashChecked = true;
+              if (window.DEBUG_LOGS)
+                console.warn("Hash check failed, proceeding with upload", e);
+            } finally {
+              if (shouldShowStatus && !f.canceled) {
+                this.setStatusMessage(f, "");
+              }
+            }
+          }
+
+          if (f.canceled || f.removed) {
+            continue;
+          }
+
           this.refreshQueueStatuses();
-          continue;
+          await this.uploadOne(f, batch);
+        } finally {
+          f.inProgress = false;
+          this.refreshQueueStatuses();
         }
-
-        this.refreshQueueStatuses();
-        await this.uploadOne(f, batch);
-        this.refreshQueueStatuses();
       }
     };
-    // Start N concurrent uploads
+
+    const workerCount = Math.max(
+      1,
+      Number.isFinite(concurrency) ? concurrency : 1
+    );
     const workers = [];
-    for (let i = 0; i < concurrency; i++) {
-      workers.push(uploadNext());
+    for (let i = 0; i < workerCount; i++) {
+      workers.push(runWorker());
     }
     await Promise.all(workers);
-    // Clean up removed files and empty batches
+
     for (const batch of this.batches) {
       batch.files = batch.files.filter((f) => !f.removed);
     }
     this.batches = this.batches.filter((b) => b.files.length);
     this.refreshQueueStatuses();
     this.uploading = false;
+
+    if (this.hasPendingUploads()) {
+      queueMicrotask(() => this.autoUpload());
+    }
   },
 
   async calculateFileHash(file) {
@@ -719,7 +767,12 @@ export const uploadHandler = {
     if (!f?.container) return;
     const text = typeof message === "string" ? message : "";
     const opts = options ?? {};
-    const { ariaLive = "polite", state = null, persist = false } = opts;
+    const {
+      ariaLive = "polite",
+      state = null,
+      persist = false,
+      preservePercent = false,
+    } = opts;
 
     if (!text) {
       if (f.statusEl) {
@@ -734,8 +787,31 @@ export const uploadHandler = {
           f.statusText = null;
         }
       }
+      f.statusPercent = null;
       f.statusState = null;
       return;
+    }
+
+    let finalText = text;
+    const percentPattern = /\((\d{1,3})%\)\s*$/;
+    if (preservePercent && !percentPattern.test(finalText)) {
+      let cachedPercent = null;
+      if (
+        typeof f.statusPercent === "number" &&
+        Number.isFinite(f.statusPercent)
+      ) {
+        cachedPercent = f.statusPercent;
+      } else if (
+        typeof f.lastProgressPercent === "number" &&
+        Number.isFinite(f.lastProgressPercent) &&
+        f.lastProgressPercent >= 0
+      ) {
+        cachedPercent = f.lastProgressPercent;
+      }
+      if (cachedPercent !== null) {
+        const rounded = Math.round(Math.min(100, Math.max(0, cachedPercent)));
+        finalText = `${finalText} (${rounded}%)`;
+      }
     }
 
     if (!f.statusEl) {
@@ -781,7 +857,7 @@ export const uploadHandler = {
 
     f.statusEl.style.display = "flex";
     if (f.statusText) {
-      f.statusText.textContent = text;
+      f.statusText.textContent = finalText;
     }
     if (ariaLive) {
       f.statusEl.setAttribute("aria-live", ariaLive);
@@ -792,6 +868,12 @@ export const uploadHandler = {
       f.statusEl.dataset.state = state;
     } else if (f.statusEl.dataset.state) {
       delete f.statusEl.dataset.state;
+    }
+    const percentMatch = percentPattern.exec(finalText);
+    if (percentMatch) {
+      f.statusPercent = Number(percentMatch[1]);
+    } else if (!preservePercent) {
+      f.statusPercent = null;
     }
     f.statusState = state || null;
   },
@@ -1064,6 +1146,7 @@ export const uploadHandler = {
       this.setStatusMessage(f, baseStatus, {
         state: "uploading",
         ariaLive: humanIndex === 1 ? "assertive" : "off",
+        preservePercent: true,
       });
       const startBytes = start;
       const chunkSize = end - startBytes;
@@ -1157,10 +1240,19 @@ export const uploadHandler = {
         durationMs,
       });
       this.updateProgressBar(f, f.uploadedBytes, f.file.size);
-      const percent = Math.round(
-        Math.min(100, Math.max(0, (f.uploadedBytes / (f.file.size || 1)) * 100))
+      const totalSize = f.file.size || 1;
+      let percent = Math.floor(
+        Math.min(100, Math.max(0, (f.uploadedBytes / totalSize) * 100 + 0.0001))
       );
-      if (percent !== f.lastProgressPercent) {
+      const lastVisiblePercent = Number.isFinite(f.statusPercent)
+        ? f.statusPercent
+        : Number.isFinite(f.lastProgressPercent)
+        ? f.lastProgressPercent
+        : -1;
+      if (percent < lastVisiblePercent) {
+        percent = lastVisiblePercent;
+      }
+      if (percent > lastVisiblePercent) {
         const message =
           percent >= 100
             ? `${baseStatus} (100%)`
@@ -1168,8 +1260,10 @@ export const uploadHandler = {
         this.setStatusMessage(f, message, {
           state: "uploading",
           ariaLive: humanIndex === 1 && percent <= 5 ? "assertive" : "off",
+          preservePercent: true,
         });
         f.lastProgressPercent = percent;
+        f.statusPercent = percent;
       }
     }
     this.stopChunkSmoothing(f, { actualBytes: f.uploadedBytes });
@@ -1338,6 +1432,7 @@ export const uploadHandler = {
   cancelPendingUpload(f) {
     f.canceled = true;
     f.removed = true;
+    f.inProgress = false;
     try {
       showSnack("Upload canceled.");
     } catch {}
@@ -1382,6 +1477,7 @@ export const uploadHandler = {
     this.setStatusMessage(f, "");
     this.removeLinkForFile(f);
     f.lastProgressPercent = -1;
+    f.inProgress = false;
     try {
       showSnack("Duplicate file: already uploaded.");
     } catch {}
@@ -1422,6 +1518,7 @@ export const uploadHandler = {
     this.setStatusMessage(f, "");
     this.removeLinkForFile(f);
     f.lastProgressPercent = -1;
+    f.inProgress = false;
     try {
       showSnack("Duplicate file: already uploaded.");
     } catch {}
@@ -1443,6 +1540,7 @@ export const uploadHandler = {
     this.setStatusMessage(f, "");
     f.lastProgressPercent = -1;
     f.uploadedBytes = f.file.size;
+    f.inProgress = false;
     if (f.barSpan) {
       f.barSpan.style.width = "100%";
       requestAnimationFrame(() => {

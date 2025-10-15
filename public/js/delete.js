@@ -11,14 +11,22 @@ export const deleteHandler = {
       f.deleteBtn.disabled = true;
       f.deleteBtn.textContent = "…";
       f.deleteBtn.title = "Deleting...";
+      f.deleteBtn.setAttribute("aria-label", "Deleting file");
     } else if (!f.remoteName) {
       f.deleteBtn.textContent = "❌";
       f.deleteBtn.disabled = false;
       f.deleteBtn.title = "Remove (not uploaded)";
+      f.deleteBtn.setAttribute("aria-label", "Remove file from upload queue");
+    } else if (!f.done) {
+      f.deleteBtn.textContent = "❌";
+      f.deleteBtn.disabled = false;
+      f.deleteBtn.title = "Cancel upload";
+      f.deleteBtn.setAttribute("aria-label", "Cancel upload");
     } else {
       f.deleteBtn.textContent = "❌";
       f.deleteBtn.disabled = false;
       f.deleteBtn.title = "Delete from server";
+      f.deleteBtn.setAttribute("aria-label", "Delete uploaded file");
     }
   },
 
@@ -42,7 +50,7 @@ export const deleteHandler = {
 
   handleDeleteClick(f, batch) {
     if (f.deleting) return;
-    if (!f.remoteName) {
+    if (!f.remoteName || !f.done) {
       uploadHandler.cancelPendingUpload(f);
       if (f.container) {
         animateRemove(f.container, () => {
@@ -54,9 +62,9 @@ export const deleteHandler = {
           }
         });
       }
-    } else {
-      this.deleteRemote(f, batch);
+      return;
     }
+    this.deleteRemote(f, batch);
   },
 
   deleteRemote(f, batch) {
