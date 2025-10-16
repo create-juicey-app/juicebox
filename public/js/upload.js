@@ -234,7 +234,7 @@ export const uploadHandler = {
 
     return f.linkInput;
   },
-
+  // test
   removeLinkForFile(f) {
     if (f?.linkInput) {
       f.linkInput.remove();
