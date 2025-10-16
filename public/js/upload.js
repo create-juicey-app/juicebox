@@ -127,7 +127,7 @@ export const uploadHandler = {
         const del = document.createElement("button");
         del.type = "button";
         del.className = "remove";
-        del.textContent = "x";
+        del.textContent = "❌";
         del.title = "Remove";
         del.setAttribute("aria-label", "Remove file from queue");
         del.addEventListener("click", (e) => {
