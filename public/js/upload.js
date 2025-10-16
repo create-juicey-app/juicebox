@@ -1769,6 +1769,9 @@ export const uploadHandler = {
       pending: false,
       highlight: true,
     });
+
+    // Refresh owned list after successful upload
+    ownedHandler.refreshOwned();
   },
 
   autoUpload() {

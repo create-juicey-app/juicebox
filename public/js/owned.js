@@ -32,6 +32,10 @@ export const ownedHandler = {
   renderState: "init",
   lastSignature: "",
 
+  // FLIP animation state
+  chipPositions: new Map(), // Map<name, DOMRect>
+  chipElements: new Map(), // Map<name, HTMLElement>
+
   setLoading(state) {
     this.loading = state;
     if (!ownedPanel) return;
@@ -119,21 +123,134 @@ export const ownedHandler = {
       .join("::");
   },
 
-  updateExistingChips(names) {
+  capturePositions() {
+    if (!ownedList) return;
+    const grid = ownedList.querySelector('.owned-grid[data-role="owned"]');
+    if (!grid) return;
+
+    this.chipPositions.clear();
+    this.chipElements.clear();
+
+    grid.querySelectorAll(".owned-chip[data-name]").forEach((chip) => {
+      const name = chip.dataset.name;
+      if (name) {
+        this.chipPositions.set(name, chip.getBoundingClientRect());
+        this.chipElements.set(name, chip);
+      }
+    });
+  },
+
+  animateToNewPositions(newNames) {
+    if (!ownedList || this.chipPositions.size === 0) return;
+    const grid = ownedList.querySelector('.owned-grid[data-role="owned"]');
+    if (!grid) return;
+
+    const animations = [];
+
+    // Animate existing chips to new positions
+    grid.querySelectorAll(".owned-chip[data-name]").forEach((chip) => {
+      const name = chip.dataset.name;
+      const oldRect = this.chipPositions.get(name);
+
+      if (oldRect) {
+        const newRect = chip.getBoundingClientRect();
+        const deltaX = oldRect.left - newRect.left;
+        const deltaY = oldRect.top - newRect.top;
+
+        if (Math.abs(deltaX) > 0.5 || Math.abs(deltaY) > 0.5) {
+          chip.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+          chip.style.transition = "none";
+
+          requestAnimationFrame(() => {
+            chip.style.transition =
+              "transform 0.32s cubic-bezier(0.4, 0.0, 0.2, 1)";
+            chip.style.transform = "";
+          });
+
+          animations.push(
+            new Promise((resolve) => {
+              const handler = () => {
+                chip.removeEventListener("transitionend", handler);
+                resolve();
+              };
+              chip.addEventListener("transitionend", handler);
+              setTimeout(resolve, 400); // fallback
+            })
+          );
+        }
+      } else {
+        // New chip - fade in
+        chip.style.opacity = "0";
+        chip.style.transform = "scale(0.9)";
+        chip.style.transition = "none";
+
+        requestAnimationFrame(() => {
+          chip.style.transition =
+            "opacity 0.28s ease-out, transform 0.28s cubic-bezier(0.4, 0.0, 0.2, 1)";
+          chip.style.opacity = "";
+          chip.style.transform = "";
+        });
+      }
+    });
+
+    // Animate removed chips out
+    this.chipPositions.forEach((rect, name) => {
+      if (!newNames.includes(name)) {
+        const oldChip = this.chipElements.get(name);
+        if (oldChip && oldChip.parentElement) {
+          oldChip.style.transition =
+            "opacity 0.22s ease-in, transform 0.22s ease-in";
+          oldChip.style.opacity = "0";
+          oldChip.style.transform = "scale(0.85)";
+
+          animations.push(
+            new Promise((resolve) => {
+              setTimeout(() => {
+                if (oldChip.parentElement) {
+                  oldChip.remove();
+                }
+                resolve();
+              }, 240);
+            })
+          );
+        }
+      }
+    });
+
+    return Promise.all(animations);
+  },
+
+  updateExistingChipsAnimated(names) {
     if (!ownedList) return false;
     const grid = ownedList.querySelector('.owned-grid[data-role="owned"]');
     if (!grid) return false;
-    const chips = Array.from(grid.children).filter((child) =>
-      child.classList?.contains("owned-chip")
+
+    const existingChips = Array.from(
+      grid.querySelectorAll(".owned-chip[data-name]")
     );
-    if (chips.length !== names.length) return false;
+    const existingNames = existingChips.map((chip) => chip.dataset.name);
+
+    // Check if we can do an in-place animated update
+    const sameSet =
+      names.length === existingNames.length &&
+      names.every((n) => existingNames.includes(n));
+
+    if (!sameSet) return false;
+
+    // Capture current positions before any changes
+    this.capturePositions();
 
     const nowSec = Date.now() / 1000;
+    const chipMap = new Map();
+    existingChips.forEach((chip) => chipMap.set(chip.dataset.name, chip));
 
-    names.forEach((n, idx) => {
-      const chip = chips[idx];
+    // Reorder chips in DOM to match new order
+    const fragment = document.createDocumentFragment();
+    names.forEach((name) => {
+      const chip = chipMap.get(name);
       if (!chip) return;
-      const meta = this.ownedMeta.get(n) || {};
+
+      const meta = this.ownedMeta.get(name) || {};
       const expiry = Number(meta.expires) || -1;
       if (expiry >= 0) {
         chip.dataset.exp = expiry;
@@ -147,8 +264,9 @@ export const ownedHandler = {
       }
 
       const remainRaw = expiry > 0 ? expiry - nowSec : -1;
-      const displayName = (meta.original && meta.original.trim()) || n;
-      const titleFull = displayName === n ? n : `${displayName} (${n})`;
+      const displayName = (meta.original && meta.original.trim()) || name;
+      const titleFull =
+        displayName === name ? name : `${displayName} (${name})`;
 
       const nameEl = chip.querySelector(".name");
       if (nameEl) {
@@ -175,30 +293,52 @@ export const ownedHandler = {
       }
 
       const ttlBar = chip.querySelector(".ttl-bar");
-      if (ttlBar) ttlBar.style.width = `${percent.toFixed(2)}%`;
+      if (ttlBar) {
+        ttlBar.style.transition = "width 0.4s ease-out";
+        ttlBar.style.width = `${percent.toFixed(2)}%`;
+      }
 
       const linkInput = chip.querySelector("input.link-input");
       if (linkInput) {
-        const newValue = `${location.origin}/f/${n}`;
+        const newValue = `${location.origin}/f/${name}`;
         if (linkInput.value !== newValue) linkInput.value = newValue;
       }
+
+      fragment.appendChild(chip);
     });
+
+    grid.appendChild(fragment);
+
+    // Animate to new positions
+    this.animateToNewPositions(names);
 
     return true;
   },
 
-  mountOwnedList(names, { instant = false } = {}) {
+  mountOwnedList(names, { instant = false, animate = false } = {}) {
     if (!ownedList) return;
+
+    // Capture positions before clearing (for animation)
+    if (animate && !instant) {
+      this.capturePositions();
+    }
+
     ownedList
       .querySelectorAll('[data-empty="true"]')
       .forEach((node) => node.remove());
-    ownedList
-      .querySelectorAll('.owned-grid[data-role="owned"]')
-      .forEach((node) => node.remove());
 
-    const grid = document.createElement("div");
-    grid.className = "owned-grid";
-    grid.dataset.role = "owned";
+    const existingGrid = ownedList.querySelector(
+      '.owned-grid[data-role="owned"]'
+    );
+    if (existingGrid && !animate) {
+      existingGrid.remove();
+    }
+
+    const grid = existingGrid || document.createElement("div");
+    if (!existingGrid) {
+      grid.className = "owned-grid";
+      grid.dataset.role = "owned";
+    }
 
     const nowSec = Date.now() / 1000;
 
@@ -292,13 +432,26 @@ export const ownedHandler = {
       return chip;
     };
 
+    // Clear and rebuild grid
+    if (existingGrid) {
+      existingGrid.innerHTML = "";
+    }
+
     names.forEach((n) => {
       const chip = createChip(n);
       grid.appendChild(chip);
     });
 
-    ownedList.appendChild(grid);
-    this.prepareGridEnter(grid, { instant });
+    if (!existingGrid) {
+      ownedList.appendChild(grid);
+    }
+
+    // Apply animations
+    if (animate && !instant) {
+      this.animateToNewPositions(names);
+    } else {
+      this.prepareGridEnter(grid, { instant });
+    }
   },
 
   mountEmptyState({ instant = false } = {}) {
@@ -400,15 +553,30 @@ export const ownedHandler = {
     }
 
     const signature = this.buildSignature(names);
-    if (this.renderState === "list" && signature === this.lastSignature) {
-      this.updateExistingChips(names);
+    const canAnimate = this.renderState === "list" && this.ownedInitialRender;
+
+    if (canAnimate && signature === this.lastSignature) {
+      // Just update values with smooth transitions
+      this.updateExistingChipsAnimated(names);
       this.lastSignature = signature;
       this.ownedInitialRender = true;
       return;
     }
 
+    if (canAnimate) {
+      // Try animated update if possible
+      const animated = this.updateExistingChipsAnimated(names);
+      if (animated) {
+        this.renderState = "list";
+        this.lastSignature = signature;
+        this.ownedInitialRender = true;
+        return;
+      }
+    }
+
+    // Fall back to full rebuild with animation
     const instant = this.renderState === "init";
-    this.mountOwnedList(names, { instant });
+    this.mountOwnedList(names, { instant, animate: canAnimate && !instant });
     this.renderState = "list";
     this.lastSignature = signature;
     this.ownedInitialRender = true;

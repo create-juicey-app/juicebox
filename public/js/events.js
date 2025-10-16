@@ -1,8 +1,7 @@
 // js/events.js
 
-import { dropZone, fileInput } from './ui.js';
-import { uploadHandler } from './upload.js';
-import { ownedHandler } from './owned.js';
+import { dropZone, fileInput } from "./ui.js";
+import { uploadHandler } from "./upload.js";
 
 function setupUploadEvents() {
   if (!dropZone) return;
@@ -45,18 +44,5 @@ export function setupEventListeners() {
     }
   });
 
-  // Paste support is in other.js
-
-  // Debounced/throttled periodic refresh
-  let lastRefresh = 0;
-  const MIN_REFRESH_INTERVAL = 10000; // 10s
-  function debouncedRefreshOwned() {
-    const now = Date.now();
-    if (now - lastRefresh < MIN_REFRESH_INTERVAL) return;
-    if (document.hidden) return;
-    lastRefresh = now;
-    ownedHandler.refreshOwned();
-  }
-  setInterval(debouncedRefreshOwned, 15000);
-  window.addEventListener("focus", debouncedRefreshOwned);
+  // Removed periodic refresh and focus-based refresh
 }

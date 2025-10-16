@@ -63,8 +63,8 @@ export const deleteHandler = {
         if (r.ok) {
           ownedHandler.ownedCache.delete(f.remoteName);
           ownedHandler.ownedMeta.delete(f.remoteName);
-          ownedHandler.renderOwned();
-          this.removeFromUploads(f.remoteName); // <-- Ensure removal from upload section
+          ownedHandler.refreshOwned(); // Changed from renderOwned()
+          this.removeFromUploads(f.remoteName);
           if (f.container) {
             animateRemove(f.container, () => {
               batch.files = batch.files.filter((x) => x !== f);
