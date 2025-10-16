@@ -56,15 +56,22 @@ export const deleteHandler = {
 
   deleteRemote(f, batch) {
     if (!f.remoteName || f.deleting) return;
+    const targetName = ownedHandler.normalizeRemoteName(f.remoteName);
+    if (!targetName) {
+      showSnack("Invalid file reference.");
+      this.updateDeleteButton(f);
+      return;
+    }
+    f.remoteName = targetName;
     f.deleting = true;
     this.updateDeleteButton(f);
-    fetch("/d/" + encodeURIComponent(f.remoteName), { method: "DELETE" })
+    fetch("/d/" + encodeURIComponent(targetName), { method: "DELETE" })
       .then(async (r) => {
         if (r.ok) {
-          ownedHandler.ownedCache.delete(f.remoteName);
-          ownedHandler.ownedMeta.delete(f.remoteName);
-          ownedHandler.refreshOwned(); // Changed from renderOwned()
-          this.removeFromUploads(f.remoteName);
+          ownedHandler.ownedCache.delete(targetName);
+          ownedHandler.ownedMeta.delete(targetName);
+          ownedHandler.refreshOwned();
+          this.removeFromUploads(targetName);
           if (f.container) {
             animateRemove(f.container, () => {
               batch.files = batch.files.filter((x) => x !== f);
@@ -101,10 +108,13 @@ export const deleteHandler = {
   },
 
   removeFromUploads(remoteName) {
-    if (!remoteName) return;
+    const targetName = ownedHandler.normalizeRemoteName(remoteName);
+    if (!targetName) return;
     uploadHandler.batches.forEach((batch) => {
       batch.files.forEach((f) => {
-        if (f.remoteName === remoteName) {
+        const entryName = ownedHandler.normalizeRemoteName(f.remoteName);
+        if (entryName === targetName) {
+          f.remoteName = entryName;
           if (f.container) {
             animateRemove(f.container, () => {
               batch.files = batch.files.filter((x) => x !== f);

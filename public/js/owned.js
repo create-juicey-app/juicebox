@@ -485,21 +485,48 @@ export const ownedHandler = {
     this.lastSignature = "empty";
   },
 
+  normalizeRemoteName(raw) {
+    let value = raw == null ? "" : String(raw).trim();
+    if (!value) return null;
+    try {
+      if (/^https?:\/\//i.test(value)) {
+        const url = new URL(value);
+        value = url.pathname || "";
+      }
+    } catch {}
+    value = value.split("?")[0].split("#")[0].replace(/^\/+/, "");
+    if (value.startsWith("f/")) value = value.slice(2);
+    if (value.startsWith("d/")) value = value.slice(2);
+    if (value.includes("/")) {
+      const parts = value.split("/");
+      value = parts.pop() || parts.pop() || "";
+    }
+    try {
+      value = decodeURIComponent(value);
+    } catch {}
+    return value.trim() || null;
+  },
+
   applyResponse(data) {
     if (!data || !Array.isArray(data.files)) {
       return false;
     }
-    this.ownedCache = new Set(data.files.map((f) => f.replace(/^f\//, "")));
+    const normalized = data.files
+      .map((f) => this.normalizeRemoteName(f))
+      .filter(Boolean);
+    this.ownedCache = new Set(normalized);
     this.ownedMeta.clear();
     if (Array.isArray(data.metas)) {
-      data.metas.forEach((m) =>
-        this.ownedMeta.set(m.file.replace(/^f\//, ""), {
+      data.metas.forEach((m) => {
+        const key = this.normalizeRemoteName(m.file);
+        if (!key) return;
+        this.ownedMeta.set(key, {
           expires: m.expires,
           original: m.original || "",
           total: m.total,
           set: m.set,
-        })
-      );
+        });
+      });
     }
     return true;
   },
@@ -608,9 +635,9 @@ export const ownedHandler = {
   },
 
   addOwned(remoteName) {
-    if (!remoteName || this.ownedCache.has(remoteName)) return;
-    this.ownedCache.add(remoteName);
-    // Only refresh from server to get canonical expiration (and render)
+    const normalized = this.normalizeRemoteName(remoteName);
+    if (!normalized || this.ownedCache.has(normalized)) return;
+    this.ownedCache.add(normalized);
     this.refreshOwned();
   },
 };
