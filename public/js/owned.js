@@ -35,7 +35,24 @@ export const ownedHandler = {
   // FLIP animation state
   chipPositions: new Map(), // Map<name, DOMRect>
   chipElements: new Map(), // Map<name, HTMLElement>
-
+  createListItem(kind) {
+    const li = document.createElement("li");
+    li.className = `owned-item${kind ? ` owned-item-${kind}` : ""}`;
+    if (kind) li.dataset.kind = kind;
+    return li;
+  },
+  getListItemByKind(kind) {
+    if (!ownedList || !kind) return null;
+    return ownedList.querySelector(`li[data-kind="${kind}"]`);
+  },
+  removeListItemsByKinds(kinds = []) {
+    if (!ownedList || !Array.isArray(kinds)) return;
+    kinds.forEach((kind) => {
+      ownedList
+        .querySelectorAll(`li[data-kind="${kind}"]`)
+        .forEach((node) => node.remove());
+    });
+  },
   setLoading(state) {
     this.loading = state;
     if (!ownedPanel) return;
@@ -66,9 +83,7 @@ export const ownedHandler = {
   renderSkeleton() {
     if (!ownedList || ownedList.querySelector('[data-skeleton="true"]')) return;
     this.renderState = "loading";
-    ownedList
-      .querySelectorAll('[data-empty="true"], .owned-grid[data-role="owned"]')
-      .forEach((node) => node.remove());
+    this.removeListItemsByKinds(["empty", "grid"]);
     const grid = document.createElement("div");
     grid.className = "owned-grid";
     grid.dataset.skeleton = "true";
@@ -79,15 +94,16 @@ export const ownedHandler = {
       skeleton.innerHTML = `<div class="skeleton-line"></div><div class="skeleton-line compact"></div><div class="skeleton-bar"></div>`;
       grid.appendChild(skeleton);
     }
-    ownedList.appendChild(grid);
+    const wrapper = this.createListItem("skeleton");
+    wrapper.setAttribute("aria-hidden", "true");
+    wrapper.appendChild(grid);
+    ownedList.appendChild(wrapper);
     this.prepareGridEnter(grid, { instant: true });
   },
 
   clearSkeleton() {
     if (!ownedList) return;
-    ownedList
-      .querySelectorAll('[data-skeleton="true"]')
-      .forEach((node) => node.remove());
+    this.removeListItemsByKinds(["skeleton"]);
   },
 
   prepareGridEnter(grid, { instant = false } = {}) {
@@ -317,31 +333,25 @@ export const ownedHandler = {
 
   mountOwnedList(names, { instant = false, animate = false } = {}) {
     if (!ownedList) return;
-
-    // Capture positions before clearing (for animation)
     if (animate && !instant) {
       this.capturePositions();
     }
-
-    ownedList
-      .querySelectorAll('[data-empty="true"]')
-      .forEach((node) => node.remove());
-
-    const existingGrid = ownedList.querySelector(
-      '.owned-grid[data-role="owned"]'
-    );
-    if (existingGrid && !animate) {
-      existingGrid.remove();
-    }
-
-    const grid = existingGrid || document.createElement("div");
-    if (!existingGrid) {
+    this.removeListItemsByKinds(["empty", "skeleton"]);
+    const existingItem = this.getListItemByKind("grid");
+    let grid =
+      existingItem?.querySelector('.owned-grid[data-role="owned"]') ||
+      document.createElement("div");
+    if (!grid.dataset.role) {
       grid.className = "owned-grid";
       grid.dataset.role = "owned";
     }
-
+    grid.innerHTML = "";
+    if (!existingItem) {
+      const wrapper = this.createListItem("grid");
+      wrapper.appendChild(grid);
+      ownedList.appendChild(wrapper);
+    }
     const nowSec = Date.now() / 1000;
-
     const createChip = (n) => {
       const meta = this.ownedMeta.get(n) || {};
       const chip = document.createElement("div");
@@ -433,8 +443,8 @@ export const ownedHandler = {
     };
 
     // Clear and rebuild grid
-    if (existingGrid) {
-      existingGrid.innerHTML = "";
+    if (existingItem) {
+      existingItem.innerHTML = "";
     }
 
     names.forEach((n) => {
@@ -442,11 +452,6 @@ export const ownedHandler = {
       grid.appendChild(chip);
     });
 
-    if (!existingGrid) {
-      ownedList.appendChild(grid);
-    }
-
-    // Apply animations
     if (animate && !instant) {
       this.animateToNewPositions(names);
     } else {
@@ -456,14 +461,7 @@ export const ownedHandler = {
 
   mountEmptyState({ instant = false } = {}) {
     if (!ownedList) return;
-    ownedList
-      .querySelectorAll('.owned-grid[data-role="owned"]')
-      .forEach((node) => node.remove());
-    const existing = ownedList.querySelector('[data-empty="true"]');
-    if (existing) {
-      this.prepareGridEnter(existing, { instant });
-      return;
-    }
+    this.removeListItemsByKinds(["grid", "skeleton"]);
     const grid = document.createElement("div");
     grid.className = "owned-grid";
     grid.dataset.empty = "true";
@@ -472,7 +470,9 @@ export const ownedHandler = {
     empty.className = "owned-empty";
     empty.innerHTML = `<strong>No files found ):</strong><span>Your uploads will land here once they finish.</span>`;
     grid.appendChild(empty);
-    ownedList.appendChild(grid);
+    const wrapper = this.createListItem("empty");
+    wrapper.appendChild(grid);
+    ownedList.appendChild(wrapper);
     this.prepareGridEnter(grid, { instant });
   },
 
