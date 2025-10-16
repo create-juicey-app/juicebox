@@ -84,13 +84,19 @@ pub async fn add_security_headers(
 }
 
 pub async fn enforce_host(req: Request<Body>, next: Next) -> Response {
-    let host = req
+    let host_header = req
         .headers()
         .get("host")
         .and_then(|h| h.to_str().ok())
         .unwrap_or_default();
-    if host == PROD_HOST {
-        trace!(host, "host enforcement passed");
+    let normalized_host = host_header
+        .split_once(':')
+        .map(|(name, _)| name)
+        .unwrap_or(host_header)
+        .trim_end_matches('.');
+
+    if normalized_host.eq_ignore_ascii_case(PROD_HOST) {
+        trace!(host = host_header, "host enforcement passed");
         next.run(req).await
     } else {
         let uri = format!(
@@ -102,8 +108,12 @@ pub async fn enforce_host(req: Request<Body>, next: Next) -> Response {
                 .unwrap_or("/")
         );
         let hv = HeaderValue::from_str(&uri).unwrap();
-        info!(requested_host = host, redirect = %uri, "redirecting request to canonical host");
-        (StatusCode::MOVED_PERMANENTLY, [(LOCATION, hv)]).into_response()
+        info!(requested_host = host_header, redirect = %uri, "redirecting request to canonical host");
+        (
+            StatusCode::PERMANENT_REDIRECT,
+            [(LOCATION, hv)],
+        )
+            .into_response()
     }
 }
 

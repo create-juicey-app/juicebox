@@ -1,7 +1,7 @@
 mod common {}
 
 use juicebox::state::{AppState, ReportRecord, TelemetryState};
-use juicebox::util::{UPLOAD_CONCURRENCY, hash_ip_string};
+use juicebox::util::{hash_ip_string, UPLOAD_CONCURRENCY};
 use std::{collections::HashMap, path::Path, sync::Arc, time::SystemTime};
 use tempfile::TempDir;
 use tokio::sync::{RwLock, Semaphore};
