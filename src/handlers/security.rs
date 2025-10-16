@@ -1,16 +1,16 @@
 use axum::body::Body;
 use axum::extract::{ConnectInfo, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, EXPIRES, LOCATION};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, EXPIRES};
 use axum::http::{HeaderValue, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use std::net::SocketAddr as ClientAddr;
 use std::time::{Duration, SystemTime};
 use tokio::fs;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace, warn};
 
 use crate::state::{AppState, IpBan};
-use crate::util::{PROD_HOST, extract_client_ip};
+use crate::util::extract_client_ip;
 
 pub async fn add_security_headers(
     State(state): State<AppState>,
@@ -81,40 +81,6 @@ pub async fn add_security_headers(
         }
     }
     resp
-}
-
-pub async fn enforce_host(req: Request<Body>, next: Next) -> Response {
-    let host_header = req
-        .headers()
-        .get("host")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or_default();
-    let normalized_host = host_header
-        .split_once(':')
-        .map(|(name, _)| name)
-        .unwrap_or(host_header)
-        .trim_end_matches('.');
-
-    if normalized_host.eq_ignore_ascii_case(PROD_HOST) {
-        trace!(host = host_header, "host enforcement passed");
-        next.run(req).await
-    } else {
-        let uri = format!(
-            "https://{}{}",
-            PROD_HOST,
-            req.uri()
-                .path_and_query()
-                .map(|pq| pq.as_str())
-                .unwrap_or("/")
-        );
-        let hv = HeaderValue::from_str(&uri).unwrap();
-        info!(requested_host = host_header, redirect = %uri, "redirecting request to canonical host");
-        (
-            StatusCode::PERMANENT_REDIRECT,
-            [(LOCATION, hv)],
-        )
-            .into_response()
-    }
 }
 
 pub async fn ban_gate(

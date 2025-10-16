@@ -4,7 +4,7 @@ use axum::{Router, extract::MatchedPath, middleware};
 use axum_server::Handle;
 use dashmap::DashMap;
 use juicebox::handlers::ban_gate;
-use juicebox::handlers::{add_cache_headers, add_security_headers, build_router, enforce_host};
+use juicebox::handlers::{add_cache_headers, add_security_headers, build_router};
 use juicebox::rate_limit::{RateLimiterInner, build_rate_limiter};
 use juicebox::state::{
     AppState, BanSubject, FileMeta, IpBan, ReportRecord, TelemetryState, cleanup_expired,
@@ -21,7 +21,7 @@ use std::{
     collections::HashMap,
     io::ErrorKind,
     net::SocketAddr,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime},
 };
@@ -364,6 +364,25 @@ fn read_trimmed_env(key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn resolve_dir_path(root: Option<&Path>, env_key: &str, default_relative: &str) -> PathBuf {
+    if let Some(value) = read_trimmed_env(env_key) {
+        let candidate = PathBuf::from(&value);
+        if candidate.is_absolute() || root.is_none() {
+            return candidate;
+        }
+        if let Some(root) = root {
+            return root.join(candidate);
+        }
+    }
+    if let Some(root) = root {
+        if default_relative.is_empty() {
+            return root.to_path_buf();
+        }
+        return root.join(default_relative);
+    }
+    PathBuf::from(default_relative)
+}
+
 fn resolve_sentry_release() -> Cow<'static, str> {
     if let Some(release) = read_trimmed_env("SENTRY_RELEASE") {
         return Cow::Owned(release);
@@ -576,15 +595,35 @@ async fn main() -> anyhow::Result<()> {
         panic!("SENTRY_VERIFY_PANIC triggered");
     }
 
-    let static_dir = Arc::new(PathBuf::from("./public"));
-    let upload_dir = Arc::new(PathBuf::from("./files"));
-    let data_dir = Arc::new(PathBuf::from("./data"));
+    let storage_root = read_trimmed_env("JUICEBOX_STORAGE_ROOT").map(PathBuf::from);
+    let static_dir = Arc::new(resolve_dir_path(None, "JUICEBOX_PUBLIC_DIR", "public"));
+    let data_dir = Arc::new(resolve_dir_path(
+        storage_root.as_deref(),
+        "JUICEBOX_DATA_DIR",
+        "data",
+    ));
+    let upload_dir = Arc::new(resolve_dir_path(
+        storage_root.as_deref(),
+        "JUICEBOX_UPLOAD_DIR",
+        "files",
+    ));
     let metadata_path = Arc::new(data_dir.join("file_owners.json"));
     let reports_path = Arc::new(data_dir.join("reports.json"));
     let admin_sessions_path = Arc::new(data_dir.join("admin_sessions.json"));
     let admin_key_path = Arc::new(data_dir.join("admin_key.json"));
     let bans_path = Arc::new(data_dir.join("ip_bans.json"));
-    let chunk_dir = Arc::new(data_dir.join("chunks"));
+    let chunk_dir = Arc::new(
+        read_trimmed_env("JUICEBOX_CHUNK_DIR")
+            .map(|value| {
+                let candidate = PathBuf::from(&value);
+                if candidate.is_absolute() {
+                    candidate
+                } else {
+                    data_dir.join(candidate)
+                }
+            })
+            .unwrap_or_else(|| data_dir.join("chunks")),
+    );
 
     // try create data dir earlier (already done above)
     fs::create_dir_all(&*static_dir).await?;
@@ -805,11 +844,12 @@ async fn main() -> anyhow::Result<()> {
                     html.push_str(&htmlescape::encode_minimal(&ev.details));
                     html.push_str("</pre></div>");
                 }
-                let file_link = format!("https://{}/f/{}", PROD_HOST, ev.file);
-                let admin_files = format!("https://{}/admin/files", PROD_HOST);
-                let admin_reports = format!("https://{}/admin/reports", PROD_HOST);
+                let canonical = PROD_HOST.as_str();
+                let file_link = format!("https://{}/f/{}", canonical, ev.file);
+                let admin_files = format!("https://{}/admin/files", canonical);
+                let admin_reports = format!("https://{}/admin/reports", canonical);
                 let ban_link = if !ev.owner_hash.is_empty() {
-                    format!("https://{}/admin/ban?ip={}", PROD_HOST, ev.owner_hash)
+                    format!("https://{}/admin/ban?ip={}", canonical, ev.owner_hash)
                 } else {
                     String::new()
                 };
@@ -905,7 +945,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let router = build_router(state.clone());
-    let mut app: Router = router
+    let app: Router = router
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<_>| {
@@ -949,14 +989,12 @@ async fn main() -> anyhow::Result<()> {
         .layer(axum::extract::DefaultBodyLimit::max(
             juicebox::util::max_file_bytes() as usize,
         ));
-    if state.production {
-        app = app.layer(middleware::from_fn(enforce_host));
-    }
 
     let addr: SocketAddr = ([0, 0, 0, 0], 1200).into();
     println!(
         "listening on {addr} (prod host: {}), admin key loaded (expires {})",
-        PROD_HOST, key_file.expires
+        PROD_HOST.as_str(),
+        key_file.expires
     );
     let shutdown_state = state.clone();
     let shutdown_notify_clone = shutdown_notify.clone();

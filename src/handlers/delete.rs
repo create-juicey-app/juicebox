@@ -152,14 +152,14 @@ async fn purge_cloudflare_file(fname: &str) -> Result<(), anyhow::Error> {
     };
     // Build the fully-qualified file URL to purge
     let encoded = urlencoding::encode(fname);
-    let file_url = format!("https://{}/f/{}", PROD_HOST, encoded);
+    let file_url = format!("https://{}/f/{}", PROD_HOST.as_str(), encoded);
 
     let client = reqwest::Client::new();
     let api_url = format!(
         "https://api.cloudflare.com/client/v4/zones/{}/purge_cache",
         zone_id
     );
-    let body_json = serde_json::json!({"files": [file_url]});
+    let body_json = serde_json::json!({ "files": [file_url] });
     let body_bytes = serde_json::to_vec(&body_json).map_err(|e| anyhow::anyhow!(e))?;
     let resp = client
         .post(&api_url)

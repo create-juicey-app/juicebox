@@ -24,7 +24,7 @@ pub use delete::{
 };
 pub use hosting::{ConfigResponse, config_handler, fetch_file_handler, file_handler};
 pub use reports::{ReportForm, ReportRecordEmail, report_handler};
-pub use security::{add_cache_headers, add_security_headers, ban_gate, enforce_host};
+pub use security::{add_cache_headers, add_security_headers, ban_gate};
 pub use upload::{
     CheckHashQuery, ChunkCompleteRequest, ChunkInitRequest, ChunkInitResponse, FileMetaEntry,
     ListResponse, UploadResponse, cancel_chunk_upload_handler, checkhash_handler,

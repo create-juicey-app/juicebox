@@ -26,7 +26,25 @@ static MAX_FILE_BYTES: Lazy<u64> = Lazy::new(|| {
         .and_then(|v| parse_size_bytes(&v))
         .unwrap_or(500 * 1024 * 1024) // default 500MB
 });
-pub const PROD_HOST: &str = "box.juicey.dev";
+pub static PROD_HOST: Lazy<String> = Lazy::new(|| {
+    std::env::var("JUICEBOX_PROD_HOST")
+        .ok()
+        .map(|value| {
+            let trimmed = value.trim();
+            if let Some((_, rest)) = trimmed.split_once("//") {
+                trim_host(rest)
+            } else {
+                trim_host(trimmed)
+            }
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "box.juicey.dev".to_string())
+});
+
+fn trim_host(input: &str) -> String {
+    let without_path = input.split(['/', '?', '#']).next().unwrap_or(input);
+    without_path.trim().trim_matches('/').to_string()
+}
 // Disallowed extensions
 pub const FORBIDDEN_EXTENSIONS: &[&str] = &[
     "exe", "dll", "bat", "cmd", "com", "scr", "cpl", "msi", "msp", "jar", "ps1", "psm1", "vbs",
@@ -262,7 +280,7 @@ pub fn hash_network_from_cidr(secret: &[u8], cidr: &str) -> Option<(IpVersion, u
 pub fn qualify_path(state: &AppState, path: &str) -> String {
     if state.production {
         let p = path.trim_start_matches('/');
-        format!("https://{}/{}", PROD_HOST, p)
+        format!("https://{}/{}", PROD_HOST.as_str(), p)
     } else {
         path.to_string()
     }

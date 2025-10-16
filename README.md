@@ -37,6 +37,16 @@ Before starting the server, set an `IP_HASH_SECRET` environment variable (minimu
 openssl rand -hex 32
 ```
 
+Copy `.env.example` to `.env` and adjust any overrides you need. Juicebox honours
+the most common options supplied through that file (or the host environment):
+
+- `MAX_FILE_SIZE` — limit per upload (e.g. `750MB`, `1GB`, or raw bytes).
+- `JUICEBOX_STORAGE_ROOT` — a base directory; relative storage overrides resolve beneath it.
+- `JUICEBOX_DATA_DIR`, `JUICEBOX_UPLOAD_DIR`, `JUICEBOX_CHUNK_DIR` — override the metadata, file, or chunk directories (defaults to `data/`, `files/`, and `data/chunks`; relative chunk paths resolve beneath the data directory).
+- `JUICEBOX_PUBLIC_DIR` — alternative static asset directory if you serve files elsewhere.
+- `JUICEBOX_PROD_HOST` — canonical host used for generated links (emails, CDN purges) when `APP_ENV=production`.
+- `APP_ENV` — set to `production` to enable production-only checks.
+
 #### Frontend assets & tests
 
 Install the JavaScript toolchain once:
