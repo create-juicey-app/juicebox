@@ -354,7 +354,6 @@ fn load_hash_secret_from_env() -> anyhow::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-const DEFAULT_SENTRY_DSN: &str = "https://2445be48039c81563cf6d34b49f709fd@o4510195308691456.ingest.de.sentry.io/4510195328286800";
 const SENTRY_FLUSH_TIMEOUT_SECS: u64 = 2;
 
 fn read_trimmed_env(key: &str) -> Option<String> {
@@ -427,11 +426,15 @@ struct SentryRuntime {
     release: String,
     environment: String,
     traces_sample_rate: f32,
+    error_sample_rate: f32,
+    trace_propagation_targets: Vec<String>,
     session_mode: SessionMode,
     auto_session_tracking: bool,
 }
 
-fn resolve_sentry_dsn(production: bool) -> Option<String> {
+// Only enable Sentry if SENTRY_DSN is explicitly provided. Do not fall back to an
+// embedded default DSN for security reasons.
+fn resolve_sentry_dsn(_production: bool) -> Option<String> {
     match std::env::var("SENTRY_DSN") {
         Ok(raw) => {
             let trimmed = raw.trim();
@@ -445,13 +448,7 @@ fn resolve_sentry_dsn(production: bool) -> Option<String> {
                 Some(trimmed.to_string())
             }
         }
-        Err(_) => {
-            if production {
-                Some(DEFAULT_SENTRY_DSN.to_string())
-            } else {
-                None
-            }
-        }
+        Err(_) => None,
     }
 }
 
@@ -469,14 +466,41 @@ fn resolve_sentry_environment(production: bool) -> String {
         })
 }
 
-fn resolve_sentry_traces_sample_rate(production: bool) -> f32 {
+fn resolve_sentry_traces_sample_rate(_production: bool) -> f32 {
     std::env::var("SENTRY_TRACES_SAMPLE_RATE")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .and_then(|value| value.parse::<f32>().ok())
         .map(|value| value.clamp(0.0, 1.0))
-        .unwrap_or(if production { 0.1 } else { 0.0 })
+    // Default to sampling everything (1.0) when SENTRY is enabled in production
+    // unless explicitly overridden. In development default to 1.0 as well to
+    // ensure we capture as many errors as possible during testing.
+    .unwrap_or(1.0)
+}
+
+fn resolve_sentry_error_sample_rate(_production: bool) -> f32 {
+    std::env::var("SENTRY_SAMPLE_RATE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .and_then(|value| value.parse::<f32>().ok())
+        .map(|value| value.clamp(0.0, 1.0))
+        .unwrap_or(1.0)
+}
+
+fn resolve_sentry_trace_targets() -> Vec<String> {
+    std::env::var("SENTRY_TRACE_PROPAGATION_TARGETS")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(|entry| entry.trim())
+                .filter(|entry| !entry.is_empty())
+                .map(|entry| entry.to_string())
+                .collect::<Vec<_>>()
+        })
+        .filter(|targets| !targets.is_empty())
+        .unwrap_or_else(|| vec!["^/".to_string()])
 }
 
 fn init_sentry(
@@ -485,24 +509,29 @@ fn init_sentry(
     release: String,
     environment: String,
     traces_sample_rate: f32,
+    error_sample_rate: f32,
+    trace_propagation_targets: Vec<String>,
 ) -> Option<SentryRuntime> {
     let dsn = dsn?;
+    // Stronger defaults: attach stack traces and capture PII only when explicitly
+    // running in production and SENTRY_DSN is set. traces_sample_rate controls
+    // how many transactions are sampled. We keep session_mode request-based and
+    // enable auto session tracking.
     let session_mode = SessionMode::Request;
     let auto_session_tracking = true;
     let release_for_scope = release.clone();
     let environment_for_scope = environment.clone();
-    let guard = sentry::init((
-        dsn.clone(),
-        sentry::ClientOptions {
-            release: Some(release.clone().into()),
-            environment: Some(environment.clone().into()),
-            send_default_pii: production,
-            traces_sample_rate,
-            session_mode,
-            auto_session_tracking,
-            ..Default::default()
-        },
-    ));
+    let mut opts = sentry::ClientOptions::default();
+    opts.release = Some(release.clone().into());
+    opts.environment = Some(environment.clone().into());
+    // Attach stacktraces to errors to provide richer context in Sentry.
+    opts.attach_stacktrace = true;
+    // Respect production flag for sending PII; only enable if production.
+    opts.send_default_pii = production;
+    opts.traces_sample_rate = traces_sample_rate;
+    opts.sample_rate = error_sample_rate;
+    let guard = sentry::init((dsn.clone(), opts));
+    let trace_targets_for_scope = trace_propagation_targets.clone();
     sentry::configure_scope(|scope| {
         scope.set_tag("service", "juicebox-backend");
         scope.set_tag("runtime", "rust");
@@ -511,21 +540,30 @@ fn init_sentry(
         scope.set_extra("traces_sample_rate", traces_sample_rate.into());
         scope.set_extra("session_mode", format!("{:?}", session_mode).into());
         scope.set_extra("auto_session_tracking", auto_session_tracking.into());
+        scope.set_extra(
+            "trace_propagation_targets",
+            format!("{trace_targets_for_scope:?}").into(),
+        );
+        scope.set_extra("error_sample_rate", error_sample_rate.into());
     });
     Some(SentryRuntime {
         guard,
         release,
         environment,
         traces_sample_rate,
+        error_sample_rate,
+        trace_propagation_targets,
         session_mode,
         auto_session_tracking,
     })
 }
 
 fn init_tracing_subscriber() {
+    // Default to debug level to provide richer logs for Sentry. Users can still
+    // override via RUST_LOG or other env vars to reduce noise.
     let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("info"))
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+        .or_else(|_| EnvFilter::try_new("debug"))
+        .unwrap_or_else(|_| EnvFilter::new("debug"));
     tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
@@ -554,13 +592,26 @@ async fn main() -> anyhow::Result<()> {
     let release = resolve_sentry_release().into_owned();
     let environment = resolve_sentry_environment(production);
     let traces_sample_rate = resolve_sentry_traces_sample_rate(production);
+    let error_sample_rate = resolve_sentry_error_sample_rate(production);
+    let trace_propagation_targets = resolve_sentry_trace_targets();
     let sentry_dsn = resolve_sentry_dsn(production);
+    debug!(
+        release = %release,
+        environment = %environment,
+        traces_sample_rate,
+        error_sample_rate,
+        trace_propagation_targets = ?trace_propagation_targets,
+        sentry_dsn_present = sentry_dsn.is_some(),
+        "resolved sentry configuration"
+    );
     let sentry_runtime = init_sentry(
         production,
         sentry_dsn.clone(),
         release.clone(),
         environment.clone(),
         traces_sample_rate,
+        error_sample_rate,
+        trace_propagation_targets.clone(),
     );
     init_tracing_subscriber();
     info!(
@@ -573,13 +624,22 @@ async fn main() -> anyhow::Result<()> {
         info!(
             release = %sentry_info.release,
             environment = %sentry_info.environment,
+            error_sample_rate = sentry_info.error_sample_rate,
             traces_sample_rate = sentry_info.traces_sample_rate,
             session_mode = ?sentry_info.session_mode,
             auto_session_tracking = sentry_info.auto_session_tracking,
+            trace_propagation_targets = ?sentry_info.trace_propagation_targets,
             "Sentry telemetry enabled"
         );
     } else {
-        info!("Sentry telemetry disabled");
+        info!(
+            release = %release,
+            environment = %environment,
+            traces_sample_rate,
+            error_sample_rate,
+            trace_propagation_targets = ?trace_propagation_targets,
+            "Sentry telemetry disabled"
+        );
     }
 
     let telemetry_state = TelemetryState {
@@ -587,8 +647,18 @@ async fn main() -> anyhow::Result<()> {
         release,
         environment,
         traces_sample_rate,
-        trace_propagation_targets: vec!["^/".to_string()],
+        error_sample_rate,
+        trace_propagation_targets,
     };
+    debug!(
+        release = %telemetry_state.release,
+        environment = %telemetry_state.environment,
+        traces_sample_rate = telemetry_state.traces_sample_rate,
+        error_sample_rate = telemetry_state.error_sample_rate,
+        trace_propagation_targets = ?telemetry_state.trace_propagation_targets,
+        sentry_dsn_present = telemetry_state.sentry_dsn.is_some(),
+        "telemetry state prepared"
+    );
 
     if should_trigger_sentry_verify_panic() {
         warn!("SENTRY_VERIFY_PANIC enabled; panicking to verify telemetry");

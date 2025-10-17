@@ -1,5 +1,8 @@
-use axum::Router;
-use axum::routing::{delete, get, post, put};
+use axum::{
+    middleware,
+    routing::{delete, get, post, put},
+    Router,
+};
 use tower_http::services::ServeDir;
 use tracing::{debug, info};
 
@@ -7,6 +10,7 @@ use crate::state::AppState;
 
 pub mod admin;
 pub mod delete;
+pub mod debug;
 pub mod hosting;
 pub mod reports;
 pub mod security;
@@ -22,6 +26,7 @@ pub use admin::{
 pub use delete::{
     SimpleDeleteForm, delete_handler, simple_delete_handler, simple_delete_post_handler,
 };
+pub use debug::block_debug_endpoints;
 pub use hosting::{ConfigResponse, config_handler, fetch_file_handler, file_handler};
 pub use reports::{ReportForm, ReportRecordEmail, report_handler};
 pub use security::{add_cache_headers, add_security_headers, ban_gate};
@@ -47,7 +52,7 @@ pub fn build_router(state: AppState) -> Router {
     let css_service = ServeDir::new(static_root.join("css"));
     let js_service = ServeDir::new(static_root.join("js"));
     let dist_service = ServeDir::new(static_root.join("dist"));
-    let router = Router::new()
+    let mut router = Router::new()
         .route("/checkhash", get(checkhash_handler))
         .route(
             "/upload",
@@ -111,7 +116,24 @@ pub fn build_router(state: AppState) -> Router {
         .nest_service("/dist", dist_service.clone())
         .route("/", get(root_handler))
         .route("/{*path}", get(file_handler))
-        .with_state(state);
+        .with_state(state.clone());
+
+    if !state.production {
+        router = router
+            .route("/debug-error", get(debug::debug_error_page))
+            .route("/debug-error.html", get(debug::debug_error_page))
+            .route("/debug/client-error", get(debug::debug_client_error))
+            .route("/debug/server-error", get(debug::debug_server_error))
+            .route("/debug/rate-limit", get(debug::debug_rate_limit))
+            .route("/debug/panic", get(debug::debug_panic))
+            .route("/debug/custom-error", get(debug::debug_custom_error));
+    }
+
+    router = router.layer(middleware::from_fn_with_state(
+        state.clone(),
+        debug::block_debug_endpoints,
+    ));
+
     debug!("router configured with static assets and handlers");
     router
 }

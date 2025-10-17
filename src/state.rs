@@ -76,6 +76,7 @@ pub struct TelemetryState {
     pub release: String,
     pub environment: String,
     pub traces_sample_rate: f32,
+    pub error_sample_rate: f32,
     pub trace_propagation_targets: Vec<String>,
 }
 
@@ -115,6 +116,7 @@ mod telemetry_tests {
             release: "rel".into(),
             environment: "env".into(),
             traces_sample_rate: 1.0,
+            error_sample_rate: 1.0,
             trace_propagation_targets: Vec::new(),
         };
         assert_eq!(
@@ -130,6 +132,7 @@ mod telemetry_tests {
             release: String::new(),
             environment: String::new(),
             traces_sample_rate: 0.0,
+            error_sample_rate: 0.0,
             trace_propagation_targets: Vec::new(),
         };
         assert!(state.sentry_connect_origin().is_none());
@@ -142,6 +145,7 @@ mod telemetry_tests {
             release: String::new(),
             environment: String::new(),
             traces_sample_rate: 0.0,
+            error_sample_rate: 0.0,
             trace_propagation_targets: Vec::new(),
         };
         assert_eq!(
@@ -424,7 +428,7 @@ impl AppState {
         self.persist_owners_inner().await;
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn spawn_persist_owners(&self) {
         let state = self.clone();
         tokio::spawn(async move {
