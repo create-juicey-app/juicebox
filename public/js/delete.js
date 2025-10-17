@@ -3,6 +3,7 @@
 import { animateRemove } from "./utils.js";
 import { uploadHandler } from "./upload.js";
 import { ownedHandler } from "./owned.js";
+import { startSpan } from "./telemetry.js";
 
 export const deleteHandler = {
   updateDeleteButton(f) {
@@ -65,46 +66,61 @@ export const deleteHandler = {
     f.remoteName = targetName;
     f.deleting = true;
     this.updateDeleteButton(f);
-    fetch("/d/" + encodeURIComponent(targetName), { method: "DELETE" })
-      .then(async (r) => {
-        if (r.ok) {
-          ownedHandler.ownedCache.delete(targetName);
-          ownedHandler.ownedMeta.delete(targetName);
-          ownedHandler.refreshOwned();
-          this.removeFromUploads(targetName);
-          if (f.container) {
-            animateRemove(f.container, () => {
+
+    startSpan(
+      "file.delete",
+      {
+        op: "http.client",
+        attributes: {
+          "http.method": "DELETE",
+          "http.url": `/d/${targetName}`,
+          "file.name": targetName,
+        },
+      },
+      async () => {
+        try {
+          const r = await fetch("/d/" + encodeURIComponent(targetName), {
+            method: "DELETE",
+          });
+          if (r.ok) {
+            ownedHandler.ownedCache.delete(targetName);
+            ownedHandler.ownedMeta.delete(targetName);
+            ownedHandler.refreshOwned();
+            this.removeFromUploads(targetName);
+            if (f.container) {
+              animateRemove(f.container, () => {
+                batch.files = batch.files.filter((x) => x !== f);
+                if (!batch.files.length) {
+                  uploadHandler.batches = uploadHandler.batches.filter(
+                    (b) => b !== batch
+                  );
+                }
+              });
+            } else {
               batch.files = batch.files.filter((x) => x !== f);
               if (!batch.files.length) {
                 uploadHandler.batches = uploadHandler.batches.filter(
                   (b) => b !== batch
                 );
               }
-            });
-          } else {
-            batch.files = batch.files.filter((x) => x !== f);
-            if (!batch.files.length) {
-              uploadHandler.batches = uploadHandler.batches.filter(
-                (b) => b !== batch
-              );
             }
+          } else {
+            let msg = "Delete failed.";
+            try {
+              const err = await r.json();
+              if (err && err.message) msg = err.message;
+            } catch {}
+            showSnack(msg);
+            f.deleting = false;
+            this.updateDeleteButton(f);
           }
-        } else {
-          let msg = "Delete failed.";
-          try {
-            const err = await r.json();
-            if (err && err.message) msg = err.message;
-          } catch {}
-          showSnack(msg);
+        } catch (err) {
+          showSnack("Delete failed.");
           f.deleting = false;
           this.updateDeleteButton(f);
         }
-      })
-      .catch(() => {
-        showSnack("Delete failed.");
-        f.deleting = false;
-        this.updateDeleteButton(f);
-      });
+      }
+    );
   },
 
   removeFromUploads(remoteName) {

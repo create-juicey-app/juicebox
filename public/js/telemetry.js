@@ -12,6 +12,9 @@ const DEFAULT_TRACE_TARGETS = [
   /^\/simple/,
   /^\/auth/,
   /^\/checkhash/,
+  /^\/upload/,
+  /^\/d\//,
+  /^\/f\//,
 ];
 
 let telemetryInitialized = false;
@@ -63,6 +66,7 @@ export function initTelemetry(config) {
     integrations.push(
       Sentry.browserTracingIntegration({
         tracePropagationTargets: traceTargets,
+        enableInp: true,
       })
     );
   } else {
@@ -82,6 +86,30 @@ export function initTelemetry(config) {
       tracesSampleRate: sampleRate,
       autoSessionTracking: true,
       sendDefaultPii: false,
+      // Enable distributed tracing
+      enableTracing: true,
+      // Use a sampler for more granular control
+      tracesSampler: (samplingContext) => {
+        const { name, attributes } = samplingContext;
+
+        // Always sample critical user flows
+        if (name?.includes("upload") || name?.includes("chunk")) {
+          return 1.0;
+        }
+
+        // Sample auth and ownership operations at higher rate
+        if (name?.includes("auth") || name?.includes("mine")) {
+          return 0.5;
+        }
+
+        // Sample file operations
+        if (name?.includes("delete") || name?.includes("download")) {
+          return 0.3;
+        }
+
+        // Use default rate for everything else
+        return sampleRate;
+      },
     });
 
     Sentry.configureScope((scope) => {
@@ -126,4 +154,120 @@ export function isTelemetryEnabled() {
 
 export function getTelemetryClient() {
   return telemetryInitialized ? Sentry : null;
+}
+
+/**
+ * Start a new traced span for custom instrumentation
+ * @param {string} name - Span name
+ * @param {object} options - Span options (op, attributes, etc.)
+ * @param {Function} callback - Function to execute within the span
+ * @returns {Promise<any>} Result of callback
+ */
+export async function startSpan(name, options, callback) {
+  if (!telemetryInitialized || typeof Sentry.startSpan !== "function") {
+    return callback();
+  }
+
+  try {
+    return await Sentry.startSpan(
+      {
+        name,
+        op: options?.op || "custom",
+        attributes: options?.attributes || {},
+      },
+      callback
+    );
+  } catch (err) {
+    if (window?.DEBUG_LOGS) {
+      console.warn("[telemetry] startSpan failed", err);
+    }
+    return callback();
+  }
+}
+
+/**
+ * Start an inactive span for manual control
+ * @param {string} name - Span name
+ * @param {object} options - Span options
+ * @returns {object|null} Span object or null
+ */
+export function startInactiveSpan(name, options = {}) {
+  if (!telemetryInitialized || typeof Sentry.startInactiveSpan !== "function") {
+    return null;
+  }
+
+  try {
+    return Sentry.startInactiveSpan({
+      name,
+      op: options.op || "custom",
+      attributes: options.attributes || {},
+    });
+  } catch (err) {
+    if (window?.DEBUG_LOGS) {
+      console.warn("[telemetry] startInactiveSpan failed", err);
+    }
+    return null;
+  }
+}
+
+/**
+ * Get the currently active span
+ * @returns {object|null} Active span or null
+ */
+export function getActiveSpan() {
+  if (!telemetryInitialized || typeof Sentry.getActiveSpan !== "function") {
+    return null;
+  }
+
+  try {
+    return Sentry.getActiveSpan();
+  } catch (err) {
+    if (window?.DEBUG_LOGS) {
+      console.warn("[telemetry] getActiveSpan failed", err);
+    }
+    return null;
+  }
+}
+
+/**
+ * Set attributes on a span
+ * @param {object} span - Span object
+ * @param {object} attributes - Attributes to set
+ */
+export function setSpanAttributes(span, attributes) {
+  if (!span || !attributes) return;
+
+  try {
+    if (typeof span.setAttributes === "function") {
+      span.setAttributes(attributes);
+    } else if (typeof span.setAttribute === "function") {
+      Object.entries(attributes).forEach(([key, value]) => {
+        span.setAttribute(key, value);
+      });
+    }
+  } catch (err) {
+    if (window?.DEBUG_LOGS) {
+      console.warn("[telemetry] setSpanAttributes failed", err);
+    }
+  }
+}
+
+/**
+ * End a span with optional status
+ * @param {object} span - Span to end
+ * @param {object} options - Options (status, etc.)
+ */
+export function endSpan(span, options = {}) {
+  if (!span || typeof span.end !== "function") return;
+
+  try {
+    if (options.status && typeof span.setStatus === "function") {
+      span.setStatus(options.status);
+    }
+    span.end();
+  } catch (err) {
+    if (window?.DEBUG_LOGS) {
+      console.warn("[telemetry] endSpan failed", err);
+    }
+  }
 }

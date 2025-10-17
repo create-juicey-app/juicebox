@@ -11,7 +11,13 @@ import {
 import { getTTL } from "./ui.js";
 import { ownedHandler } from "./owned.js";
 import { deleteHandler } from "./delete.js";
-import { captureException } from "./telemetry.js";
+import {
+  captureException,
+  startSpan,
+  startInactiveSpan,
+  setSpanAttributes,
+  endSpan,
+} from "./telemetry.js";
 
 const MIN_CHUNK_SIZE = 64 * 1024; // 64 KiB (backend minimum)
 const MAX_CHUNK_SIZE = 32 * 1024 * 1024; // 32 MiB (backend maximum)
@@ -432,63 +438,106 @@ export const uploadHandler = {
 
   async calculateFileHash(file) {
     // Use a Web Worker for hashing to avoid blocking the main thread
-    if (!window._fileHashWorker) {
-      window._fileHashWorker = new Worker("/js/file-hash-worker.js");
-      window._fileHashWorker._pending = [];
-      window._fileHashWorker.onmessage = function (e) {
-        const cb = window._fileHashWorker._pending.shift();
-        if (cb) cb(e.data);
-      };
-    }
-    return new Promise((resolve, reject) => {
-      window._fileHashWorker._pending.push((data) => {
-        if (data.hash) resolve(data.hash);
-        else reject(new Error(data.error || "Hashing failed"));
-      });
-      window._fileHashWorker.postMessage(file);
-    });
+    return startSpan(
+      "hash.calculate",
+      {
+        op: "hash",
+        attributes: {
+          "hash.file_size": file.size,
+          "hash.file_name": file.name,
+        },
+      },
+      async () => {
+        if (!window._fileHashWorker) {
+          window._fileHashWorker = new Worker("/js/file-hash-worker.js");
+          window._fileHashWorker._pending = [];
+          window._fileHashWorker.onmessage = function (e) {
+            const cb = window._fileHashWorker._pending.shift();
+            if (cb) cb(e.data);
+          };
+        }
+        return new Promise((resolve, reject) => {
+          window._fileHashWorker._pending.push((data) => {
+            if (data.hash) resolve(data.hash);
+            else reject(new Error(data.error || "Hashing failed"));
+          });
+          window._fileHashWorker.postMessage(file);
+        });
+      }
+    );
   },
 
   async checkFileHash(hash) {
     // Returns true if file with this hash exists on server
-    try {
-      const resp = await fetch(`/checkhash?hash=${encodeURIComponent(hash)}`);
-      if (!resp.ok) return false;
-      const data = await resp.json();
-      return !!data.exists;
-    } catch {
-      return false;
-    }
+    return startSpan(
+      "hash.check",
+      {
+        op: "http.client",
+        attributes: {
+          "http.method": "GET",
+          "http.url": "/checkhash",
+        },
+      },
+      async () => {
+        try {
+          const resp = await fetch(
+            `/checkhash?hash=${encodeURIComponent(hash)}`
+          );
+          if (!resp.ok) return false;
+          const data = await resp.json();
+          return !!data.exists;
+        } catch {
+          return false;
+        }
+      }
+    );
   },
 
   async uploadOne(f, batch) {
     if (f.canceled) return;
     f.errorMessage = null;
     const ttlVal = getTTL();
-    try {
-      if (this.shouldUseChunk(f.file)) {
-        if (f.canceled) return;
-        await this.uploadChunked(f, batch, ttlVal);
-      } else {
-        if (f.canceled) return;
-        await this.uploadMultipart(f, batch, ttlVal);
+
+    return startSpan(
+      `upload.${this.shouldUseChunk(f.file) ? "chunked" : "multipart"}`,
+      {
+        op: "upload",
+        attributes: {
+          "upload.file_name": f.file.name,
+          "upload.file_size": f.file.size,
+          "upload.strategy": this.shouldUseChunk(f.file)
+            ? "chunked"
+            : "multipart",
+          "upload.ttl": ttlVal,
+        },
+      },
+      async () => {
+        try {
+          if (this.shouldUseChunk(f.file)) {
+            if (f.canceled) return;
+            await this.uploadChunked(f, batch, ttlVal);
+          } else {
+            if (f.canceled) return;
+            await this.uploadMultipart(f, batch, ttlVal);
+          }
+        } catch (err) {
+          if (err?.name === "AbortError" || f.canceled) {
+            return;
+          }
+          if (window.DEBUG_LOGS) console.error("Upload failed", err);
+          captureException(err, {
+            phase: "uploadOne",
+            strategy: this.shouldUseChunk(f.file) ? "chunked" : "multipart",
+            file_name: f?.file?.name || null,
+            file_size: f?.file?.size ?? null,
+          });
+          const message = err?.message || "Upload failed.";
+          if (!f.failed) {
+            this.markUploadFailed(f, batch, message);
+          }
+        }
       }
-    } catch (err) {
-      if (err?.name === "AbortError" || f.canceled) {
-        return;
-      }
-      if (window.DEBUG_LOGS) console.error("Upload failed", err);
-      captureException(err, {
-        phase: "uploadOne",
-        strategy: this.shouldUseChunk(f.file) ? "chunked" : "multipart",
-        file_name: f?.file?.name || null,
-        file_size: f?.file?.size ?? null,
-      });
-      const message = err?.message || "Upload failed.";
-      if (!f.failed) {
-        this.markUploadFailed(f, batch, message);
-      }
-    }
+    );
   },
 
   shouldUseChunk,
@@ -934,234 +983,268 @@ export const uploadHandler = {
 
   async uploadChunked(f, batch, ttlVal) {
     if (f.canceled) return;
-    const abort = new AbortController();
-    f.abortController = abort;
-    f.lastProgressPercent = 0;
-    this.setStatusMessage(f, "Preparing upload…", {
-      state: "preparing",
-      ariaLive: "assertive",
-    });
-    const chunkSize = this.selectChunkSize(f.file.size);
-    const initPayload = {
-      filename: f.file.name,
-      size: f.file.size,
-      ttl: ttlVal,
-      chunk_size: chunkSize,
-    };
-    if (f.hash) {
-      initPayload.hash = f.hash;
-    }
 
-    let initResponse;
-    try {
-      initResponse = await fetch("/chunk/init", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(initPayload),
-        signal: abort.signal,
-      });
-    } catch (err) {
-      if (err?.name === "AbortError") throw err;
-      showSnack("Failed to start chunked upload.");
-      f.container?.classList.add("error");
-      captureException(err, {
-        phase: "chunk.init",
-        file_name: f?.file?.name || null,
-        file_size: f?.file?.size ?? null,
-      });
-      throw err;
-    }
-
-    if (initResponse.status === 409) {
-      const dupPayload = await initResponse.json().catch(() => ({}));
-      this.setStatusMessage(f, "");
-      this.markFileDuplicate(f, batch, dupPayload);
-      return;
-    }
-
-    if (!initResponse.ok) {
-      const details = await this.extractError(
-        initResponse,
-        "Failed to start chunked upload."
-      );
-      this.setStatusMessage(f, "");
-      if (this.isForbiddenError(details, initResponse.status)) {
-        this.rejectForbiddenFile(f, batch, details.message, {
-          reason: details.code || "bad_filetype",
+    return startSpan(
+      "upload.chunked.session",
+      {
+        op: "upload.chunked",
+        attributes: {
+          "upload.file_name": f.file.name,
+          "upload.file_size": f.file.size,
+          "upload.chunk_size": this.selectChunkSize(f.file.size),
+        },
+      },
+      async () => {
+        const abort = new AbortController();
+        f.abortController = abort;
+        f.lastProgressPercent = 0;
+        this.setStatusMessage(f, "Preparing upload…", {
+          state: "preparing",
+          ariaLive: "assertive",
         });
-        return;
-      }
-      showSnack(details.message);
-      f.container?.classList.add("error");
-      throw this.buildUploadError(details);
-    }
+        const chunkSize = this.selectChunkSize(f.file.size);
+        const initPayload = {
+          filename: f.file.name,
+          size: f.file.size,
+          ttl: ttlVal,
+          chunk_size: chunkSize,
+        };
+        if (f.hash) {
+          initPayload.hash = f.hash;
+        }
 
-    const initData = await initResponse.json().catch(() => ({}));
-    f.chunkSessionId = initData.session_id;
-    if (!f.chunkSessionId) {
-      showSnack("Server did not return an upload session.");
-      throw new Error("Missing chunk session id");
-    }
-    if (initData.storage_name) {
-      f.remoteName = initData.storage_name.startsWith("f/")
-        ? initData.storage_name.slice(2)
-        : initData.storage_name;
-    }
-    f.chunkSize = initData.chunk_size || chunkSize;
-    f.totalChunks =
-      initData.total_chunks || Math.ceil(f.file.size / f.chunkSize);
-    f.uploadedBytes = 0;
+        let initResponse;
+        try {
+          initResponse = await startSpan(
+            "upload.chunk.init",
+            {
+              op: "http.client",
+              attributes: {
+                "http.method": "POST",
+                "http.url": "/chunk/init",
+              },
+            },
+            () =>
+              fetch("/chunk/init", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(initPayload),
+                signal: abort.signal,
+              })
+          );
+        } catch (err) {
+          if (err?.name === "AbortError") throw err;
+          showSnack("Failed to start chunked upload.");
+          f.container?.classList.add("error");
+          captureException(err, {
+            phase: "chunk.init",
+            file_name: f?.file?.name || null,
+            file_size: f?.file?.size ?? null,
+          });
+          throw err;
+        }
 
-    this.initChunkSmoothing(f);
+        if (initResponse.status === 409) {
+          const dupPayload = await initResponse.json().catch(() => ({}));
+          this.setStatusMessage(f, "");
+          this.markFileDuplicate(f, batch, dupPayload);
+          return;
+        }
 
-    try {
-      await this.uploadChunksSequentially(f, batch, abort);
-    } catch (err) {
-      this.stopChunkSmoothing(f);
-      if (err?.forbiddenUpload) {
-        this.setStatusMessage(f, "");
-        this.removeLinkForFile(f);
-        f.lastProgressPercent = -1;
-        await this.cancelChunkSession(f);
-        return;
-      }
-      if (err?.name !== "AbortError") {
-        const message = err.message || "Chunk upload failed.";
-        showSnack(message);
-        f.container?.classList.add("error");
-      }
-      this.setStatusMessage(f, "");
-      this.removeLinkForFile(f);
-      f.lastProgressPercent = -1;
-      await this.cancelChunkSession(f);
-      if (err?.name !== "AbortError" && !err?.forbiddenUpload) {
-        captureException(err, {
-          phase: "chunk.sequence",
-          file_name: f?.file?.name || null,
-          file_size: f?.file?.size ?? null,
-          chunk_session: f?.chunkSessionId || null,
-        });
-      }
-      throw err;
-    }
-
-    if (f.remoteName) {
-      this.ensureLinkInput(f, batch, { pending: true, autoCopy: false });
-    }
-    const totalChunks = f.totalChunks || Math.ceil(f.file.size / f.chunkSize);
-    const initialStitchMessage = totalChunks
-      ? `Checking chunks (0/${totalChunks})`
-      : "Checking chunks…";
-    this.setStatusMessage(f, initialStitchMessage, {
-      state: "finalizing",
-      ariaLive: "polite",
-    });
-    f.lastStitchMessage = initialStitchMessage;
-
-    let stopChunkStatus = null;
-    let completeResponse;
-    try {
-      if (typeof this.startChunkStatusPolling === "function") {
-        if (f.stitchPollingStop) {
-          try {
-            f.stitchPollingStop();
-          } catch {
-            // ignore cleanup errors
+        if (!initResponse.ok) {
+          const details = await this.extractError(
+            initResponse,
+            "Failed to start chunked upload."
+          );
+          this.setStatusMessage(f, "");
+          if (this.isForbiddenError(details, initResponse.status)) {
+            this.rejectForbiddenFile(f, batch, details.message, {
+              reason: details.code || "bad_filetype",
+            });
+            return;
           }
+          showSnack(details.message);
+          f.container?.classList.add("error");
+          throw this.buildUploadError(details);
         }
-        stopChunkStatus = this.startChunkStatusPolling(f);
-        f.stitchPollingStop = stopChunkStatus;
-      }
-      completeResponse = await fetch(
-        `/chunk/${encodeURIComponent(f.chunkSessionId)}/complete`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ hash: f.hash || null }),
-          signal: abort.signal,
+
+        const initData = await initResponse.json().catch(() => ({}));
+        f.chunkSessionId = initData.session_id;
+        if (!f.chunkSessionId) {
+          showSnack("Server did not return an upload session.");
+          throw new Error("Missing chunk session id");
         }
-      );
-    } catch (err) {
-      if (stopChunkStatus) {
-        stopChunkStatus();
-        f.stitchPollingStop = null;
-      }
-      if (err?.name === "AbortError") {
-        this.setStatusMessage(f, "");
-        f.lastProgressPercent = -1;
-        await this.cancelChunkSession(f);
-        throw err;
-      }
-      if (err?.forbiddenUpload) {
-        this.setStatusMessage(f, "");
-        f.lastProgressPercent = -1;
-        await this.cancelChunkSession(f);
-        return;
-      }
-      showSnack("Failed to finalize upload.");
-      f.container?.classList.add("error");
-      await this.cancelChunkSession(f);
-      this.setStatusMessage(f, "");
-      this.removeLinkForFile(f);
-      f.lastProgressPercent = -1;
-      captureException(err, {
-        phase: "chunk.complete",
-        file_name: f?.file?.name || null,
-        file_size: f?.file?.size ?? null,
-        chunk_session: f?.chunkSessionId || null,
-      });
-      throw err;
-    }
+        if (initData.storage_name) {
+          f.remoteName = initData.storage_name.startsWith("f/")
+            ? initData.storage_name.slice(2)
+            : initData.storage_name;
+        }
+        f.chunkSize = initData.chunk_size || chunkSize;
+        f.totalChunks =
+          initData.total_chunks || Math.ceil(f.file.size / f.chunkSize);
+        f.uploadedBytes = 0;
 
-    if (stopChunkStatus) {
-      stopChunkStatus();
-      f.stitchPollingStop = null;
-    }
+        this.initChunkSmoothing(f);
 
-    if (completeResponse.status === 409) {
-      const dupPayload = await completeResponse.json().catch(() => ({}));
-      await this.cancelChunkSession(f);
-      this.setStatusMessage(f, "");
-      this.removeLinkForFile(f);
-      f.lastProgressPercent = -1;
-      this.markFileDuplicate(f, batch, dupPayload);
-      return;
-    }
+        try {
+          await this.uploadChunksSequentially(f, batch, abort);
+        } catch (err) {
+          this.stopChunkSmoothing(f);
+          if (err?.forbiddenUpload) {
+            this.setStatusMessage(f, "");
+            this.removeLinkForFile(f);
+            f.lastProgressPercent = -1;
+            await this.cancelChunkSession(f);
+            return;
+          }
+          if (err?.name !== "AbortError") {
+            const message = err.message || "Chunk upload failed.";
+            showSnack(message);
+            f.container?.classList.add("error");
+          }
+          this.setStatusMessage(f, "");
+          this.removeLinkForFile(f);
+          f.lastProgressPercent = -1;
+          await this.cancelChunkSession(f);
+          if (err?.name !== "AbortError" && !err?.forbiddenUpload) {
+            captureException(err, {
+              phase: "chunk.sequence",
+              file_name: f?.file?.name || null,
+              file_size: f?.file?.size ?? null,
+              chunk_session: f?.chunkSessionId || null,
+            });
+          }
+          throw err;
+        }
 
-    if (!completeResponse.ok) {
-      const details = await this.extractError(
-        completeResponse,
-        "Upload failed."
-      );
-      if (this.isForbiddenError(details, completeResponse.status)) {
-        await this.cancelChunkSession(f);
-        this.setStatusMessage(f, "");
-        this.removeLinkForFile(f);
-        f.lastProgressPercent = -1;
-        this.rejectForbiddenFile(f, batch, details.message, {
-          reason: details.code || "bad_filetype",
+        if (f.remoteName) {
+          this.ensureLinkInput(f, batch, { pending: true, autoCopy: false });
+        }
+        const totalChunks =
+          f.totalChunks || Math.ceil(f.file.size / f.chunkSize);
+        const initialStitchMessage = totalChunks
+          ? `Checking chunks (0/${totalChunks})`
+          : "Checking chunks…";
+        this.setStatusMessage(f, initialStitchMessage, {
+          state: "finalizing",
+          ariaLive: "polite",
         });
-        return;
-      }
-      showSnack(details.message);
-      f.container?.classList.add("error");
-      await this.cancelChunkSession(f);
-      this.setStatusMessage(f, "");
-      this.removeLinkForFile(f);
-      f.lastProgressPercent = -1;
-      throw this.buildUploadError(details);
-    }
+        f.lastStitchMessage = initialStitchMessage;
 
-    const payload = await completeResponse.json().catch(() => ({}));
-    this.handleUploadSuccess(f, batch, payload);
-    f.chunkSessionId = null;
-    f.abortController = null;
+        let stopChunkStatus = null;
+        let completeResponse;
+        try {
+          if (typeof this.startChunkStatusPolling === "function") {
+            if (f.stitchPollingStop) {
+              try {
+                f.stitchPollingStop();
+              } catch {}
+            }
+            stopChunkStatus = this.startChunkStatusPolling(f);
+            f.stitchPollingStop = stopChunkStatus;
+          }
+          completeResponse = await startSpan(
+            "upload.chunk.complete",
+            {
+              op: "http.client",
+              attributes: {
+                "http.method": "POST",
+                "http.url": `/chunk/${f.chunkSessionId}/complete`,
+                "upload.session_id": f.chunkSessionId,
+              },
+            },
+            () =>
+              fetch(`/chunk/${encodeURIComponent(f.chunkSessionId)}/complete`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ hash: f.hash || null }),
+                signal: abort.signal,
+              })
+          );
+        } catch (err) {
+          if (stopChunkStatus) {
+            stopChunkStatus();
+            f.stitchPollingStop = null;
+          }
+          if (err?.name === "AbortError") {
+            this.setStatusMessage(f, "");
+            f.lastProgressPercent = -1;
+            await this.cancelChunkSession(f);
+            throw err;
+          }
+          if (err?.forbiddenUpload) {
+            this.setStatusMessage(f, "");
+            f.lastProgressPercent = -1;
+            await this.cancelChunkSession(f);
+            return;
+          }
+          showSnack("Failed to finalize upload.");
+          f.container?.classList.add("error");
+          await this.cancelChunkSession(f);
+          this.setStatusMessage(f, "");
+          this.removeLinkForFile(f);
+          f.lastProgressPercent = -1;
+          captureException(err, {
+            phase: "chunk.complete",
+            file_name: f?.file?.name || null,
+            file_size: f?.file?.size ?? null,
+            chunk_session: f?.chunkSessionId || null,
+          });
+          throw err;
+        }
+
+        if (stopChunkStatus) {
+          stopChunkStatus();
+          f.stitchPollingStop = null;
+        }
+
+        if (completeResponse.status === 409) {
+          const dupPayload = await completeResponse.json().catch(() => ({}));
+          await this.cancelChunkSession(f);
+          this.setStatusMessage(f, "");
+          this.removeLinkForFile(f);
+          f.lastProgressPercent = -1;
+          this.markFileDuplicate(f, batch, dupPayload);
+          return;
+        }
+
+        if (!completeResponse.ok) {
+          const details = await this.extractError(
+            completeResponse,
+            "Upload failed."
+          );
+          if (this.isForbiddenError(details, completeResponse.status)) {
+            await this.cancelChunkSession(f);
+            this.setStatusMessage(f, "");
+            this.removeLinkForFile(f);
+            f.lastProgressPercent = -1;
+            this.rejectForbiddenFile(f, batch, details.message, {
+              reason: details.code || "bad_filetype",
+            });
+            return;
+          }
+          showSnack(details.message);
+          f.container?.classList.add("error");
+          await this.cancelChunkSession(f);
+          this.setStatusMessage(f, "");
+          this.removeLinkForFile(f);
+          f.lastProgressPercent = -1;
+          throw this.buildUploadError(details);
+        }
+
+        const payload = await completeResponse.json().catch(() => ({}));
+        this.handleUploadSuccess(f, batch, payload);
+        f.chunkSessionId = null;
+        f.abortController = null;
+      }
+    );
   },
 
   async uploadChunksSequentially(f, batch, abort) {
     const sessionId = encodeURIComponent(f.chunkSessionId);
     const chunkBytes = f.chunkSize || this.selectChunkSize(f.file.size);
     const totalChunks = f.totalChunks || Math.ceil(f.file.size / chunkBytes);
+
     for (let index = 0; index < totalChunks; index++) {
       if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError");
       const humanIndex = index + 1;
@@ -1185,6 +1268,15 @@ export const uploadHandler = {
         endBytes: end,
         isLastChunk: humanIndex === totalChunks,
       });
+      const chunkSpan = startInactiveSpan(`upload.chunk.${humanIndex}`, {
+        op: "http.client",
+        attributes: {
+          "upload.chunk_index": index,
+          "upload.chunk_size": end - start,
+          "upload.total_chunks": totalChunks,
+        },
+      });
+
       const chunkStartTime = this.now();
       const send = async (useStream) => {
         const body =
@@ -1254,6 +1346,10 @@ export const uploadHandler = {
       }
 
       if (!response.ok) {
+        if (chunkSpan) {
+          setSpanAttributes(chunkSpan, { "http.status_code": response.status });
+          endSpan(chunkSpan, { status: { code: 2 } });
+        }
         this.stopChunkSmoothing(f);
         const details = await this.extractError(
           response,

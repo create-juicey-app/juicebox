@@ -8,6 +8,7 @@ import {
   showSnack,
 } from "./utils.js";
 import { deleteHandler } from "./delete.js";
+import { startSpan } from "./telemetry.js";
 
 export const ownedHandler = {
   /**
@@ -389,7 +390,7 @@ export const ownedHandler = {
         remainRaw
       )}</span><span class="ttl-bar-wrap"><span class="ttl-bar" style="width:${percent.toFixed(
         2
-      )}%;"></span></span></div>`;
+      )};"></span></span></div>`;
 
       const linkInput = document.createElement("input");
       linkInput.type = "text";
@@ -533,18 +534,33 @@ export const ownedHandler = {
 
   async loadExisting() {
     this.setLoading(true);
-    try {
-      const response = await fetch("/mine");
-      if (!response.ok) return;
-      const data = await response.json();
-      if (window.DEBUG_LOGS) console.log("[owned.js] /mine response:", data);
-      this.applyResponse(data);
-    } catch (e) {
-      if (window.DEBUG_LOGS) console.error("[owned.js] loadExisting error:", e);
-    } finally {
-      this.setLoading(false);
-      this.renderOwned();
-    }
+
+    return startSpan(
+      "owned.load",
+      {
+        op: "http.client",
+        attributes: {
+          "http.method": "GET",
+          "http.url": "/mine",
+        },
+      },
+      async () => {
+        try {
+          const response = await fetch("/mine");
+          if (!response.ok) return;
+          const data = await response.json();
+          if (window.DEBUG_LOGS)
+            console.log("[owned.js] /mine response:", data);
+          this.applyResponse(data);
+        } catch (e) {
+          if (window.DEBUG_LOGS)
+            console.error("[owned.js] loadExisting error:", e);
+        } finally {
+          this.setLoading(false);
+          this.renderOwned();
+        }
+      }
+    );
   },
 
   renderOwned() {
@@ -617,21 +633,34 @@ export const ownedHandler = {
       this.markRefreshing();
     }
 
-    try {
-      const response = await fetch("/mine", { cache: "no-store" });
-      if (!response.ok) return;
-      const data = await response.json();
-      this.applyResponse(data);
-    } catch (e) {
-      if (window.DEBUG_LOGS) console.error("[owned.js] refreshOwned error:", e);
-    } finally {
-      if (useSkeleton) {
-        this.setLoading(false);
-      } else {
-        this.clearRefreshing();
+    return startSpan(
+      "owned.refresh",
+      {
+        op: "http.client",
+        attributes: {
+          "http.method": "GET",
+          "http.url": "/mine",
+        },
+      },
+      async () => {
+        try {
+          const response = await fetch("/mine", { cache: "no-store" });
+          if (!response.ok) return;
+          const data = await response.json();
+          this.applyResponse(data);
+        } catch (e) {
+          if (window.DEBUG_LOGS)
+            console.error("[owned.js] refreshOwned error:", e);
+        } finally {
+          if (useSkeleton) {
+            this.setLoading(false);
+          } else {
+            this.clearRefreshing();
+          }
+          this.renderOwned();
+        }
       }
-      this.renderOwned();
-    }
+    );
   },
 
   addOwned(remoteName) {
