@@ -48,7 +48,7 @@ pub use web::{
 #[tracing::instrument(level = "info", skip(state))]
 pub fn build_router(state: AppState) -> Router {
     let static_root = state.static_dir.clone();
-    info!(?static_root, "building application router");
+    info!(?static_root, "Constructing application router");
     let css_service = ServeDir::new(static_root.join("css"));
     let js_service = ServeDir::new(static_root.join("js"));
     let dist_service = ServeDir::new(static_root.join("dist"));
@@ -134,6 +134,6 @@ pub fn build_router(state: AppState) -> Router {
         debug::block_debug_endpoints,
     ));
 
-    debug!("router configured with static assets and handlers");
+    info!("Application router configured with static assets and handlers");
     router
 }

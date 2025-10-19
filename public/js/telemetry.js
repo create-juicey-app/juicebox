@@ -123,6 +123,7 @@ export function initTelemetry(config) {
       );
     });
     telemetryInitialized = true;
+    forwardConsoleToSentry();
   } catch (err) {
     telemetryInitialized = false;
     if (window?.DEBUG_LOGS) {
@@ -270,4 +271,62 @@ export function endSpan(span, options = {}) {
       console.warn("[telemetry] endSpan failed", err);
     }
   }
+}
+
+const CONSOLE_LEVEL_MAP = {
+  log: "info",
+  info: "info",
+  warn: "warning",
+  error: "error",
+  debug: "debug",
+  trace: "debug",
+};
+
+let consoleForwarded = false;
+
+function formatConsoleArg(value) {
+  if (typeof value === "string") return value;
+  if (value instanceof Error) {
+    return `${value.name}: ${value.message}`;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function forwardConsoleToSentry() {
+  if (consoleForwarded || !telemetryInitialized) return;
+  if (typeof window === "undefined" || !window.console) return;
+  const target = window.console;
+  const originals = {};
+  Object.keys(CONSOLE_LEVEL_MAP).forEach((method) => {
+    if (typeof target[method] === "function") {
+      originals[method] = target[method].bind(target);
+    }
+  });
+  const fallbackError = originals.error || (() => {});
+  Object.entries(CONSOLE_LEVEL_MAP).forEach(([method, level]) => {
+    if (!originals[method]) return;
+    target[method] = (...args) => {
+      originals[method](...args);
+      if (typeof Sentry.captureEvent !== "function") return;
+      try {
+        const message = formatConsoleArg(args[0] ?? `[console.${method}]`);
+        Sentry.captureEvent({
+          message: message,
+          level,
+          logger: "browser.console",
+          extra: {
+            console_method: method,
+            arguments: args.map(formatConsoleArg),
+          },
+        });
+      } catch (err) {
+        fallbackError("[telemetry] console forwarding failed", err);
+      }
+    };
+  });
+  consoleForwarded = true;
 }

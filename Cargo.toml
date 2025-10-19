@@ -1,6 +1,6 @@
 [package]
 name = "juicebox"
-version = "0.8.0"
+version = "0.8.2"
 edition = "2024"
 
 [dependencies]
@@ -34,9 +34,11 @@ sha2 = { version = "0.10.9", features = ["std"] }
 hmac = "0.12"
 dashmap = "6.1.0"
 rand = "0.8"
-sentry = "0.45.0"
+sentry = { version = "0.45.0", features = ["logs", "tracing"] }
 sentry-tower = { version = "0.45.0", features = ["http", "axum", "axum-matched-path"] }
 sentry-tracing = "0.45.0"
+log = "0.4"
+tracing-log = "0.2"
 
 [dev-dependencies]
 tempfile = "3.23.0"

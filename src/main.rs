@@ -14,6 +14,7 @@ use juicebox::util::{
     looks_like_hash, now_secs, ttl_to_duration,
 };
 use sentry::{ClientInitGuard, SessionMode};
+use sentry::integrations::tracing::{self as sentry_tracing_integration, EventFilter};
 use sentry_tower::{NewSentryLayer, SentryHttpLayer};
 use serde::Deserialize;
 use std::{
@@ -34,7 +35,8 @@ use tokio::sync::{Notify, RwLock, Semaphore};
 use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 use tracing::Instrument;
 use tracing::field::Empty;
-use tracing::{debug, error, info, info_span, warn};
+use tracing::{debug, error, info, info_span, warn, Level};
+use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tracing::instrument(skip(secret))]
@@ -386,7 +388,6 @@ fn resolve_sentry_release() -> Cow<'static, str> {
     if let Some(release) = read_trimmed_env("SENTRY_RELEASE") {
         return Cow::Owned(release);
     }
-
     const COMMIT_ENV_VARS: [&str; 7] = [
         "SOURCE_VERSION",
         "GIT_COMMIT",
@@ -526,6 +527,7 @@ fn init_sentry(
     opts.environment = Some(environment.clone().into());
     // Attach stacktraces to errors to provide richer context in Sentry.
     opts.attach_stacktrace = true;
+    opts.enable_logs = true;
     // Respect production flag for sending PII; only enable if production.
     opts.send_default_pii = production;
     opts.traces_sample_rate = traces_sample_rate;
@@ -559,16 +561,25 @@ fn init_sentry(
 }
 
 fn init_tracing_subscriber() {
-    // Default to debug level to provide richer logs for Sentry. Users can still
-    // override via RUST_LOG or other env vars to reduce noise.
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new("debug"))
-        .unwrap_or_else(|_| EnvFilter::new("debug"));
-    tracing_subscriber::registry()
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(
+            "info,juicebox=debug,juicebox::handlers=debug,hyper=warn,hyper_util=warn,reqwest=warn",
+        )
+    });
+    let sentry_layer =
+        sentry_tracing_integration::layer().event_filter(|metadata| match *metadata.level() {
+            Level::TRACE | Level::DEBUG => EventFilter::Log,
+            Level::INFO => EventFilter::Breadcrumb | EventFilter::Log,
+            Level::WARN => EventFilter::Event | EventFilter::Breadcrumb | EventFilter::Log,
+            Level::ERROR => EventFilter::Event | EventFilter::Log,
+        });
+    let subscriber = tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer())
-        .with(sentry_tracing::layer())
-        .init();
+        .with(sentry_layer);
+    if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
+        eprintln!("failed to set tracing subscriber: {err}");
+    }
 }
 
 fn should_trigger_sentry_verify_panic() -> bool {
@@ -613,6 +624,12 @@ async fn main() -> anyhow::Result<()> {
         error_sample_rate,
         trace_propagation_targets.clone(),
     );
+    if let Err(err) = LogTracer::builder()
+        .with_max_level(log::LevelFilter::Trace)
+        .init()
+    {
+        eprintln!("failed to initialize log tracer: {err}");
+    }
     init_tracing_subscriber();
     info!(
         production,
@@ -687,9 +704,9 @@ async fn main() -> anyhow::Result<()> {
             .map(|value| {
                 let candidate = PathBuf::from(&value);
                 if candidate.is_absolute() {
-                    candidate
-                } else {
                     data_dir.join(candidate)
+                } else {
+                    data_dir.join("chunks")
                 }
             })
             .unwrap_or_else(|| data_dir.join("chunks")),
@@ -1033,15 +1050,23 @@ async fn main() -> anyhow::Result<()> {
                         latency_ms = Empty
                     )
                 })
+                .on_request(|request: &Request<_>, span: &tracing::Span| {
+                    tracing::info!(
+                        parent: span,
+                        method = %request.method(),
+                        uri = %request.uri(),
+                        "HTTP request received"
+                    );
+                })
                 .on_response(
                     |response: &Response<_>, latency: Duration, span: &tracing::Span| {
                         span.record("http.status_code", response.status().as_u16() as i64);
                         span.record("latency_ms", latency.as_millis() as i64);
-                        tracing::debug!(
+                        tracing::info!(
                             parent: span,
                             status = %response.status(),
                             latency_ms = latency.as_millis(),
-                            "response sent"
+                            "HTTP response dispatched"
                         );
                     },
                 ),
