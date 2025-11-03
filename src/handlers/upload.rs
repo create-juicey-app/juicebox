@@ -921,7 +921,19 @@ pub async fn upload_handler(
     let mut pending_files = Vec::new();
     let mut forbidden_error: Option<String> = None;
 
-    while let Some(field) = multipart.next_field().await.unwrap() {
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                warn!(%client_ip, error = ?e, "multipart stream error");
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    "multipart_error",
+                    "Invalid or incomplete multipart request",
+                );
+            }
+        };
         let name = if let Some(name) = field.name() {
             name.to_string()
         } else {
@@ -1207,7 +1219,19 @@ pub async fn simple_upload_handler(
     let mut forbidden_error: Option<String> = None;
     let mut has_forbidden = false;
 
-    while let Some(field) = multipart.next_field().await.unwrap() {
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                warn!(%ip, error = ?e, "multipart stream error");
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    "multipart_error",
+                    "Invalid or incomplete multipart request",
+                );
+            }
+        };
         let name = if let Some(name) = field.name() {
             name.to_string()
         } else {
