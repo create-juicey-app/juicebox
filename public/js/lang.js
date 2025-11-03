@@ -185,7 +185,9 @@
       if (
         lowered.startsWith("mailto:") ||
         lowered.startsWith("tel:") ||
-        lowered.startsWith("javascript:")
+        lowered.startsWith("javascript:") ||
+        lowered.startsWith("data:") ||
+        lowered.startsWith("vbscript:")
       ) {
         return;
       }
