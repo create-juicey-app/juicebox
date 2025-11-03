@@ -1,6 +1,6 @@
 // js/delete.js
 
-import { animateRemove } from "./utils.js";
+import { animateRemove, showSnack } from "./utils.js";
 import { uploadHandler } from "./upload.js";
 import { ownedHandler } from "./owned.js";
 import { startSpan } from "./telemetry.js";
@@ -45,7 +45,7 @@ export const deleteHandler = {
           batch.files = batch.files.filter((x) => x !== f);
           if (!batch.files.length) {
             uploadHandler.batches = uploadHandler.batches.filter(
-              (b) => b !== batch
+              (b) => b !== batch,
             );
           }
         });
@@ -92,7 +92,7 @@ export const deleteHandler = {
                 batch.files = batch.files.filter((x) => x !== f);
                 if (!batch.files.length) {
                   uploadHandler.batches = uploadHandler.batches.filter(
-                    (b) => b !== batch
+                    (b) => b !== batch,
                   );
                 }
               });
@@ -100,7 +100,7 @@ export const deleteHandler = {
               batch.files = batch.files.filter((x) => x !== f);
               if (!batch.files.length) {
                 uploadHandler.batches = uploadHandler.batches.filter(
-                  (b) => b !== batch
+                  (b) => b !== batch,
                 );
               }
             }
@@ -119,7 +119,7 @@ export const deleteHandler = {
           f.deleting = false;
           this.updateDeleteButton(f);
         }
-      }
+      },
     );
   },
 
@@ -136,7 +136,7 @@ export const deleteHandler = {
               batch.files = batch.files.filter((x) => x !== f);
               if (!batch.files.length) {
                 uploadHandler.batches = uploadHandler.batches.filter(
-                  (b) => b !== batch
+                  (b) => b !== batch,
                 );
               }
             });
