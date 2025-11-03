@@ -25,6 +25,14 @@ export async function initializeApp() {
       setupTTL();
       setupUI();
       await ownedHandler.loadExisting();
+      if (window.JBLang) {
+        if (typeof window.JBLang.rewriteLinks === "function") {
+          window.JBLang.rewriteLinks(document);
+        }
+        if (typeof window.JBLang.enableAutoRewrite === "function") {
+          window.JBLang.enableAutoRewrite();
+        }
+      }
       setupEventListeners();
     })().catch((err) => {
       initPromise = null;

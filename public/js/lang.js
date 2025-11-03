@@ -7,6 +7,8 @@
   const QUERY_KEY = "lang";
   const ALLOWED = ["en", "fr", "es", "uk"];
   const ALLOWED_SET = new Set(ALLOWED);
+  let mutationObserver = null;
+  let autoRewriteScheduled = false;
 
   const navigate =
     typeof win.__JBLangNavigate === "function"
@@ -68,11 +70,27 @@
     }
   }
 
+  function setDocumentLang(lang) {
+    const sanitized = sanitize(lang);
+    if (!sanitized) return;
+    try {
+      const root = doc.documentElement;
+      if (root && root.lang !== sanitized) {
+        root.lang = sanitized;
+      }
+    } catch (_) {}
+  }
+
+  function resolveLang() {
+    return getUrlLang() || getStored() || sanitize(doc.documentElement.lang) || null;
+  }
+
   function ensureLanguage({ rewrite = true } = {}) {
     const url = new URL(win.location.href);
     const urlLang = sanitize(url.searchParams.get(QUERY_KEY));
     if (urlLang) {
       setStored(urlLang);
+      setDocumentLang(urlLang);
       if (rewrite) {
         rewriteLinks();
       }
@@ -80,6 +98,7 @@
     }
     const stored = getStored();
     if (stored) {
+      setDocumentLang(stored);
       url.searchParams.set(QUERY_KEY, stored);
       navigate(url.toString(), "replace");
       return stored;
@@ -93,6 +112,7 @@
   function applyLanguage(lang, { replace = false } = {}) {
     const sanitized = setStored(lang);
     if (!sanitized) return null;
+    setDocumentLang(sanitized);
     const url = new URL(win.location.href);
     if (url.searchParams.get(QUERY_KEY) === sanitized) {
       rewriteLinks();
@@ -104,11 +124,25 @@
   }
 
   function rewriteLinks(root) {
-    const lang = getStored() || getUrlLang();
+    const lang = resolveLang();
     if (!lang) return;
     const base = root || doc;
-    const anchors = base.querySelectorAll("a[href]");
+    const anchors = [];
+    if (
+      base &&
+      base.nodeType === 1 &&
+      typeof base.matches === "function" &&
+      base.matches("a[href]")
+    ) {
+      anchors.push(base);
+    }
+    if (base && typeof base.querySelectorAll === "function") {
+      base.querySelectorAll("a[href]").forEach((anchor) => anchors.push(anchor));
+    }
+    const seen = new Set();
     anchors.forEach((anchor) => {
+      if (!anchor || seen.has(anchor)) return;
+      seen.add(anchor);
       if (anchor.dataset.langSkip === "true") return;
       const href = anchor.getAttribute("href");
       if (!href || href.startsWith("#")) return;
@@ -148,6 +182,32 @@
     });
   }
 
+  function enableAutoRewrite() {
+    if (!("MutationObserver" in win) || mutationObserver) return;
+    if (!doc.body) {
+      if (autoRewriteScheduled) return;
+      autoRewriteScheduled = true;
+      doc.addEventListener(
+        "DOMContentLoaded",
+        () => {
+          autoRewriteScheduled = false;
+          enableAutoRewrite();
+        },
+        { once: true }
+      );
+      return;
+    }
+    mutationObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (!node || node.nodeType !== 1) return;
+          rewriteLinks(node);
+        });
+      });
+    });
+    mutationObserver.observe(doc.body, { childList: true, subtree: true });
+  }
+
   const api = {
     allowed: () => ALLOWED.slice(),
     sanitize,
@@ -156,18 +216,26 @@
     ensureLanguage,
     rewriteLinks,
     syncSelect,
+    current: () => resolveLang() || "en",
+    enableAutoRewrite,
   };
 
   win.JBLang = api;
 
   const applied = ensureLanguage({ rewrite: false });
-  if (!applied) {
+  if (applied) {
+    setDocumentLang(applied);
+  } else {
+    setDocumentLang(resolveLang() || "en");
     rewriteLinks();
   }
-  const readyState = doc.readyState;
-  if (readyState === "loading") {
-    doc.addEventListener("DOMContentLoaded", () => rewriteLinks());
-  } else {
+  const onReady = () => {
     rewriteLinks();
+    enableAutoRewrite();
+  };
+  if (doc.readyState === "loading") {
+    doc.addEventListener("DOMContentLoaded", onReady);
+  } else {
+    onReady();
   }
 })(window, document);
