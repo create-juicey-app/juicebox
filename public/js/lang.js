@@ -265,7 +265,20 @@
     logState,
   };
 
+  function ensureDebugApi() {
+    if (!win.JBLang) return;
+    if (typeof win.JBLang.inspect !== "function") {
+      win.JBLang.inspect = snapshotState;
+      debugLog("ensureDebugApi:patchedInspect");
+    }
+    if (typeof win.JBLang.logState !== "function") {
+      win.JBLang.logState = logState;
+      debugLog("ensureDebugApi:patchedLogState");
+    }
+  }
+
   win.JBLang = api;
+  ensureDebugApi();
 
   const applied = ensureLanguage({ rewrite: false });
   if (applied) {
@@ -278,6 +291,7 @@
   const onReady = () => {
     rewriteLinks();
     enableAutoRewrite();
+    ensureDebugApi();
     logState("ready");
   };
   if (doc.readyState === "loading") {
