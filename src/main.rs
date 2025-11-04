@@ -37,7 +37,7 @@ use tracing::Instrument;
 use tracing::field::Empty;
 use tracing::{debug, error, info, info_span, warn, Level};
 use tracing_log::LogTracer;
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
 
 #[tracing::instrument(skip(secret))]
 async fn load_owners_with_migration(

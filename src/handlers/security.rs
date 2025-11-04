@@ -102,6 +102,7 @@ pub async fn ban_gate(
     warn!(%ip, path, "ban gate blocked request");
     let (reason, time, label) = match state.find_ban_for_input(&ip).await {
         Some(ban) => (ban.reason.clone(), ban.time, ban_label(&ban)),
+        #[allow(non_snake_case)]
         None => (String::new(), 0, short_hash(&ip)),
     };
     let safe_reason = htmlescape::encode_minimal(&reason);

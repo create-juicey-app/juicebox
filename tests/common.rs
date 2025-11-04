@@ -9,6 +9,7 @@ use tokio::sync::{RwLock, Semaphore};
 pub const PRIMARY_HASH_SECRET: [u8; 32] = [0x11; 32];
 pub const SECONDARY_HASH_SECRET: [u8; 32] = [0x22; 32];
 
+#[allow(dead_code)]
 pub fn hash_fixture_ip(ip: &str) -> String {
     hash_ip_string(&PRIMARY_HASH_SECRET, ip)
         .map(|(_, hash)| hash)

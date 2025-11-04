@@ -1,8 +1,8 @@
+use axum::Json;
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -13,8 +13,8 @@ use tracing::{debug, error, trace, warn};
 
 use crate::state::{AppState, BanSubject};
 use crate::util::{
-    extract_client_ip, format_bytes, headers_trusted, max_file_bytes, now_secs, qualify_path,
-    real_client_ip, IpVersion, MAX_ACTIVE_FILES_PER_IP,
+    IpVersion, MAX_ACTIVE_FILES_PER_IP, extract_client_ip, format_bytes, headers_trusted,
+    max_file_bytes, now_secs, qualify_path, real_client_ip,
 };
 
 #[derive(Deserialize)]
@@ -150,10 +150,7 @@ pub async fn visitor_debug_handler(
     let trusted = headers_trusted(&headers, Some(addr.ip()));
     trace!(
         edge_ip,
-        real_ip,
-        extracted_ip,
-        trusted,
-        "visitor debug requested"
+        real_ip, extracted_ip, trusted, "visitor debug requested"
     );
 
     let version_label = |version: IpVersion| match version {
@@ -345,6 +342,7 @@ pub async fn simple_handler(
     let client_ip = real_client_ip(&headers, &addr);
     let owner_hash = match state.hash_ip_to_string(&client_ip) {
         Some(hash) => hash,
+        #[allow(non_snake_case)]
         None => {
             warn!(%client_ip, "simple page access denied: unable to hash ip");
             return (

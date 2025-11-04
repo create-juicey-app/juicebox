@@ -4,7 +4,7 @@ use axum::{
     Router,
 };
 use tower_http::services::ServeDir;
-use tracing::{debug, info};
+use tracing::{info};
 
 use crate::state::AppState;
 
