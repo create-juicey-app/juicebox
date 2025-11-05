@@ -2,102 +2,114 @@
 
 Fast Catbox-like hotlink file share.
 
-Juicebox is a lightweight, high-speed file hosting and sharing service inspired by [Catbox](https://catbox.moe/). It allows users to quickly upload and share files with direct hotlinking support, making it ideal for sharing images, videos, documents, and other files.
+Juicebox is a lightweight, high-speed file hosting service with direct hotlinking. Upload, share, done.
 
----
+## Quick Start
 
-## Getting Started
+Prerequisites:
 
-### Prerequisites
+- Rust
+- Node.js 20+ (for frontend bundle and Jest tests)
 
-- **Rust** (for building and running Juicebox)
-- **Node.js 20+** (for bundling frontend assets and running Jest tests)
-
-### Installation
-
-#### Clone the repository
+Install:
 
 ```bash
 git clone https://github.com/create-juicey-app/juicebox.git
 cd juicebox
-```
-
-#### Build and Run
-
-```bash
-cargo build --release
-cargo run --release
-```
-
-By default, Juicebox will start its backend server, which serves both the frontend web UI and the API.
-
-Before starting the server, set an `IP_HASH_SECRET` environment variable (minimum 16 bytes) that will be used for HMAC-based IP hashing. You can generate one with:
-
-```bash
+cp .env.example .env
+# Generate a secret (min 16 bytes) and add IP_HASH_SECRET to .env
 openssl rand -hex 32
 ```
 
-Copy `.env.example` to `.env` and adjust any overrides you need. Juicebox honours
-the most common options supplied through that file (or the host environment):
+Run:
 
-- `MAX_FILE_SIZE` — limit per upload (e.g. `750MB`, `1GB`, or raw bytes).
-- `JUICEBOX_STORAGE_ROOT` — a base directory; relative storage overrides resolve beneath it.
-- `JUICEBOX_DATA_DIR`, `JUICEBOX_UPLOAD_DIR`, `JUICEBOX_CHUNK_DIR` — override the metadata, file, or chunk directories (defaults to `data/`, `files/`, and `data/chunks`; relative chunk paths resolve beneath the data directory).
-- `JUICEBOX_PUBLIC_DIR` — alternative static asset directory if you serve files elsewhere.
-- `JUICEBOX_PROD_HOST` — canonical host used for generated links (emails, CDN purges) when `APP_ENV=production`.
-- `APP_ENV` — set to `production` to enable production-only checks.
+```bash
+cargo run --release
+```
 
-#### Frontend assets & tests
+Open http://localhost:8080
 
-Install the JavaScript toolchain once:
+## Configuration (env)
+
+Common options (set in .env or your environment):
+
+- MAX_FILE_SIZE — per-upload limit (e.g. 750MB, 1GB, or raw bytes)
+- JUICEBOX_STORAGE_ROOT — base directory; other storage paths resolve under it
+- JUICEBOX_DATA_DIR — metadata dir (default: data/)
+- JUICEBOX_UPLOAD_DIR — files dir (default: files/)
+- JUICEBOX_CHUNK_DIR — chunk dir (default: data/chunks)
+- JUICEBOX_PUBLIC_DIR — serve static assets from a different directory
+- JUICEBOX_PROD_HOST — canonical host for generated links when APP_ENV=production
+- APP_ENV — set to production for prod-only checks
+
+## Frontend (optional)
+
+Build once:
 
 ```bash
 npm install
-```
-
-Bundle the frontend (output is written to `public/dist/`):
-
-```bash
 npm run build
 ```
 
-For active development you can watch for changes:
+Dev mode:
 
 ```bash
 npm run build:watch
 ```
 
-Run the Jest unit tests that cover shared frontend utilities:
+Tests:
 
 ```bash
 npm test
 ```
 
-### Telemetry (optional)
+## Telemetry (optional)
 
-Juicebox ships with [Sentry](https://sentry.io/) error reporting. In production builds the backend falls back to a bundled project DSN, but you can override or disable telemetry via environment variables:
+Sentry can capture errors and traces if enabled:
 
-- `SENTRY_DSN` &mdash; set to your own DSN. Leave unset in development to disable Sentry, or set to `disabled`/`off` to opt out explicitly.
-- `SENTRY_ENV` &mdash; optional environment label reported to Sentry (defaults to `production`/`development` based on `APP_ENV`).
-- `SENTRY_RELEASE` &mdash; optional release identifier shown on Sentry's Releases tab. When omitted the server falls back to the crate version or a detected commit hash.
-- `SENTRY_TRACES_SAMPLE_RATE` &mdash; floating-point value in `[0.0, 1.0]` controlling tracing/transaction sampling (defaults to `0.1` in production and `0.0` elsewhere).
-- `SENTRY_VERIFY_PANIC` &mdash; set to `1`/`true` to trigger a startup panic and verify that events reach Sentry; unset or `0` for normal operation.
-
-Release health is enabled automatically whenever Sentry runs. Each inbound request records a server-mode session so crash-free percentages and adoption metrics light up in Sentry. If you deploy via CI/CD, export either `SENTRY_RELEASE` or one of `SOURCE_VERSION`, `GIT_COMMIT`, `GIT_SHA`, `GITHUB_SHA`, `VERCEL_GIT_COMMIT_SHA`, `COMMIT_SHA`, or `REVISION` so the backend can associate sessions and errors with the right release.
-
-Juicebox also emits structured tracing spans for every HTTP request via `tower-http`'s `TraceLayer`, and the main handlers are annotated with `#[tracing::instrument]` so the spans arrive in Sentry as nested operations under the request transaction. If your setup includes reverse proxies or additional services, make sure the `sentry-trace` and `baggage` headers are allowed to pass through so distributed traces can flow between components. During local profiling, feel free to temporarily set `SENTRY_TRACES_SAMPLE_RATE=1.0` to capture every request; dial the value back down before production rollout if throughput is high.
-
-The `/api/config` endpoint now surfaces Sentry release, environment, DSN, and trace-propagation targets to the browser bundle. When telemetry is enabled, the frontend initialises the Sentry Browser SDK during app bootstrap, automatically propagates trace headers on API calls, and captures handled failures during the upload flow. Disable or override telemetry by adjusting the environment variables above; the client respects the same `SENTRY_DSN` flag as the backend.
-
-When Sentry is enabled, shutdown waits briefly to flush any buffered events before exiting.
-
----
+- SENTRY_DSN — your DSN; leave unset in dev to disable (or set to disabled/off)
+- SENTRY_ENV — environment label (defaults from APP_ENV)
+- SENTRY_RELEASE — release identifier; falls back to crate version/commit
+- SENTRY_TRACES_SAMPLE_RATE — 0.0–1.0 (defaults to 0.1 in production)
 
 ## Usage
 
-- Open your browser and navigate to the address shown in the terminal (default: [http://localhost:8080](http://localhost:8080)).
-- Use the web interface to upload files.
-- Share the provided direct link to your uploaded file.
+- Visit http://localhost:8080
+- Upload a file in the web UI
+- Share the direct link
+
+API (curl):
+
+```bash
+curl -F 'file=@path/to/yourfile.png' http://localhost:8080/api/upload
+```
+
+## CDN / Cloudflare
+
+Juicebox sends cache-friendly headers on file downloads.
+Optional automatic purge on delete when both are set:
+
+- CLOUDFLARE_ZONE_ID
+- CLOUDFLARE_API_TOKEN (with Zone.Cache Purge)
+
+## Contributing
+
+- Fork, branch, commit, push, PR
+
+```bash
+git checkout -b feature/your-feature
+git commit -am 'Add new feature'
+git push origin feature/your-feature
+```
+
+## License
+
+MIT
+
+## Links
+
+- Repo: https://github.com/create-juicey-app/juicebox
+- Issues: https://github.com/create-juicey-app/juicebox/issues
 
 ### Cloudflare / CDN notes
 
@@ -165,5 +177,3 @@ MIT License
 
 - [GitHub Repository](https://github.com/create-juicey-app/juicebox)
 - [Issues](https://github.com/create-juicey-app/juicebox/issues)
-
--# blep
