@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Juicebox Debug</title>
+    <meta name="viewport" content="width=device-width</head></title>,initial-scale=1" />
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body class="page-full-center">
+    <main class="container" role="main">
+      <section class="panel" aria-labelledby="debug-title">
+        <h1 id="debug-title" class="page-title">Debug Smoke Tests</h1>
+        <p class="lead">
+          Quick checks to verify the server responds and routes are wired.
+        </p>
+
+        <nav class="inline-nav" aria-label="Shortcuts">
+          <a href="/" rel="noopener">Open Home</a>
+          <a href="/debug-error.html">Advanced Harness</a>
+        </nav>
+
+        <section aria-labelledby="tests-title" style="padding: 1rem 0 0">
+          <h2 id="tests-title" class="visually-hidden">Tests</h2>
+          <div role="group" aria-label="Request tests" class="links">
+            <button class="primary" data-endpoint="/" data-label="GET /">
+              GET /
+            </button>
+            <button class="primary" data-endpoint="/isadmin" data-label="GET /isadmin">
+              GET /isadmin
+            </button>
+            <button class="primary" data-endpoint="/debug/client-error" data-label="GET /debug/client-error">
+              400 Client
+            </button>
+            <button class="primary" data-endpoint="/debug/server-error" data-label="GET /debug/server-error">
+              500 Server
+            </button>
+          </div>
+        </section>
+      </section>
+
+      <section class="panel" aria-labelledby="log-title">
+        <h2 id="log-title" class="files-heading">Request Log</h2>
+        <div id="log" class="status-area">
+          <div id="log-empty" class="msg">Click any test above to run it.</div>
+        </div>
+      </section>
+
+      <p class="small text-subtle">
+        Styled by <code>/css/app.css</code>. Buttons perform a simple fetch and
+        append a log entry with the HTTP status and duration.
+      </p>
+    </main>
+
+    <script></script>
+      const log = document.getElementById("log");
+      const empty = document.getElementById("log-empty");
+
+      function addLog({ label, url, status, statusText, ms, error }) {
+        if (empty) empty.remove();
+        const el = document.createElement("div");
+        el.className = "msg";
+        el.innerHTML = `
+          <strong>${label}</strong> — ${url}
+          <br />
+          Status: <strong>${status ?? "n/a"} ${statusText ?? ""}</strong>
+          <br />
+          Time: ${ms.toFixed(0)} ms
+          ${error ? `<br />Error: ${error}` : ""}
+        `;
+        log.prepend(el);
+      }
+
+      async function run(btn) {
+        const url = btn.dataset.endpoint;
+        const label = btn.dataset.label || url;
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 15000);
+        const start = performance.now();
+        try {
+          const res = await fetch(url, { signal: ctrl.signal });
+          addLog({
+            label,
+            url,
+            status: res.status,
+            statusText: res.statusText,
+            ms: performance.now() - start
+          });
+        } catch (e) {
+          addLog({
+            label,
+            url,
+            status: 0,
+            statusText: "Request Failed",
+            ms: performance.now() - start,
+            error: e && e.message ? e.message : String(e)
+          });
+        } finally {
+          clearTimeout(t);
+        }
+      }
+
+      document.querySelectorAll('button[data-endpoint]').forEach(b => {
+        b.addEventListener('click', () => run(b));
+      });
+    </script>
+  </body>
+</html>

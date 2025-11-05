@@ -36,51 +36,6 @@
   <link rel="preload" href="{{ css_href }}" as="style" />
   <link rel="stylesheet" href="{{ css_href }}" />
   <link rel="modulepreload" href="{{ app_src }}" crossorigin="anonymous" />
-  <style>
-    :root {
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Noto Sans", sans-serif;
-      background: #0f141b;
-      color: #e8edf2;
-    }
-
-    body {
-      margin: 0;
-      background: #0f141b;
-      color: #e8edf2;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-
-    header {
-      padding: 1.9rem 1.2rem 1rem;
-      text-align: center;
-    }
-
-    main {
-      width: min(880px, 82%);
-      margin: 1.1rem auto 2.5rem;
-      display: grid;
-      gap: 1.6rem;
-      grid-template-columns: 1fr;
-    }
-
-    .panel {
-      background: #1d2733;
-      border: 1px solid #2f3b4a;
-      border-radius: 14px;
-      box-shadow: 0 4px 16px -8px rgba(0, 0, 0, 0.6);
-    }
-
-    .panel section {
-      padding: 1.25rem 1.35rem 1.5rem;
-    }
-
-    .footer-links a,
-    .footer-links a:visited {
-      color: #fff !important;
-    }
-  </style>
 </head>
 <body>
   <nav class="skip-links" aria-label="Skip links">
@@ -88,7 +43,7 @@
     <a href="#yourFiles" class="skip-link">{{ t.skip_files | default(value="Skip to your files") }}</a>
   </nav>
 
- 
+
   <header>
     <h1 class="brand-heading"><a href="/" class="brand-link" aria-label="JuiceBox Home"><img src="/logo.png" alt="JuiceBox logo" class="logo" decoding="async" draggable="false" width="64" height="64" fetchpriority="high" />JuiceBox <span class="visually-hidden">{{ t.brand_subtitle | default(value="Fast Temporary File Host") }}</span></a></h1>
     <p class="lead">{{ t.lead | default(value="Click, Upload, Share!") }}</p>
@@ -111,30 +66,30 @@
   });
   </script>
 
-    <form id="langForm" style="margin:1.2rem 0 0 0;" aria-label="Language selector">
-        <label for="langSelect" id="langLabel" style="font-size:.9em;opacity:.85;display:flex;align-items:center;gap:.4em;cursor:pointer;">
-            <span aria-hidden="true" style="font-size:1.2em;filter:drop-shadow(0 1px 2px #0f141b33);">🌐</span>
+    <form id="langForm" aria-label="Language selector">
+        <label for="langSelect" id="langLabel">
+            <span aria-hidden="true">(🌐) Language:</span>
             <span class="visually-hidden">{{ t.language_select | default(value="Select language") }}</span>
-            <select id="langSelect" name="lang" style="font-size:1em;padding:.25em 1.2em .25em .7em;border-radius:7px;margin-left:.1em;background:#181f2b;color:#fff;border:1px solid #2a3240;box-shadow:0 1px 4px #0002;appearance:none;cursor:pointer;transition:border .2s;" aria-labelledby="langLabel">
+            <select id="langSelect" name="lang" aria-labelledby="langLabel">
                 <option value="en" {% if lang == "en" %}selected{% endif %}>🇬🇧 English</option>
                 <option value="fr" {% if lang == "fr" %}selected{% endif %}>🇫🇷 Français</option>
                 <option value="es" {% if lang == "es" %}selected{% endif %}>🇪🇸 Español</option>
                 <option value="uk" {% if lang == "uk" %}selected{% endif %}>🇺🇦 Українська мова</option>
             </select>
-            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 20 20" style="margin-left:-1.5em;pointer-events:none;position:relative;z-index:2;fill:#fff;opacity:.7;">
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 20 20">
                 <path d="M5.5 8l4.5 4.5L14.5 8z"/>
             </svg>
         </label>
     </form>
     <div class="panel"><section id="uploadSection">
       <h2 title="Upload new files below">{{ t.upload | default(value="Upload") }}</h2>
-      <div class="ttl-row" style="display:flex;align-items:center;gap:.55rem;margin:.3rem 0 1rem;font-size:.62rem;letter-spacing:.4px;" title="{{ t.ttl_title | default(value="Choose how long the uploaded files will be kept before automatic deletion") }}">
+      <div class="ttl-row" title="{{ t.ttl_title | default(value="Choose how long the uploaded files will be kept before automatic deletion") }}">
         <label for="ttlSelect" class="subtle" title="Retention period">{{ t.retention | default(value="Retention:") }}</label>
         <input id="ttlSelect" type="range" min="0" max="6" step="1" value="4" aria-label="Retention" title="{{ t.ttl_adjust | default(value='Adjust retention from 1 hour up to 14 days') }}" />
         <span id="ttlValue" class="ttl-value" title="Current retention value">3d</span>
         <span class="subtle" title="Files are automatically deleted after retention">{{ t.auto_delete | default(value="auto delete") }}</span>
       </div>
-  <div class="drop-zone" id="dropZone" aria-describedby="dropHint" title="{{ t.drop_title | default(value='Click or drag files here to upload (max {max_size} each)') | replace(from='{max_size}', to=max_file_size_str) }}" style="min-height:240px;padding:3.5rem 1rem;border:2px dashed #ff9800;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0.65rem;text-align:center;width:100%;box-sizing:border-box;">
+  <div class="drop-zone" id="dropZone" aria-describedby="dropHint" title="{{ t.drop_title | default(value='Click or drag files here to upload (max {max_size} each)') | replace(from='{max_size}', to=max_file_size_str) }}">
         <input type="file" id="fileInput" multiple title="File picker" aria-label="{{ t.file_picker | default(value='Select files to upload (maximum {max_size} each)') | replace(from='{max_size}', to=max_file_size_str) }}" aria-describedby="dropHint" />
         <div class="icon" title="Folder icon">📁</div>
         <div class="muted" id="dropHint" title="Click or drop to begin selecting files">{{ t.drop_hint | default(value="Click or drop files") }}</div>
@@ -170,10 +125,10 @@
     <div class="panel"><section id="about">
       <h2 id="aboutHeading">{{ t.about_heading | default(value="What is JuiceBox?") }}</h2>
   <p>{{ t.about_1 | default(value="JuiceBox Temporary File Host is a fast, simple way to share files without creating an account. Pick a retention period from 1 hour up to 14 days, upload files up to " ~ max_file_size_str ~ ", and instantly share lightweight expiring links. When the timer ends, files are automatically deleted. It’s perfect for quick hand‑offs, code snippets, screenshots, small archives, and any content you don’t want to keep online forever.") }}</p>
-      <p>{{ t.about_2 | default(value="How it works: drag and drop or click to select files, choose a retention window, then copy the link once each upload completes. We limit each IP to a small number of active files to prevent abuse; delete an older item to free a slot. For a minimal experience, try the <a href='/simple'>no‑script uploader</a>. For details about limits, retention, thumbnails and moderation, read the <a href='/faq'>Frequently Asked Questions</a>. Our focus is speed, privacy and ease: no tracking pixels, no social logins, and no permanent storage, just quick, disposable sharing.") }}</p>
+      <p>{{ t.about_2 | default(value="How it works: drag and drop or click to select files, choose a retention window, then copy the link once each upload completes. We limit each IP to a small number of active files to prevent abuse; delete an older item to free a slot. For a minimal experience, try the <a href='/simple'>no‑script uploader</a>. For details about limits, retention and moderation, read the <a href='/faq'>Frequently Asked Questions</a>. Our focus is speed, privacy and ease: no tracking pixels, no social logins, and no permanent storage, just quick, disposable sharing.") }}</p>
       <p>{{ t.about_3 | default(value="Privacy and safety: your IP is used only to associate uploads, enforce rate limits and handle abuse reports, and it is removed after related files expire. To report prohibited content or request removal, visit the <a href='/report'>Report form</a> page. Use of the service implies acceptance of our <a href='/terms'>Terms of Service</a>. If you prefer to browse a simple landing link to share with others, you can point them to the home page or the <a href='/faq'>FAQ guide</a> for guidance.") }}</p>
       <p class="inspired-note">{{ t.inspired | default(value="Inspired by") }} <a href="https://catbox.moe" target="_blank" rel="noopener nofollow">Catbox</a></p>
-      <nav aria-label="{{ t.share_aria | default(value='Share') }}" class="share-links" style="margin-top:.35rem;font-size:.8em;opacity:.85">
+      <nav aria-label="{{ t.share_aria | default(value='Share') }}" class="share-links">
         {{ t.share | default(value='Share:') }}
         <a href="https://bsky.app/intent/compose?text={{ t.social_bsky | default(value='Upload and share temporary files with JuiceBox https://box.juicey.dev/') | urlencode }}" rel="noopener nofollow" target="_blank">Bluesky</a>
         <a href="https://twitter.com/intent/tweet?text={{ t.social_twitter | default(value='Upload and share temporary files with JuiceBox https://box.juicey.dev/') | urlencode }}" rel="noopener nofollow" target="_blank">{{ t.twitter | default(value='Twitter') }}</a>
@@ -195,11 +150,9 @@
     </script>
   </main>
   <footer title="{{ t.footer_tagline | default(value='Service tagline') }}">juicebox // {{ t.footer_sub | default(value='simple high-speed file host') }}
-  <nav aria-label="{{ t.site_links | default(value='Site links') }}" class="footer-links" style="display:block;margin-top:.45rem;font-size:.6rem;letter-spacing:.35px;color:#fff;">
+  <nav aria-label="{{ t.site_links | default(value='Site links') }}" class="footer-links">
     <a href="/">{{ t.home | default(value='Home') }}</a> • <a href="/simple">{{ t.simple | default(value='Simple') }}</a> • <a href="/faq">{{ t.faq | default(value='FAQ') }}</a> • <a href="/report">{{ t.report | default(value='Report') }}</a> • <a href="/terms">{{ t.terms | default(value='Terms') }}</a> • <a href="https://buymeacoffee.com/juiceydev" target="_blank" rel="noopener">{{ t.donate | default(value='Donate') }}</a>
-  </nav>
-  <br><span id="ipNote" style="display:block;font-size:.55rem;opacity:.45;margin-top:.4rem;letter-spacing:.3px"></span></footer>
- 
+  </nav></footer>
   <script type="module" src="{{ app_src }}" defer crossorigin="anonymous"></script>
 </body>
 </html>

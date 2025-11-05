@@ -1,33 +1,44 @@
-<!-- filepath: /home/juiceydev/juicebox/public/admin_already.html -->
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>Admin Session Active</title>
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<link rel="stylesheet" href="/css/app.css" />
-<style>body{display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#0f141b;color:#e8edf2;font:15px/1.4 system-ui,sans-serif;} .panel{background:#18222d;border:1px solid #2b3746;padding:2rem 2.4rem 2.2rem;border-radius:18px;max-width:560px;box-shadow:0 8px 28px -12px rgba(0,0,0,.6);text-align:center;} h1{margin:0 0 .85rem;font-size:1.55rem;letter-spacing:.5px;} p{margin:.55rem 0;font-size:.78rem;opacity:.78;line-height:1.5;} a{color:#ff9800;text-decoration:none;font-size:.7rem;letter-spacing:.5px;font-weight:600;} a:hover{text-decoration:underline;} .links{display:flex;flex-wrap:wrap;justify-content:center;gap:.9rem 1rem;margin-top:1.2rem;} .links a{background:#ff9800;color:#111;padding:.6rem .95rem;border-radius:9px;box-shadow:0 4px 14px -8px rgba(0,0,0,.55);font-size:.65rem;letter-spacing:.55px;} .links a:hover{filter:brightness(1.08);} .note{font-size:.58rem;opacity:.5;margin-top:1.2rem;} .mini-info{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.55rem;margin-top:1.4rem;} .mini-info div{background:#1d2731;border:1px solid #25313d;padding:.55rem .65rem;border-radius:8px;font-size:.58rem;letter-spacing:.4px;line-height:1.4;opacity:.8;} .sep{height:1px;background:#25313d;margin:1.3rem 0 .8rem;border:none;} </style>
-</head>
-<body>
-  <div class="panel" role="status" aria-live="polite">
-    <h1>Admin Dashboard</h1>
-    <p>Session active. Choose a management panel below. Your session will expire automatically unless renewed.</p>
-    <div class="links" role="navigation" aria-label="Admin sections">
-      <a href="/admin/files">Files</a>
-      <a href="/admin/reports">Reports</a>
-      <a href="/admin/ban">Bans</a>
-      <a href="/isadmin">JSON Status</a>
-      <a href="/">Home</a>
-      <a href="/report">Public Report Form</a>
-    </div>
-    <hr class="sep" />
-    <div class="mini-info" aria-hidden="true">
-      <div><strong>Files</strong><br/>View & delete any stored file.</div>
-      <div><strong>Reports</strong><br/>Review and clear user-submitted reports.</div>
-      <div><strong>Bans</strong><br/>Add or remove IP bans.</div>
-      <div><strong>Status</strong><br/>Quick JSON endpoint to verify auth.</div>
-    </div>
-    <p class="note">If links return 401, refresh auth. Close tab to end this view.</p>
-  </div>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <title>Admin Session Active</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body class="page-full-center">
+    <main class="container" role="main">
+      <div class="panel" role="status" aria-live="polite">
+        <header>
+          <h1 class="page-title">Admin Dashboard</h1>
+          <p class="lead">
+            Session active. Choose a management panel below. Your session will expire automatically unless renewed.</header>
+          </p>
+        </header>
+
+        <nav class="inline-nav text-center" aria-label="Admin sections">
+          <a href="/admin/files">Files</a>
+          <a href="/admin/reports">Reports</a>
+          <a href="/admin/ban">Bans</a>
+          <a href="/isadmin">JSON Status</a>
+          <a href="/">Home</a>
+          <a href="/report">Public Report Form</a>
+        </nav>
+
+        <section aria-labelledby="about-panels">
+          <h2 id="about-panels" class="visually-hidden">About Panels</h2>
+          <ul class="text-subtle">
+            <li><strong>Files:</strong> View and delete any stored file.</li>
+            <li><strong</strong>>Reports:</strong> Review and clear user-submitted reports.</li>
+            <li><strong>Bans:</strong> Add or remove IP bans.</li>
+            <li><strong>Status:</strong> Quick JSON endpoint to verify auth.</li>
+          </ul>
+        </section>
+
+        <p class="small text-subtle">
+          If links return 401, refresh auth. Close the tab to end this view.
+        </p>
+      </div>
+    </main>
+  </body>
 </html>

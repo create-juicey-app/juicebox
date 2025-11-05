@@ -13,8 +13,8 @@ use juicebox::util::{
     IpVersion, PROD_HOST, UPLOAD_CONCURRENCY, hash_ip_string, hash_network_from_cidr,
     looks_like_hash, now_secs, ttl_to_duration,
 };
-use sentry::{ClientInitGuard, SessionMode};
 use sentry::integrations::tracing::{self as sentry_tracing_integration, EventFilter};
+use sentry::{ClientInitGuard, SessionMode};
 use sentry_tower::{NewSentryLayer, SentryHttpLayer};
 use serde::Deserialize;
 use std::{
@@ -35,7 +35,7 @@ use tokio::sync::{Notify, RwLock, Semaphore};
 use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 use tracing::Instrument;
 use tracing::field::Empty;
-use tracing::{debug, error, info, info_span, warn, Level};
+use tracing::{Level, debug, error, info, info_span, warn};
 use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
 
@@ -474,10 +474,10 @@ fn resolve_sentry_traces_sample_rate(_production: bool) -> f32 {
         .filter(|v| !v.is_empty())
         .and_then(|value| value.parse::<f32>().ok())
         .map(|value| value.clamp(0.0, 1.0))
-    // Default to sampling everything (1.0) when SENTRY is enabled in production
-    // unless explicitly overridden. In development default to 1.0 as well to
-    // ensure we capture as many errors as possible during testing.
-    .unwrap_or(1.0)
+        // Default to sampling everything (1.0) when SENTRY is enabled in production
+        // unless explicitly overridden. In development default to 1.0 as well to
+        // ensure we capture as many errors as possible during testing.
+        .unwrap_or(1.0)
 }
 
 fn resolve_sentry_error_sample_rate(_production: bool) -> f32 {
@@ -1071,8 +1071,8 @@ async fn main() -> anyhow::Result<()> {
                     },
                 ),
         )
-        .layer(SentryHttpLayer::new().enable_transaction())
         .layer(NewSentryLayer::new_from_top())
+        .layer(SentryHttpLayer::new().enable_transaction())
         .layer(CompressionLayer::new())
         .layer(middleware::from_fn(add_cache_headers))
         .layer(middleware::from_fn_with_state(

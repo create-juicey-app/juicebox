@@ -17,149 +17,9 @@
     />
   <script src="/js/lang.js"></script>
   <link rel="stylesheet" href="{{ css_bundle | default(value='/css/app.css') }}" />
-    <style>
-      /* Page‑specific overrides */
-      main {
-        width: min(760px, 88%);
-      }
-      form.report-form {
-        display: flex;
-        flex-direction: column;
-        gap: 1.05rem;
-      }
-      form.report-form fieldset {
-        border: none;
-        margin: 0;
-        padding: 0;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.9rem;
-      }
-      form.report-form label {
-        display: flex;
-        flex-direction: column;
-        gap: 0.45rem;
-        font-size: 0.65rem;
-        letter-spacing: 0.45px;
-        font-weight: 600;
-        text-transform: uppercase;
-        color: var(--text-subtle);
-      }
-      form.report-form input[type="text"],
-      form.report-form select,
-      form.report-form textarea {
-        background: #121b24;
-        color: var(--text);
-        border: 1px solid #2b394a;
-        border-radius: 9px;
-        padding: 0.62rem 0.7rem;
-        font: inherit;
-        font-size: 0.8rem;
-        resize: vertical;
-        transition: border-color 0.25s, background 0.25s;
-      }
-      form.report-form input:focus,
-      form.report-form select:focus,
-      form.report-form textarea:focus {
-        outline: 2px solid var(--accent);
-        outline-offset: 1px;
-      }
-      form.report-form textarea {
-        min-height: 170px;
-      }
-      form.report-form button {
-        align-self: flex-start;
-        background: var(--accent);
-        color: #111;
-        border: 1px solid rgba(var(--accent-rgb) / 0.6);
-        padding: 0.65rem 1.25rem;
-        font-size: 0.78rem;
-        font-weight: 600;
-        border-radius: 10px;
-        cursor: pointer;
-        letter-spacing: 0.6px;
-        transition: 0.35s background, 0.35s transform, 0.35s box-shadow;
-      }
-      form.report-form button:hover:not([disabled]) {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 18px -6px rgba(0, 0, 0, 0.6);
-      }
-      form.report-form button[disabled] {
-        opacity: 0.55;
-        filter: grayscale(1);
-        cursor: not-allowed;
-        transform: none;
-      }
-      .req {
-        color: #ff5252;
-        margin-left: 0.25rem;
-        font-weight: 700;
-      }
-      .note,
-      .legal {
-        font-size: 0.6rem;
-        opacity: 0.62;
-        letter-spacing: 0.4px;
-        line-height: 1.35;
-      }
-      .legal {
-        margin-top: -0.3rem;
-      }
-      .msg,
-      .report-msg {
-        background: #223038;
-        border: 1px solid #33464f;
-        padding: 0.65rem 0.85rem;
-        border-radius: 10px;
-        font-size: 0.7rem;
-        letter-spacing: 0.4px;
-        margin: 0 0 1rem;
-        animation: fadeIn 0.5s var(--e-out);
-      }
-      .center {
-        text-align: center;
-      }
-      footer {
-        margin: 1.8rem 0 1rem;
-        font-size: 0.55rem;
-        opacity: 0.45;
-        letter-spacing: 0.35px;
-        text-align: center;
-      }
-      .pair label {
-        flex: 1 1 250px;
-      }
-      .status-area {
-        min-height: 2.2rem;
-        display: flex;
-        flex-direction: column;
-        gap: 0.6rem;
-      }
-      [data-hidden="true"] {
-        display: none !important;
-      }
-      @keyframes fadeIn {
-        from {
-          opacity: 0;
-          transform: translateY(4px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
-    </style>
+
   </head>
-  <body
-    style="
-      background: #0f141b;
-      color: #e8ecf3;
-      max-width: 860px;
-      margin: 0 auto;
-      padding: 1.4rem;
-      font-family: system-ui, Segoe UI, Roboto, sans-serif;
-    "
-  >
+  <body class="doc-page">
     <nav class="skip-links" aria-label="Skip links">
       <a
         href="#reportMain"
@@ -167,28 +27,16 @@
         >{{ t.skip_main | default(value="Skip to main content") }}</a
       >
     </nav>
-    <header style="padding: 1.7rem 1.2rem 1rem; text-align: center">
-      <h1 style="margin: 0 0 0.6rem; font-size: clamp(1.8rem, 4.2vw, 3rem)">
+    <header>
+      <h1>
         {{ t.report_title }}
       </h1>
-      <p
-        class="lead"
-        style="
-          margin: 0;
-          font-size: 0.9rem;
-          color: var(--text-subtle, #b0b8c9);
-          opacity: 0.75;
-        "
-      >
+      <p class="lead">
         {{ t.report_lead }}
       </p>
     </header>
-    <main
-      id="reportMain"
-      tabindex="-1"
-      style="display: flex; flex-direction: column; gap: 1.4rem"
-    >
-      <div class="panel" style="animation: fadeIn 0.6s var(--e-out)">
+    <main id="reportMain" tabindex="-1">
+      <div class="panel fade-in">
         <section>
           <form
             class="report-form"
@@ -242,7 +90,7 @@
             </fieldset>
             <div id="fileHelp" class="note">{{ t.report_file_help }}</div>
             <div id="reasonHelp" class="note">{{ t.report_reason_help }}</div>
-            <label style="margin-top: 0.4rem"
+            <label class="mt-2"
               >{{ t.report_details_label }}
               <textarea
                 name="details"
@@ -256,52 +104,40 @@
           </form>
         </section>
       </div>
-    </main>
-    <footer
-      title="{{ t.footer_tagline | default(value='Service tagline') }}"
-      style="color: #fff !important; opacity: 1 !important; background: none"
-    >
+    </main><footer
+      title="{{ t.footer_tagline | default(value='Service tagline') }}">
       juicebox //
       {{ t.footer_sub | default(value='simple high-speed file host') }}
       <nav
         aria-label="{{ t.site_links | default(value='Site links') }}"
-        class="footer-links"
-        style="
-          display: block;
-          margin-top: 0.45rem;
-          font-size: 0.6rem;
-          letter-spacing: 0.35px;
-          color: #fff !important;
-          opacity: 1 !important;
-        "
-      >
+        class="footer-links">
         <a
           href="/"
-          style="color: #fff !important"
+
           >{{ t.home | default(value='Home') }}</a
         >
         •
         <a
           href="/simple"
-          style="color: #fff !important"
+
           >{{ t.simple | default(value='Simple') }}</a
         >
         •
         <a
           href="/faq"
-          style="color: #fff !important"
+
           >{{ t.faq | default(value='FAQ') }}</a
         >
         •
         <a
           href="/report"
-          style="color: #fff !important"
+
           >{{ t.report | default(value='Report') }}</a
         >
         •
         <a
           href="/terms"
-          style="color: #fff !important"
+
           >{{ t.terms | default(value='Terms') }}</a
         >
         •
@@ -309,21 +145,10 @@
           href="https://buymeacoffee.com/juiceydev"
           target="_blank"
           rel="noopener"
-          style="color: #fff !important"
+
           >{{ t.donate | default(value='Donate') }}</a
         >
       </nav>
-      <br /><span
-        id="ipNote"
-        style="
-          display: block;
-          font-size: 0.55rem;
-          opacity: 0.95 !important;
-          margin-top: 0.4rem;
-          letter-spacing: 0.3px;
-          color: #fff !important;
-        "
-      ></span>
     </footer>
     <script>
       (function () {

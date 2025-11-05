@@ -1,0 +1,295 @@
+/* Files: list, rows, progress bar, status note (extracted) */
+
+/* File list container and items */
+ul#fileList {
+    list-style: none;
+    margin: 0.9rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    max-height: 320px;
+    overflow: auto;
+    scrollbar-width: thin;
+}
+
+ul#fileList li {
+    background: var(--panel-darker);
+    border: 1px solid var(--panel-border);
+    padding: 0.7rem 0.8rem 0.6rem;
+    border-radius: 11px;
+    font-size: 0.78rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    position: relative;
+    will-change: transform, opacity;
+    transition:
+        background 0.35s,
+        border-color 0.35s,
+        transform 0.45s var(--e-out),
+        box-shadow 0.45s;
+}
+
+ul#fileList li.adding {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+}
+ul#fileList li.adding.in {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    transition: 0.55s var(--e-out);
+}
+
+ul#fileList li.removing {
+    animation: squishOutSoft 0.48s var(--e-out) forwards;
+    transform-origin: top center;
+}
+
+/* File row and cells */
+.file-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.file-row .actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+}
+
+.file-row .name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 500;
+}
+
+.file-row .size {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+
+/* Remove button in file rows */
+.file-row button.remove {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    padding: 0.25rem 0.4rem;
+    border-radius: 5px;
+    cursor: pointer;
+    transition:
+        background 0.3s,
+        border-color 0.3s,
+        color 0.3s,
+        transform 0.45s var(--e-out);
+}
+.file-row button.remove:hover {
+    background: #354554;
+    transform: translateY(-2px);
+}
+.file-row button.remove:active {
+    transform: translateY(0) scale(0.94);
+}
+
+/* Progress bar */
+.bar {
+    height: 5px;
+    background: #141e28;
+    border-radius: 5px;
+    overflow: hidden;
+    margin-top: 4px;
+    box-shadow: inset 0 0 0 1px #1d2732;
+    transition:
+        height 0.45s ease,
+        background-color 0.45s ease,
+        margin-top 0.45s ease;
+}
+.bar span {
+    display: block;
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    transition:
+        width 0.45s linear,
+        opacity 0.25s ease;
+    position: relative;
+}
+.bar span:not(.complete)::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        90deg,
+        rgba(var(--accent-rgb) / 0) 0%,
+        rgba(var(--accent-rgb) / 0.45) 50%,
+        rgba(var(--accent-rgb) / 0) 100%
+    );
+    animation: barSheen 1.4s linear infinite;
+    mix-blend-mode: overlay;
+}
+.bar span.complete {
+    background: var(--accent);
+}
+
+/* Divider variant to separate grouped sections */
+.bar.divider {
+    height: 2px;
+    background: #2c394a;
+    box-shadow: none;
+    margin-top: 6px;
+    position: relative;
+}
+.bar.divider span {
+    opacity: 0;
+    background: #2c394a !important;
+    width: 100% !important;
+    transition: opacity 0.4s ease;
+}
+
+/* Status note pill */
+.status-note {
+    margin-top: 0.45rem;
+    color: var(--text-subtle);
+    font-size: 0.72rem;
+    letter-spacing: 0.33px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    opacity: 0.95;
+    background: rgba(24, 32, 42, 0.92);
+    border: 1px solid rgba(76, 100, 128, 0.35);
+    border-radius: 999px;
+    padding: 0.38rem 0.75rem 0.38rem 0.5rem;
+    transition:
+        opacity 0.35s ease,
+        transform 0.35s var(--e-out),
+        background 0.35s ease,
+        border-color 0.35s ease;
+}
+
+.status-note .status-icon {
+    width: 0.9rem;
+    height: 0.9rem;
+    border-radius: 999px;
+    border: 1px solid rgba(var(--accent-rgb) / 0.35);
+    background: rgba(var(--accent-rgb) / 0.16);
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    position: relative;
+    box-shadow: 0 0 6px rgba(var(--accent-rgb) / 0.25);
+    transition:
+        border-color 0.3s ease,
+        background 0.3s ease,
+        box-shadow 0.3s ease;
+}
+.status-note .status-icon::after {
+    content: "";
+    width: 55%;
+    height: 55%;
+    border-radius: inherit;
+    background: rgba(var(--accent-rgb) / 0.85);
+    display: block;
+}
+
+.status-note .status-text {
+    line-height: 1.35;
+}
+
+/* Status variants */
+.status-note[data-state="queue"] .status-icon {
+    background: rgba(var(--accent-rgb) / 0.22);
+}
+.status-note[data-state="hashing"] .status-icon {
+    background: rgba(var(--accent-rgb) / 0.24);
+}
+.status-note[data-state="preparing"] .status-icon {
+    background: rgba(var(--accent-rgb) / 0.28);
+}
+.status-note[data-state="uploading"] .status-icon {
+    border: 2px solid rgba(var(--accent-rgb) / 0.25);
+    border-top-color: rgba(var(--accent-rgb) / 0.95);
+    background: transparent;
+    animation: statusSpinner 0.8s linear infinite;
+}
+.status-note[data-state="uploading"] .status-icon::after {
+    content: none;
+}
+.status-note[data-state="finalizing"] .status-icon {
+    background: rgba(var(--accent-rgb) / 0.85);
+    border: 1px solid rgba(var(--accent-rgb) / 0.45);
+}
+.status-note[data-state="finalizing"] .status-icon::after {
+    background: rgba(15, 20, 27, 0.9);
+    width: 45%;
+    height: 45%;
+}
+
+/* Grouped batch entries inside file list */
+ul#fileList li.group-batch {
+    padding: 0.85rem 0.9rem 0.95rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+ul#fileList li.group-batch .group-head {
+    margin-bottom: 0.25rem;
+}
+ul#fileList li.group-batch .group-files {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 0.4rem;
+}
+ul#fileList li.group-batch .file-entry {
+    padding: 0.55rem 0.65rem 0.6rem;
+    border: 1px solid #2c3948;
+    border-radius: 8px;
+    background: #1a2430;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+ul#fileList li.group-batch .file-entry .links {
+    margin-top: 0.35rem;
+}
+ul#fileList li.group-batch .file-entry:not(:first-child) {
+    margin-top: 0.25rem;
+}
+ul#fileList li.group-batch .file-entry .file-row {
+    margin: 0;
+}
+ul#fileList li.group-batch .file-entry .bar {
+    margin-top: 2px;
+}
+
+@media (max-width: 640px) {
+    ul#fileList li.group-batch {
+        padding: 0.9rem 0.85rem 1rem;
+    }
+    ul#fileList li.group-batch .file-entry {
+        padding: 0.65rem 0.7rem 0.7rem;
+    }
+}
+
+/* Empty group transitions */
+ul#fileList li.group-batch.group-empty-start {
+    position: relative;
+}
+ul#fileList li.group-batch.group-empty-fade {
+    transition: opacity 0.4s var(--e-out);
+    opacity: 0;
+}
+ul#fileList li.group-batch .group-empty-msg {
+    font-size: 0.78rem;
+    letter-spacing: 0.4px;
+    opacity: 0.75;
+    padding: 0.4rem 0.25rem;
+    text-align: center;
+}

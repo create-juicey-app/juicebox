@@ -1,0 +1,171 @@
+/* Simple page: language selector and upload */
+
+.lang-form {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0.7em;
+    margin: 1.7rem auto 1.2rem auto;
+    padding: 0.7em 1.2em;
+    background: #181f2b;
+    border: 1px solid #232c3a;
+    border-radius: 13px;
+    box-shadow: 0 2px 10px #0002;
+    max-width: 340px;
+}
+
+.lang-label {
+    font-size: 0.98em;
+    opacity: 0.92;
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    cursor: pointer;
+    margin: 0;
+}
+
+.lang-icon {
+    font-size: 1.25em;
+    filter: drop-shadow(0 1px 2px #0f141b33);
+}
+
+#langSelectSimple {
+    font-size: 1em;
+    padding: 0.45em 1.3em 0.45em 0.8em;
+    border-radius: 10px;
+    background: #232c3a;
+    color: #fff;
+    border: 2px solid var(--accent);
+    box-shadow: 0 1px 4px #0001;
+    appearance: none;
+    cursor: pointer;
+    transition: border 0.2s;
+    min-width: 120px;
+    min-height: 44px;
+}
+
+.lang-btn {
+    font-size: 1em;
+    padding: 0.45em 1.2em;
+    border-radius: 10px;
+    background: var(--accent);
+    color: #111;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+    box-shadow: 0 1px 4px #0001;
+    transition: background 0.2s;
+    min-width: 44px;
+    min-height: 44px;
+    margin-left: 0.7em;
+}
+
+.lang-btn:focus-visible,
+#langSelectSimple:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+    border-color: #fff;
+}
+
+/* Lang form fallback select (index header pattern) */
+#langForm select:focus {
+    outline: 2px solid #6cf;
+    border-color: #6cf;
+}
+
+#langForm select,
+#langForm option {
+    color: #fff;
+    background: #181f2b;
+}
+
+@media screen and (-webkit-min-device-pixel-ratio: 0) {
+    #langForm option {
+        color: #fff;
+        background: #181f2b;
+    }
+}
+
+@media (max-width: 600px) {
+    #langForm {
+        margin: 1rem 0 0 0;
+    }
+}
+
+/* Upload block */
+.upload {
+    width: min(680px, 88%);
+    margin: 0 auto 1rem;
+}
+
+p.lead + .upload {
+    margin-top: 0.5rem;
+}
+
+.upload fieldset {
+    border: 2px solid var(--accent);
+    background: #232c3a;
+    padding: 1rem;
+    border-radius: 12px;
+}
+
+.upload label {
+    display: block;
+    margin-bottom: 0.45rem;
+    color: var(--text-subtle);
+    font-weight: 600;
+}
+
+.upload input[type="file"] {
+    display: block;
+    width: 100%;
+    padding: 0.45rem 0.5rem;
+    background: #0f1820;
+    border: 1px dashed color-mix(in srgb, var(--accent) 25%, transparent);
+    color: var(--text);
+    border-radius: 8px;
+}
+
+.note-extra {
+    font-size: 0.78rem;
+    opacity: 1;
+    color: #ffd580;
+    font-weight: 600;
+}
+
+button.primary {
+    display: inline-block;
+    margin-top: 0.8rem;
+    background: linear-gradient(
+        180deg,
+        var(--accent),
+        color-mix(in srgb, var(--accent) 75%, black)
+    );
+    color: #071018;
+    border: none;
+    padding: 0.6rem 0.9rem;
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+button.primary:hover {
+    transform: translateY(-2px);
+}
+
+button.primary:active {
+    transform: scale(0.99);
+}
+
+@media (max-width: 480px) {
+    .upload {
+        width: 94%;
+    }
+    .page-title {
+        font-size: 1.5rem;
+    }
+}
+
+.textcenter {
+    text-align: center;
+}

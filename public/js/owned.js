@@ -9,6 +9,7 @@ import {
 } from "./utils.js";
 import { deleteHandler } from "./delete.js";
 import { startSpan } from "./telemetry.js";
+import { tOwned, expiredLabel } from "./i18n-owned.js";
 
 export const ownedHandler = {
   /**
@@ -32,6 +33,8 @@ export const ownedHandler = {
   refreshTimer: null,
   renderState: "init",
   lastSignature: "",
+
+  // Localization moved to i18n-owned.js
 
   // FLIP animation state
   chipPositions: new Map(), // Map<name, DOMRect>
@@ -119,7 +122,7 @@ export const ownedHandler = {
   },
 
   formatRemaining(sec) {
-    if (sec <= 0) return "expired";
+    if (sec <= 0) return expiredLabel();
     if (sec < 60) return `${Math.floor(sec)}s`;
     if (sec < 3600) return `${Math.floor(sec / 60)}m ${Math.floor(sec % 60)}s`;
     if (sec < 86400)
@@ -192,7 +195,7 @@ export const ownedHandler = {
               };
               chip.addEventListener("transitionend", handler);
               setTimeout(resolve, 400); // fallback
-            })
+            }),
           );
         }
       } else {
@@ -228,7 +231,7 @@ export const ownedHandler = {
                 }
                 resolve();
               }, 240);
-            })
+            }),
           );
         }
       }
@@ -243,7 +246,7 @@ export const ownedHandler = {
     if (!grid) return false;
 
     const existingChips = Array.from(
-      grid.querySelectorAll(".owned-chip[data-name]")
+      grid.querySelectorAll(".owned-chip[data-name]"),
     );
     const existingNames = existingChips.map((chip) => chip.dataset.name);
 
@@ -299,8 +302,8 @@ export const ownedHandler = {
         typeof meta.set === "number"
           ? meta.set
           : meta.set
-          ? Number(meta.set)
-          : null;
+            ? Number(meta.set)
+            : null;
       if (setValue !== null && !Number.isNaN(setValue) && expiry > setValue) {
         const total = expiry - setValue;
         const remain = expiry - nowSec;
@@ -372,8 +375,8 @@ export const ownedHandler = {
         typeof meta.set === "number"
           ? meta.set
           : meta.set
-          ? Number(meta.set)
-          : null;
+            ? Number(meta.set)
+            : null;
       if (setValue !== null && !Number.isNaN(setValue) && expiry > setValue) {
         const total = expiry - setValue;
         const remain = expiry - nowSec;
@@ -383,13 +386,13 @@ export const ownedHandler = {
       }
 
       chip.innerHTML = `<div class="top"><div class="name" title="${escapeHtml(
-        titleFull
+        titleFull,
       )}">${escapeHtml(
-        displayName
+        displayName,
       )}</div><div class="actions"></div></div><div class="ttl-row"><span class="ttl">${this.formatRemaining(
-        remainRaw
+        remainRaw,
       )}</span><span class="ttl-bar-wrap"><span class="ttl-bar" style="width:${percent.toFixed(
-        2
+        2,
       )};"></span></span></div>`;
 
       const linkInput = document.createElement("input");
@@ -411,7 +414,7 @@ export const ownedHandler = {
       copyBtn.textContent = "📋";
       copyBtn.title = "Copy direct link";
       copyBtn.addEventListener("click", () =>
-        copyToClipboard(`${location.origin}/f/${n}`).then(() => flashCopied())
+        copyToClipboard(`${location.origin}/f/${n}`).then(() => flashCopied()),
       );
 
       const delBtn = document.createElement("button");
@@ -443,9 +446,9 @@ export const ownedHandler = {
       return chip;
     };
 
-    // Clear and rebuild grid
-    if (existingItem) {
-      existingItem.innerHTML = "";
+    // Clear and rebuild grid: keep the grid node attached; we've already cleared its contents above.
+    if (existingItem && !grid.parentElement) {
+      existingItem.appendChild(grid);
     }
 
     names.forEach((n) => {
@@ -469,7 +472,7 @@ export const ownedHandler = {
     grid.setAttribute("aria-hidden", "false");
     const empty = document.createElement("div");
     empty.className = "owned-empty";
-    empty.innerHTML = `<strong>No files found ):</strong><span>Your uploads will land here once they finish.</span>`;
+    empty.innerHTML = `<strong>${escapeHtml(tOwned("empty_title"))}</strong><span>${escapeHtml(tOwned("empty_hint"))}</span>`;
     grid.appendChild(empty);
     const wrapper = this.createListItem("empty");
     wrapper.appendChild(grid);
@@ -559,7 +562,7 @@ export const ownedHandler = {
           this.setLoading(false);
           this.renderOwned();
         }
-      }
+      },
     );
   },
 
@@ -573,7 +576,7 @@ export const ownedHandler = {
     if (ownedPanel) {
       ownedPanel.setAttribute(
         "data-state",
-        names.length ? "has-files" : "empty"
+        names.length ? "has-files" : "empty",
       );
     }
 
@@ -659,7 +662,7 @@ export const ownedHandler = {
           }
           this.renderOwned();
         }
-      }
+      },
     );
   },
 

@@ -430,7 +430,8 @@ pub async fn banned_handler(
     trace!(lang, "rendering banned page");
     render_tera_page(&state, "banned.html.tera", lang, None).await
 }
-
+// piece of shit function 
+// todo: avoid using println, use tracing
 pub async fn load_translation_map(lang: &str) -> HashMap<String, String> {
     let lang_file = format!("translations/lang_{}.toml", lang);
     println!("[i18n] Attempting to load translation file: {}", lang_file);
@@ -447,7 +448,7 @@ pub async fn load_translation_map(lang: &str) -> HashMap<String, String> {
             match fs::read_to_string("translations/lang_en.toml").await {
                 Ok(s) => s,
                 Err(e2) => {
-                    println!("[i18n] Failed to load fallback lang_en.toml: {}", e2);
+                    println!("[i18n] Failed to load fallback"); // ur fucked
                     String::new()
                 }
             }

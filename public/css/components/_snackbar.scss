@@ -1,0 +1,36 @@
+/* Snackbar (extracted from components)
+   - Base toast container
+   - Visible state
+   - Error variant
+*/
+
+#snackbar {
+  position: fixed;
+  bottom: 26px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: #222e3d;
+  color: var(--text);
+  padding: 0.65rem 1rem;
+  font-size: 0.7rem;
+  border: 1px solid #2d3948;
+  border-radius: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: 0.35s;
+  letter-spacing: 0.5px;
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.55);
+}
+
+#snackbar.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+#snackbar.error {
+  background: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 70%, black);
+  color: #fff;
+  border-radius: 999px;
+  box-shadow: 0 8px 22px -10px rgba(229, 57, 53, 0.55);
+}

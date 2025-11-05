@@ -1,0 +1,17 @@
+/* Components index: compose modular component partials
+   This file replaces the previous monolithic components stylesheet.
+   Each sub-partial contains plain CSS rules for its feature area.
+*/
+
+@use "components/layout";
+@use "components/panels";
+@use "components/dropzone";
+@use "components/files";
+@use "components/owned";
+@use "components/snackbar";
+@use "components/forms";
+@use "components/tables";
+@use "components/badges-nav";
+@use "components/footer-brand";
+@use "components/simple-page";
+@use "components/misc";

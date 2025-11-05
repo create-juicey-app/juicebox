@@ -1,0 +1,131 @@
+/* Drop zone component (extracted from components)
+   - Base surface
+   - Pattern overlays
+   - Drag/hover/focus states
+   - Hidden input and icon
+   - Ripple effect element
+*/
+
+.drop-zone {
+  position: relative;
+  border: 2px dashed var(--accent);
+  border-radius: calc(var(--radius) - 4px);
+  padding: 3.5rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  transition:
+    0.25s border-color,
+    0.25s background,
+    0.25s transform,
+    0.25s box-shadow;
+  width: 100%;
+  overflow: hidden;
+  background: linear-gradient(145deg, #462605, #2d1803 58%, #271503);
+  color: var(--text);
+  box-shadow:
+    0 4px 14px -6px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(var(--accent-rgb) / 0.15);
+}
+
+.drop-zone::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      circle,
+      transparent 22%,
+      #3a2106 22%,
+      #3a2106 78%,
+      transparent 78%,
+      transparent
+    ) 0% 0% / 64px 64px,
+    radial-gradient(
+      circle,
+      transparent 22%,
+      #3a2106 22%,
+      #3a2106 78%,
+      transparent 78%,
+      transparent
+    ) 32px 32px / 64px 64px,
+    linear-gradient(var(--accent) 2px, transparent 2px) 0 -1px / 32px 32px,
+    linear-gradient(90deg, var(--accent) 2px, #3a2106 2px) -1px 0 / 32px 32px #3a2106;
+  background-size:
+    64px 64px,
+    64px 64px,
+    32px 32px,
+    32px 32px;
+  opacity: 0.18;
+}
+
+.drop-zone:hover {
+  background: linear-gradient(145deg, #4d2a07, #311b05 58%, #2a1704);
+}
+
+.drop-zone input {
+  display: none;
+}
+
+.drop-zone .icon {
+  font-size: 3.2rem;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.55));
+  margin-bottom: 0.35rem;
+}
+
+.drop-zone.drag {
+  border-color: color-mix(in srgb, var(--accent) 70%, white);
+  background: linear-gradient(145deg, #5a310a, #382107 55%, #311d07);
+  box-shadow:
+    0 6px 18px -8px rgba(0, 0, 0, 0.7),
+    0 0 0 2px rgba(var(--accent-rgb) / 0.35);
+  transform: scale(1.015);
+}
+
+.drop-zone .ripple {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at center,
+    rgba(var(--accent-rgb) / 0.55),
+    rgba(var(--accent-rgb) / 0) 70%
+  );
+  transform: scale(0);
+  animation: dzRipple 0.85s var(--e-out) forwards;
+  pointer-events: none;
+  opacity: 0.9;
+  mix-blend-mode: overlay;
+}
+
+.drop-zone::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(20, 12, 5, 0) 58%,
+    rgba(20, 12, 5, 0.78) 100%
+  );
+  pointer-events: none;
+}
+
+.drop-zone.animate::before {
+  animation: dzDiag 24s linear infinite;
+}
+
+.drop-zone.drag::before {
+  animation: dzDiagFast 2.2s linear infinite;
+  opacity: 0.28;
+}
+
+.drop-zone:focus-visible {
+  box-shadow:
+    0 0 0 3px rgba(0, 0, 0, 0.55),
+    0 0 0 5px rgba(var(--accent-rgb) / 0.55);
+}

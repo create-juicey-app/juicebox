@@ -1,0 +1,235 @@
+/* Owned list, panel, chips, and skeletons */
+
+/* Owned list and grid */
+#ownedList {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+#ownedList .owned-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.75rem;
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+    transition:
+        opacity 0.4s var(--e-out),
+        transform 0.45s var(--e-out);
+}
+#ownedList .owned-grid.morph-ready {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+#ownedList .owned-grid.skip-transition {
+    transition: none;
+    opacity: 1;
+    transform: none;
+}
+
+/* Skeleton and empty states in owned panel */
+#ownedList [data-skeleton="true"],
+#ownedList [data-empty="true"] {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.75rem;
+}
+#ownedList [data-empty="true"] {
+    grid-template-columns: 1fr;
+}
+#ownedList [data-empty="true"] .owned-empty {
+    min-height: 132px;
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--text);
+}
+#ownedList [data-empty="true"] .owned-empty span {
+    font-size: 0.85rem;
+    opacity: 0.75;
+}
+
+/* Owned card base + skeleton */
+.owned-skeleton,
+.owned-empty {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    padding: 0.6rem 0.65rem 0.55rem;
+    border-radius: 10px;
+    min-height: 96px;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.owned-skeleton > :last-child {
+    margin-top: auto;
+}
+
+/* Empty placeholder card */
+.owned-empty {
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+.owned-empty span {
+    display: block;
+    font-size: 0.75rem;
+    opacity: 0.7;
+    margin-top: 0.35rem;
+}
+
+/* Skeleton shimmer lines/bars (uses keyframes from _animations.scss) */
+.skeleton-line,
+.skeleton-bar {
+    position: relative;
+    width: 100%;
+    border-radius: 6px;
+    background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.05) 0%,
+        rgba(255, 255, 255, 0.16) 50%,
+        rgba(255, 255, 255, 0.05) 100%
+    );
+    background-size: 240px 100%;
+    animation: skeletonShimmer 1.4s infinite;
+}
+.skeleton-line {
+    height: 12px;
+}
+.skeleton-line.compact {
+    width: 60%;
+}
+.skeleton-bar {
+    height: 6px;
+    width: 80%;
+}
+
+/* Owned panel transitions and overlays */
+#ownedPanel {
+    transition:
+        opacity 0.5s var(--e-out),
+        transform 0.5s var(--e-out);
+}
+#ownedPanel.owned-loading {
+    position: relative;
+}
+#ownedPanel.owned-loading::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        135deg,
+        rgba(15, 20, 27, 0.7) 0%,
+        rgba(29, 39, 51, 0.65) 50%,
+        rgba(15, 20, 27, 0.7) 100%
+    );
+    pointer-events: none;
+    border-radius: inherit;
+    opacity: 0.6;
+}
+#ownedPanel.reveal-start {
+    opacity: 0;
+    transform: translateY(8px);
+}
+#ownedPanel.reveal {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+/* Owned chip cards */
+.owned-chip {
+    background: var(--panel-darker);
+    border: 1px solid var(--panel-border);
+    padding: 0.6rem 0.65rem 0.55rem;
+    border-radius: 10px;
+    font-size: 0.78rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    position: relative;
+    will-change: transform, opacity;
+    transition:
+        background 0.35s,
+        border-color 0.35s,
+        transform 0.45s var(--e-out),
+        box-shadow 0.45s;
+}
+.owned-chip.adding {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+}
+.owned-chip.adding.in {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    transition: 0.55s var(--e-out);
+}
+.owned-chip:not(.removing):hover {
+    transform: translateY(-2px);
+}
+.owned-chip:hover {
+    box-shadow: 0 4px 22px -10px rgba(0, 0, 0, 0.7);
+}
+.owned-chip.removing {
+    animation: squishOutSoft 0.48s var(--e-out) forwards;
+    transform-origin: top center;
+}
+
+.owned-chip .top {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.owned-chip .name {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 500;
+}
+.owned-chip .actions {
+    display: flex;
+    gap: 0.3rem;
+}
+
+/* Small action button on chips */
+.owned-chip button.small {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    padding: 0.28rem 0.5rem;
+    border-radius: 5px;
+    cursor: pointer;
+    letter-spacing: 0.4px;
+    transition:
+        background 0.3s,
+        border-color 0.3s,
+        color 0.3s,
+        transform 0.45s var(--e-out);
+}
+.owned-chip button.small:hover {
+    background: #354554;
+    transform: translateY(-2px);
+}
+.owned-chip button.small:active {
+    transform: translateY(0) scale(0.94);
+}
+.owned-chip button.small:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+/* Mini link input inside chip */
+.owned-chip .link-input.mini {
+    font-size: 0.75rem;
+    padding: 0.3rem 0.45rem;
+}
+
+/* Expiring emphasis */
+.owned-chip.expiring .ttl {
+    color: var(--danger);
+}

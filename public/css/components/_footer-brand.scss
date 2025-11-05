@@ -1,0 +1,93 @@
+/* Footer, site note, footer links, and brand/logo */
+
+footer {
+    margin: auto 0 0;
+    padding: 1.25rem;
+    text-align: center;
+    font-size: 0.78rem;
+    color: var(--text-subtle);
+    letter-spacing: 0.7px;
+}
+
+.site-note {
+    margin-top: 1rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+    line-height: 1.5;
+}
+.site-note a {
+    color: #cfd6de;
+    text-decoration: underline;
+}
+.site-note a:hover {
+    color: var(--accent);
+}
+
+.footer-links {
+    opacity: 1 !important;
+    font-size: 0.78rem !important;
+    color: white;
+    text-decoration: none;
+    font-weight: 500;
+    letter-spacing: 0.4px;
+    margin-top: 10px;
+}
+
+#ipNote {
+    opacity: 1 !important;
+    color: #9fb3c6 !important;
+    font-size: 0.78rem !important;
+}
+
+/* Brand header and logo */
+
+.brand-heading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    margin: 0;
+}
+
+.brand-link {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    line-height: 1;
+    text-decoration: none;
+    color: inherit;
+    position: relative;
+}
+
+.brand-heading .brand-link {
+    padding: 0.25rem 0.9rem 0.3rem;
+}
+
+.brand-heading .logo {
+    margin: 0 12px 0 0;
+}
+
+.logo {
+    width: 64px;
+    height: 64px;
+    display: block;
+    object-fit: contain;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    -webkit-font-smoothing: none;
+    image-rendering: -webkit-optimize-contrast;
+}
+
+.brand-link:focus-visible {
+    outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+    .brand-heading .brand-link {
+        padding: 0.2rem 0.7rem 0.25rem;
+    }
+    .brand-heading .logo {
+        margin: 0 8px 0 0;
+    }
+}

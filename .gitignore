@@ -8,3 +8,5 @@ Cargo.lock
 node_modules/
 public/dist/
 package-lock.json
+coverage/
+/coverage/

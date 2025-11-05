@@ -1,0 +1,188 @@
+/* Tokens + CSS variables
+   - Sass defaults with !default
+   - Emits :root variables (toggle via $emit-default-css-tokens)
+   - Mixins to emit tokens in any scope
+*/
+@use "sass:color";
+/* ---------------------------
+   Token defaults (override before @use)
+---------------------------- */
+
+/* Brand and semantic colors */
+$accent: #ff9800 !default;
+$danger: #e53935 !default;
+$ok: #4caf50 !default;
+
+/* Surface & text colors (dark theme baseline) */
+$bg: #070a0e !default;
+$panel: #12181f !default;
+$panel-darker: #090c0f !default;
+$panel-lighter: #21303a !default;
+$panel-border: #495e70 !default;
+
+/* Text system */
+$text: #ffffff !default; /* primary foreground text */
+$text-subtle: #b5c0cc !default;
+$text-muted: #9aa7b5 !default;
+$fg: #ffffff !default; /* legacy alias some rules reference */
+
+/* Radius scale */
+$radius: 24px !default;
+
+/* Motion/easing */
+$ease-out: cubic-bezier(0.16, 0.8, 0.3, 1) !default;
+$ease-in: cubic-bezier(0.5, 0.05, 0.2, 0.99) !default;
+
+/* Typography */
+$font-sans:
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    Ubuntu,
+    Cantarell,
+    Noto Sans,
+    sans-serif !default;
+
+/* Control whether this partial emits a :root by default */
+$emit-default-css-tokens: true !default;
+
+/* ---------------------------
+   Helpers
+---------------------------- */
+
+/* rgb() channels for rgba(var(--x) / a) */
+
+@function rgb-str($color) {
+    @return "#{color.channel($color, 'red', $space: rgb)} #{color.channel($color, 'green', $space: rgb)} #{color.channel($color, 'blue', $space: rgb)}";
+}
+
+/* ---------------------------
+   Mixins
+---------------------------- */
+
+/* Emit CSS vars for tokens into scope (default :root) */
+@mixin css-tokens($scope: ":root", $font-family: $font-sans) {
+    #{$scope} {
+        /* Brand and semantic */
+        --accent: #{$accent};
+        --accent-rgb: #{rgb-str($accent)};
+        --danger: #{$danger};
+        --ok: #{$ok};
+
+        /* Surfaces */
+        --bg: #{$bg};
+        --panel: #{$panel};
+        --panel-lighter: #{$panel-lighter};
+        --panel-darker: #{$panel-darker};
+        --panel-border: #{$panel-border};
+
+        /* Text system */
+        --fg: #{$fg};
+        --text: #{$text};
+        --text-subtle: #{$text-subtle};
+        --text-muted: #{$text-muted};
+
+        /* Shape & motion */
+        --radius: #{$radius};
+        --e-out: #{$ease-out};
+        --e-in: #{$ease-in};
+
+        /* Base font for the UI */
+        font-family: #{$font-family};
+    }
+}
+
+/* Override tokens within a scope (e.g., [data-theme="light"])
+   Pass a partial map of keys to override.
+   Example:
+     @include css-tokens-override([data-theme="light"], (
+       bg: #ffffff,
+       panel: #f7f9fc,
+       panel-border: #dde5ef,
+       text: #0b1621,
+       text-subtle: #33475b,
+       text-muted: #5c7186
+     ));
+*/
+@mixin css-tokens-override($scope, $overrides) {
+    /* Merge defaults with overrides */
+    $accent_v: map-get($overrides, accent);
+    $danger_v: map-get($overrides, danger);
+    $ok_v: map-get($overrides, ok);
+
+    $bg_v: map-get($overrides, bg);
+    $panel_v: map-get($overrides, panel);
+    $panel_lighter_v: map-get($overrides, panel-lighter);
+    $panel_darker_v: map-get($overrides, panel-darker);
+    $panel_border_v: map-get($overrides, panel-border);
+
+    $text_v: map-get($overrides, text);
+    $text_subtle_v: map-get($overrides, text-subtle);
+    $text_muted_v: map-get($overrides, text-muted);
+    $fg_v: map-get($overrides, fg);
+
+    $radius_v: map-get($overrides, radius);
+    $ease_out_v: map-get($overrides, e-out);
+    $ease_in_v: map-get($overrides, e-in);
+    $font_v: map-get($overrides, font-family);
+
+    /* Defaults when not overridden */
+    $accent_v: if($accent_v == null, $accent, $accent_v);
+    $danger_v: if($danger_v == null, $danger, $danger_v);
+    $ok_v: if($ok_v == null, $ok, $ok_v);
+
+    $bg_v: if($bg_v == null, $bg, $bg_v);
+    $panel_v: if($panel_v == null, $panel, $panel_v);
+    $panel_lighter_v: if(
+        $panel_lighter_v == null,
+        $panel-lighter,
+        $panel_lighter_v
+    );
+    $panel_border_v: if(
+        $panel_border_v == null,
+        $panel-border,
+        $panel_border_v
+    );
+
+    $text_v: if($text_v == null, $text, $text_v);
+    $text_subtle_v: if($text_subtle_v == null, $text-subtle, $text_subtle_v);
+    $text_muted_v: if($text_muted_v == null, $text-muted, $text_muted_v);
+    $fg_v: if($fg_v == null, $fg, $fg_v);
+
+    $radius_v: if($radius_v == null, $radius, $radius_v);
+    $ease_out_v: if($ease_out_v == null, $ease-out, $ease_out_v);
+    $ease_in_v: if($ease_in_v == null, $ease-in, $ease_in_v);
+    $font_v: if($font_v == null, $font-sans, $font_v);
+
+    #{$scope} {
+        --accent: #{$accent_v};
+        --accent-rgb: #{rgb-str($accent_v)};
+        --danger: #{$danger_v};
+        --ok: #{$ok_v};
+
+        --bg: #{$bg_v};
+        --panel: #{$panel_v};
+        --panel-lighter: #{$panel_lighter_v};
+        --panel-border: #{$panel_border_v};
+
+        --fg: #{$fg_v};
+        --text: #{$text_v};
+        --text-subtle: #{$text_subtle_v};
+        --text-muted: #{$text_muted_v};
+
+        --radius: #{$radius_v};
+        --e-out: #{$ease_out_v};
+        --e-in: #{$ease_in_v};
+
+        font-family: #{$font_v};
+    }
+}
+
+/* ---------------------------
+   Default :root emission
+---------------------------- */
+
+@if $emit-default-css-tokens {
+    @include css-tokens(":root", $font-sans);
+}

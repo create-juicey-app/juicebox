@@ -8,12 +8,10 @@
     {% if query.m is defined and query.m == "File Deleted Successfully." %}
       <meta http-equiv="refresh" content="1.2;url=/simple">
     {% endif %}
-
+<link rel="stylesheet" href="{{ css_bundle | default(value='/dist/app.css') }}" />
   <title>{{ t.simple_title | default(value='Orange JuiceBox') }}</title>
   <meta name="description" content="{{ t.simple_meta_description | default(value='Simple, high-speed file uploader and sharing service. No account required. Secure, fast, and easy file hosting.') }}" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <script src="/js/lang.js"></script>
-    <link rel="stylesheet" href="/css/simple.css" />
     <link rel="icon" href="/img/favicon.png" type="image/png" />
   </head>
   <body>
@@ -43,7 +41,7 @@
       <button type="submit" class="lang-btn">OK</button>
     </form>
     <hr>
-    <h2 id="mainContent">{{ t.simple_upload_heading | default(value="Upload Files") }}</h2>
+    <h2 id="mainContent" class="textcenter">{{ t.simple_upload_heading | default(value="Upload Files") }}</h2>
     <form
       class="upload"
       method="post"
@@ -100,22 +98,51 @@
       <p class="note">{{ t.privacy_note }}</p>
     </div>
     <hr>
-    <p class="note">{{ t.simple_return | safe }}</p>
-
     <footer
-      title="{{ t.footer_tagline | default(value='Service tagline') }}"
-    >
-      juicebox // {{ t.footer_sub | default(value='simple high-speed file host') }}
+      title="{{ t.footer_tagline | default(value='Service tagline') }}">
+      juicebox //
+      {{ t.footer_sub | default(value='simple high-speed file host') }}
+      <nav
+        aria-label="{{ t.site_links | default(value='Site links') }}"
+        class="footer-links">
+        <a
+          href="/"
+
+          >{{ t.home | default(value='Home') }}</a
+        >
+        •
+        <a
+          href="/simple"
+
+          >{{ t.simple | default(value='Simple') }}</a
+        >
+        •
+        <a
+          href="/faq"
+
+          >{{ t.faq | default(value='FAQ') }}</a
+        >
+        •
+        <a
+          href="/report"
+
+          >{{ t.report | default(value='Report') }}</a
+        >
+        •
+        <a
+          href="/terms"
+
+          >{{ t.terms | default(value='Terms') }}</a
+        >
+        •
+        <a
+          href="https://buymeacoffee.com/juiceydev"
+          target="_blank"
+          rel="noopener"
+
+          >{{ t.donate | default(value='Donate') }}</a
+        >
+      </nav>
     </footer>
-      <script>
-        (function () {
-          if (!window.JBLang || typeof window.JBLang.syncSelect !== "function") {
-            return;
-          }
-          var sel = document.getElementById("langSelectSimple");
-          if (!sel) return;
-          window.JBLang.syncSelect(sel);
-        })();
-      </script>
   </body>
 </html>

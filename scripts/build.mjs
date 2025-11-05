@@ -3,6 +3,7 @@ import { build, context } from "esbuild";
 import autoprefixer from "autoprefixer";
 import cssnano from "cssnano";
 import postcss from "postcss";
+import * as sass from "sass";
 import { mkdir, rm, readdir, readFile, writeFile } from "node:fs/promises";
 import { watch } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -18,7 +19,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
 const distDir = path.join(projectRoot, "public", "dist");
-const cssSourcePath = path.join(projectRoot, "public", "css", "app.css");
+
+// SCSS source: single app.scss
+const cssSourcePath = path.join(projectRoot, "public", "css", "app.scss");
+const cssDir = path.dirname(cssSourcePath);
 const watchMode = process.argv.includes("--watch");
 
 async function ensureCleanDist() {
@@ -46,7 +50,7 @@ async function precompressArtifacts(dir) {
         writeFile(`${full}.br`, brBuf),
         writeFile(`${full}.gz`, gzBuf),
       ]);
-    })
+    }),
   );
 }
 
@@ -55,6 +59,7 @@ async function generateManifest(dir, overrides = {}) {
   const manifest = {};
   const main = entries.find((name) => /^app-.*\.js$/.test(name)) || "app.js";
   manifest.app = `/dist/${main}`;
+
   const cssEntry =
     entries.find((name) => /^app-.*\.css$/.test(name)) ||
     entries.find((name) => name === "app.css");
@@ -63,51 +68,77 @@ async function generateManifest(dir, overrides = {}) {
   } else if (cssEntry) {
     manifest.css = `/dist/${cssEntry}`;
   }
+
   await writeFile(
     path.join(dir, "manifest.json"),
-    JSON.stringify(manifest, null, 2)
+    JSON.stringify(manifest, null, 2),
   );
 }
 
+// Compile SCSS with dart-sass, then run PostCSS plugins (autoprefixer + cssnano in prod)
 async function buildCss({ production }) {
-  const source = await readFile(cssSourcePath, "utf8");
-  const plugins = [autoprefixer()];
-  if (production) {
-    plugins.push(cssnano({ preset: "default" }));
-  }
-  const result = await postcss(plugins).process(source, {
-    from: cssSourcePath,
-    map: production ? false : { inline: false },
+  // Compile SCSS -> CSS
+  const sassResult = sass.compile(cssSourcePath, {
+    style: production ? "expanded" : "expanded",
+    sourceMap: !production,
+    loadPaths: [path.join(projectRoot, "public", "css")],
   });
-  let fileName = "app.css";
+
+  const compiledCss = sassResult.css;
+
+  let prevMap;
+  if (!production && sassResult.sourceMap) {
+    if (typeof sassResult.sourceMap === "string") {
+      prevMap = sassResult.sourceMap;
+    } else {
+      try {
+        prevMap = JSON.stringify(sassResult.sourceMap);
+      } catch {
+        prevMap = null;
+      }
+    }
+  }
+
+  const plugins = [autoprefixer()];
+  if (production) plugins.push(cssnano({ preset: "default" }));
+
+  const postcssResult = await postcss(plugins).process(compiledCss, {
+    from: cssSourcePath,
+    map: production ? false : { prev: prevMap, inline: false },
+  });
+
+  const baseName = "app";
+  let fileName = `${baseName}.css`;
   if (production) {
     const hash = crypto
       .createHash("sha256")
-      .update(result.css)
+      .update(postcssResult.css)
       .digest("hex")
       .slice(0, 8);
-    fileName = `app-${hash}.css`;
+    fileName = `${baseName}-${hash}.css`;
   }
+
   const outPath = path.join(distDir, fileName);
-  await writeFile(outPath, result.css, "utf8");
-  if (!production && result.map) {
-    await writeFile(`${outPath}.map`, result.map.toString(), "utf8");
+  await writeFile(outPath, postcssResult.css, "utf8");
+  if (!production && postcssResult.map) {
+    await writeFile(`${outPath}.map`, postcssResult.map.toString(), "utf8");
   }
+
   return fileName;
 }
 
 function setupCssWatcher(rebuild) {
-  const srcDir = path.dirname(cssSourcePath);
+  const srcDir = cssDir;
   let timeout = null;
   const watcher = watch(srcDir, { persistent: true }, (eventType, filename) => {
     if (!filename) return;
     const changedPath = path.resolve(srcDir, filename.toString());
-    if (changedPath !== cssSourcePath) return;
+    if (!changedPath.endsWith(".scss")) return;
     if (timeout) clearTimeout(timeout);
     timeout = setTimeout(() => {
       timeout = null;
       rebuild().catch((err) =>
-        console.error("[build] CSS rebuild failed", err)
+        console.error("[build] CSS rebuild failed", err),
       );
     }, 50);
   });
@@ -148,60 +179,77 @@ async function buildApp({ watch }) {
     chunkNames: "chunks/[name]-[hash]",
     entryNames: production ? "[name]-[hash]" : "[name]",
     define: {
-      "process.env.NODE_ENV": JSON.stringify(production ? "production" : "development"),
+      "process.env.NODE_ENV": JSON.stringify(
+        production ? "production" : "development",
+      ),
       "window.DEBUG_LOGS": "false",
     },
     minify: production,
   };
 
-  const thumbOptions = {
-    ...common,
-    entryPoints: [path.join(projectRoot, "public", "js", "thumbgen.js")],
-    outfile: path.join(distDir, "thumbgen.js"),
-    bundle: true,
-    format: "iife",
-    globalName: "Thumbgen",
-    minify: production,
-  };
-
   if (watch) {
     let cssFile = await buildCss({ production });
-    const appCtx = await context(appOptions);
-    const thumbCtx = await context(thumbOptions);
-    await Promise.all([appCtx.rebuild(), thumbCtx.rebuild()]);
+
+    function createRebuildPlugin(label, onSuccess) {
+      return {
+        name: `watch-${label}`,
+        setup(build) {
+          build.onEnd((result) => {
+            if (
+              result &&
+              Array.isArray(result.errors) &&
+              result.errors.length
+            ) {
+              console.error(
+                "[build] " + label + " rebuild failed",
+                result.errors,
+              );
+            } else {
+              if (typeof onSuccess === "function") {
+                Promise.resolve(onSuccess()).catch((err) =>
+                  console.error(
+                    "[build]",
+                    label,
+                    "post-rebuild hook failed",
+                    err,
+                  ),
+                );
+              }
+              console.log("[build] " + label + " rebuilt");
+            }
+          });
+        },
+      };
+    }
+
+    const appCtx = await context({
+      ...appOptions,
+      plugins: [
+        ...(appOptions.plugins || []),
+        createRebuildPlugin("app", () =>
+          generateManifest(distDir, { cssPath: `/dist/${cssFile}` }),
+        ),
+      ],
+    });
+
+    await mkdir(distDir, { recursive: true });
+    await appCtx.rebuild();
     await generateManifest(distDir, { cssPath: `/dist/${cssFile}` });
-    await Promise.all([
-      appCtx.watch({
-        onRebuild(error) {
-          if (error) {
-            console.error("[build] App rebuild failed", error);
-          } else {
-            generateManifest(distDir, { cssPath: `/dist/${cssFile}` }).catch((err) =>
-              console.error("[build] Manifest refresh failed", err)
-            );
-          }
-        },
-      }),
-      thumbCtx.watch({
-        onRebuild(error) {
-          if (error) {
-            console.error("[build] Thumbgen rebuild failed", error);
-          }
-        },
-      }),
-    ]);
+
+    await appCtx.watch();
+
     const disposeCssWatcher = setupCssWatcher(async () => {
       cssFile = await buildCss({ production });
       await generateManifest(distDir, { cssPath: `/dist/${cssFile}` });
       console.log("[build] CSS rebuilt");
     });
+
     console.log("Watching for changes...");
-    return () =>
-      Promise.all([appCtx.dispose(), thumbCtx.dispose(), disposeCssWatcher()]);
+    return () => Promise.all([appCtx.dispose(), disposeCssWatcher()]);
   }
 
   const cssFile = await buildCss({ production });
-  await Promise.all([build(appOptions), build(thumbOptions)]);
+  await build(appOptions);
   await precompressArtifacts(distDir);
   await generateManifest(distDir, { cssPath: `/dist/${cssFile}` });
 }

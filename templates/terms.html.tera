@@ -15,87 +15,9 @@
     />
   <script src="/js/lang.js"></script>
   <link rel="stylesheet" href="{{ css_bundle | default(value='/css/app.css') }}" />
-    <style>
-      body {
-        max-width: 860px;
-        margin: 0 auto;
-        padding: 1.4rem;
-        font-family: system-ui, Segoe UI, Roboto, sans-serif;
-        background: #0f141b;
-        color: #e8ecf3;
-      }
-      h1 {
-        margin: 0.2rem 0 1.2rem;
-        font-size: 1.8rem;
-      }
-      h2 {
-        font-size: 1rem;
-        margin: 1.4rem 0 0.55rem;
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
-        opacity: 0.8;
-      }
-      p,
-      li {
-        line-height: 1.5;
-        font-size: 0.85rem;
-      }
-      code {
-        background: #1d2732;
-        padding: 0.15rem 0.35rem;
-        border-radius: 4px;
-        font-size: 0.75rem;
-      }
-      a {
-        color: #ff9800;
-      }
-      ul {
-        padding-left: 1.1rem;
-      }
-      footer {
-        margin: 2.5rem 0 1rem;
-        font-size: 0.6rem;
-        opacity: 0.55;
-        text-align: center;
-      }
-      .panel {
-        background: #1a2230;
-        padding: 1rem 1.1rem 1.2rem;
-        border: 1px solid #273242;
-        border-radius: 12px;
-        margin: 0 0 1rem;
-      }
-      .skip-links {
-        position: absolute;
-        top: -40px;
-        left: 0;
-        width: 100%;
-        z-index: 1000;
-      }
-      .skip-link {
-        display: block;
-        padding: 0.5rem 1rem;
-        background: #ff9800;
-        color: #0f141b;
-        text-align: center;
-        border-radius: 4px;
-        transition: top 0.2s;
-      }
-      .skip-link:focus {
-        top: 0;
-      }
-    </style>
+
   </head>
-  <body
-    style="
-      background: #0f141b;
-      color: #e8ecf3;
-      max-width: 860px;
-      margin: 0 auto;
-      padding: 1.4rem;
-      font-family: system-ui, Segoe UI, Roboto, sans-serif;
-    "
-  >
+  <body class="doc-page">
     <nav class="skip-links" aria-label="Skip links">
       <a
         href="#mainContent"
@@ -105,7 +27,7 @@
     </nav>
     <header>
       <h1>{{ t.terms_title | default(value='Terms of Service') }}</h1>
-      <p style="opacity: 0.7; font-size: 0.9rem">
+      <p class="lead">
         {{ t.terms_effective | default(value='Effective: 2025 (Revision Oct 2025)') }}
       </p>
     </header>
@@ -182,65 +104,44 @@
         <h2>{{ t.terms_section_contact_heading }}</h2>
         <p>{{ t.terms_section_contact_body | safe }}</p>
       </div>
-      <p style="font-size: 0.65rem; opacity: 0.55">
-        {{ t.terms_last_updated | default(value='Last updated: 2025-10-11') }}
-      </p>
-      <p style="font-size: 0.7rem">
-        <a href="/">{{ t.home }}</a> • <a href="/faq">{{ t.faq }}</a> •
-        <a href="/report">{{ t.report }}</a> •
-        <a
-          href="https://buymeacoffee.com/juiceydev"
-          target="_blank"
-          rel="noopener"
-          >{{ t.donate }}</a
-        >
+      <p class="small">
+        {{ t.terms_last_updated | default(value='Last updated: 2025-11-05 (YYYY-MM-DD)') }}
       </p>
     </main>
     <footer
-      title="{{ t.footer_tagline | default(value='Service tagline') }}"
-      style="color: #fff !important; opacity: 1 !important; background: none"
-    >
+      title="{{ t.footer_tagline | default(value='Service tagline') }}">
       juicebox //
       {{ t.footer_sub | default(value='simple high-speed file host') }}
       <nav
         aria-label="{{ t.site_links | default(value='Site links') }}"
-        class="footer-links"
-        style="
-          display: block;
-          margin-top: 0.45rem;
-          font-size: 0.6rem;
-          letter-spacing: 0.35px;
-          color: #fff !important;
-          opacity: 1 !important;
-        "
-      >
+        class="footer-links">
         <a
           href="/"
-          style="color: #fff !important"
+
           >{{ t.home | default(value='Home') }}</a
         >
         •
         <a
           href="/simple"
-          style="color: #fff !important"
+
           >{{ t.simple | default(value='Simple') }}</a
         >
         •
         <a
           href="/faq"
-          style="color: #fff !important"
+
           >{{ t.faq | default(value='FAQ') }}</a
         >
         •
         <a
           href="/report"
-          style="color: #fff !important"
+
           >{{ t.report | default(value='Report') }}</a
         >
         •
         <a
           href="/terms"
-          style="color: #fff !important"
+
           >{{ t.terms | default(value='Terms') }}</a
         >
         •
@@ -248,21 +149,10 @@
           href="https://buymeacoffee.com/juiceydev"
           target="_blank"
           rel="noopener"
-          style="color: #fff !important"
+
           >{{ t.donate | default(value='Donate') }}</a
         >
       </nav>
-      <br /><span
-        id="ipNote"
-        style="
-          display: block;
-          font-size: 0.55rem;
-          opacity: 0.95 !important;
-          margin-top: 0.4rem;
-          letter-spacing: 0.3px;
-          color: #fff !important;
-        "
-      ></span>
     </footer>
   </body>
 </html>

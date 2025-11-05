@@ -1,155 +1,415 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Report Content – JuiceBox</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="robots" content="noindex" />
-  <link rel="canonical" href="/report" />
-  <meta name="description" content="Report abusive or illegal content hosted on JuiceBox." />
-  <link rel="stylesheet" href="/css/app.css" />
-  <style>
-    /* Page‑specific overrides */
-    main { width:min(760px,88%); }
-    form.report-form { display:flex; flex-direction:column; gap:1.05rem; }
-    form.report-form fieldset { border:none; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:.9rem; }
-    form.report-form label { display:flex; flex-direction:column; gap:.45rem; font-size:.65rem; letter-spacing:.45px; font-weight:600; text-transform:uppercase; color:var(--text-subtle); }
-    form.report-form input[type=text], form.report-form select, form.report-form textarea { background:#121b24; color:var(--text); border:1px solid #2b394a; border-radius:9px; padding:.62rem .7rem; font:inherit; font-size:.8rem; resize:vertical; transition:border-color .25s, background .25s; }
-    form.report-form input:focus, form.report-form select:focus, form.report-form textarea:focus { outline:2px solid var(--accent); outline-offset:1px; }
-    form.report-form textarea { min-height:170px; }
-    form.report-form button { align-self:flex-start; background:var(--accent); color:#111; border:1px solid rgba(var(--accent-rgb)/.6); padding:.65rem 1.25rem; font-size:.78rem; font-weight:600; border-radius:10px; cursor:pointer; letter-spacing:.6px; transition:.35s background,.35s transform,.35s box-shadow; }
-    form.report-form button:hover:not([disabled]) { transform:translateY(-2px); box-shadow:0 4px 18px -6px rgba(0,0,0,.6); }
-    form.report-form button[disabled] { opacity:.55; filter:grayscale(1); cursor:not-allowed; transform:none; }
-    .req { color:#ff5252; margin-left:.25rem; font-weight:700; }
-    .note, .legal { font-size:.6rem; opacity:.62; letter-spacing:.4px; line-height:1.35; }
-    .legal { margin-top:-.3rem; }
-    .msg, .report-msg { background:#223038; border:1px solid #33464f; padding:.65rem .85rem; border-radius:10px; font-size:.7rem; letter-spacing:.4px; margin:0 0 1rem; animation:fadeIn .5s var(--e-out); }
-    .center { text-align:center; }
-    footer { margin:1.8rem 0 1rem; font-size:.55rem; opacity:.45; letter-spacing:.35px; text-align:center; }
-    .pair label { flex:1 1 250px; }
-    .status-area { min-height:2.2rem; display:flex; flex-direction:column; gap:.6rem; }
-    [data-hidden="true"] { display:none !important; }
-    @keyframes fadeIn { from { opacity:0; transform:translateY(4px);} to { opacity:1; transform:translateY(0);} }
-  </style>
-</head>
-<body>
-  <nav class="skip-links" aria-label="Skip links">
-    <a href="#reportMain" class="skip-link">Skip to main content</a>
-  </nav>
-  <header style="padding:1.7rem 1.2rem 1rem; text-align:center;">
-    <h1 style="margin:0 0 .6rem; font-size:clamp(1.8rem,4.2vw,3rem);">Report Content</h1>
-    <p class="lead" style="margin:0; font-size:.9rem; color:var(--text-subtle);">Flag abusive, infringing, or unsafe files.</p>
-  </header>
-  <main id="reportMain" tabindex="-1" style="display:flex; flex-direction:column; gap:1.4rem;">
-    <div class="panel" style="animation:fadeIn .6s var(--e-out);">
-      <section>
-        <form class="report-form" method="post" action="/report" autocomplete="off" novalidate id="reportForm">
-          <div class="status-area">
-            <div id="formMsg" class="report-msg" data-hidden="true" role="status" aria-live="polite"></div>
-          </div>
-          <fieldset class="pair">
-            <label>File ID <span class="req" aria-hidden="true">*</span>
-              <input type="text" name="file" required maxlength="80" spellcheck="false" placeholder="Example: AbCdEf1234567890" aria-describedby="fileHelp" />
-            </label>
-            <label>Reason <span class="req" aria-hidden="true">*</span>
-              <select name="reason" required aria-describedby="reasonHelp">
-                <option value="spam">Spam / advertising</option>
-                <option value="malware">Malware</option>
-                <option value="copyright">Copyright</option>
-                <option value="personal">Personal data / privacy</option>
-                <option value="harassment">Harassment / hate</option>
-                <option value="other">Other</option>
-              </select>
-            </label>
-          </fieldset>
-          <div id="fileHelp" class="note">Paste just the file identifier (characters after /f/ in the link). Leave out any leading /f/.</div>
-          <div id="reasonHelp" class="note">Select the best match. Choose Other if none apply.</div>
-          <label style="margin-top:.4rem">Details (optional)
-            <textarea name="details" maxlength="1000" placeholder="Provide concise context (max 1000 chars). Do not include additional sensitive personal data."></textarea>
-          </label>
-          <button type="submit" id="submitBtn">Submit Report</button>
-          <p class="legal">Your IP is stored solely for moderation, anti‑abuse, and legal compliance; it is removed with expired related data. Duplicate or bad‑faith reports may be ignored. Submitting does not guarantee removal.</p>
-          <p class="note">Return to <a href="/">home</a>.</p>
-        </form>
-      </section>
-    </div>
-  </main>
-  <footer>juicebox // report
-    <nav aria-label="Site links" style="display:block;margin-top:.55rem;font-size:.58rem;opacity:.65;letter-spacing:.35px">
-      <a href="/">Home</a> • <a href="/faq">FAQ</a> • <a href="/terms">Terms</a> • <a href="https://buymeacoffee.com/juiceydev" target="_blank" rel="noopener">Donate</a>
-    </nav>
-  </footer>
-<script>
-(function(){
-  const form = document.getElementById('reportForm');
-  if(!form) return;
-  const fileInput = form.querySelector('input[name=file]');
-  const btn = document.getElementById('submitBtn');
-  const msg = document.getElementById('formMsg');
-  const jsNotice = document.getElementById('jsNotice');
-  jsNotice && (jsNotice.dataset.hidden = 'false');
+    <head>
+        <meta charset="utf-8" />
+        <title>Report Content – JuiceBox</title>
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <meta name="robots" content="noindex" />
+        <link rel="canonical" href="/report" />
+        <meta
+            name="description"
+            content="Report abusive or illegal content hosted on JuiceBox."
+        />
+        <link rel="stylesheet" href="/css/app.css" />
+        <style>
+            /* Page‑specific overrides */
+            main {
+                width: min(760px, 88%);
+            }
+            form.report-form {
+                display: flex;
+                flex-direction: column;
+                gap: 1.05rem;
+            }
+            form.report-form fieldset {
+                border: none;
+                margin: 0;
+                padding: 0;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.9rem;
+            }
+            form.report-form label {
+                display: flex;
+                flex-direction: column;
+                gap: 0.45rem;
+                font-size: 0.65rem;
+                letter-spacing: 0.45px;
+                font-weight: 600;
+                text-transform: uppercase;
+                color: var(--text-subtle);
+            }
+            form.report-form input[type="text"],
+            form.report-form select,
+            form.report-form textarea {
+                background: #121b24;
+                color: var(--text);
+                border: 1px solid #2b394a;
+                border-radius: 9px;
+                padding: 0.62rem 0.7rem;
+                font: inherit;
+                font-size: 0.8rem;
+                resize: vertical;
+                transition:
+                    border-color 0.25s,
+                    background 0.25s;
+            }
+            form.report-form input:focus,
+            form.report-form select:focus,
+            form.report-form textarea:focus {
+                outline: 2px solid var(--accent);
+                outline-offset: 1px;
+            }
+            form.report-form textarea {
+                min-height: 170px;
+            }
+            form.report-form button {
+                align-self: flex-start;
+                background: var(--accent);
+                color: #111;
+                border: 1px solid rgba(var(--accent-rgb) / 0.6);
+                padding: 0.65rem 1.25rem;
+                font-size: 0.78rem;
+                font-weight: 600;
+                border-radius: 10px;
+                cursor: pointer;
+                letter-spacing: 0.6px;
+                transition:
+                    0.35s background,
+                    0.35s transform,
+                    0.35s box-shadow;
+            }
+            form.report-form button:hover:not([disabled]) {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 18px -6px rgba(0, 0, 0, 0.6);
+            }
+            form.report-form button[disabled] {
+                opacity: 0.55;
+                filter: grayscale(1);
+                cursor: not-allowed;
+                transform: none;
+            }
+            .req {
+                color: #ff5252;
+                margin-left: 0.25rem;
+                font-weight: 700;
+            }
+            .note,
+            .legal {
+                font-size: 0.6rem;
+                opacity: 0.62;
+                letter-spacing: 0.4px;
+                line-height: 1.35;
+            }
+            .legal {
+                margin-top: -0.3rem;
+            }
+            .msg,
+            .report-msg {
+                background: #223038;
+                border: 1px solid #33464f;
+                padding: 0.65rem 0.85rem;
+                border-radius: 10px;
+                font-size: 0.7rem;
+                letter-spacing: 0.4px;
+                margin: 0 0 1rem;
+                animation: fadeIn 0.5s var(--e-out);
+            }
+            .center {
+                text-align: center;
+            }
+            footer {
+                margin: 1.8rem 0 1rem;
+                font-size: 0.55rem;
+                opacity: 0.45;
+                letter-spacing: 0.35px;
+                text-align: center;
+            }
+            .pair label {
+                flex: 1 1 250px;
+            }
+            .status-area {
+                display: flex;
+                flex-direction: column;
+                gap: 0.6rem;
+            }
+            [data-hidden="true"] {
+                display: none !important;
+            }
+            @keyframes fadeIn {
+                from {
+                    opacity: 0;
+                    transform: translateY(4px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <nav class="skip-links" aria-label="Skip links">
+            <a href="#reportMain" class="skip-link">Skip to main content</a>
+        </nav>
+        <header style="padding: 1.7rem 1.2rem 1rem; text-align: center">
+            <h1
+                style="
+                    margin: 0 0 0.6rem;
+                    font-size: clamp(1.8rem, 4.2vw, 3rem);
+                "
+            >
+                Report Content
+            </h1>
+            <p
+                class="lead"
+                style="margin: 0; font-size: 0.9rem; color: var(--text-subtle)"
+            >
+                Flag abusive, infringing, or unsafe files.
+            </p>
+        </header>
+        <main
+            id="reportMain"
+            tabindex="-1"
+            style="display: flex; flex-direction: column; gap: 1.4rem"
+        >
+            <div class="panel" style="animation: fadeIn 0.6s var(--e-out)">
+                <section>
+                    <form
+                        class="report-form"
+                        method="post"
+                        action="/report"
+                        autocomplete="off"
+                        novalidate
+                        id="reportForm"
+                    >
+                        <div class="status-area">
+                            <div
+                                id="formMsg"
+                                class="report-msg"
+                                data-hidden="true"
+                                role="status"
+                                aria-live="polite"
+                            ></div>
+                        </div>
+                        <fieldset class="pair">
+                            <label
+                                >File ID
+                                <span class="req" aria-hidden="true">*</span>
+                                <input
+                                    type="text"
+                                    name="file"
+                                    required
+                                    maxlength="80"
+                                    spellcheck="false"
+                                    placeholder="Example: AbCdEf1234567890"
+                                    aria-describedby="fileHelp"
+                                />
+                            </label>
+                            <label
+                                >Reason
+                                <span class="req" aria-hidden="true">*</span>
+                                <select
+                                    name="reason"
+                                    required
+                                    aria-describedby="reasonHelp"
+                                >
+                                    <option value="spam">
+                                        Spam / advertising
+                                    </option>
+                                    <option value="malware">Malware</option>
+                                    <option value="copyright">Copyright</option>
+                                    <option value="personal">
+                                        Personal data / privacy
+                                    </option>
+                                    <option value="harassment">
+                                        Harassment / hate
+                                    </option>
+                                    <option value="other">Other</option>
+                                </select>
+                            </label>
+                        </fieldset>
+                        <div id="fileHelp" class="note">
+                            Paste just the file identifier (characters after /f/
+                            in the link). Leave out any leading /f/.
+                        </div>
+                        <div id="reasonHelp" class="note">
+                            Select the best match. Choose Other if none apply.
+                        </div>
+                        <label style="margin-top: 0.4rem"
+                            >Details (optional)
+                            <textarea
+                                name="details"
+                                maxlength="1000"
+                                placeholder="Provide concise context (max 1000 chars). Do not include additional sensitive personal data."
+                            ></textarea>
+                        </label>
+                        <button type="submit" id="submitBtn">
+                            Submit Report
+                        </button>
+                        <p class="legal">
+                            Your IP is stored solely for moderation, anti‑abuse,
+                            and legal compliance; it is removed with expired
+                            related data. Duplicate or bad‑faith reports may be
+                            ignored. Submitting does not guarantee removal.
+                        </p>
+                        <p class="note">Return to <a href="/">home</a>.</p>
+                    </form>
+                </section>
+            </div>
+        </main>
+        <footer
+            title="{{ t.footer_tagline | default(value='Service tagline') }}"
+        >
+            juicebox // {{ t.footer_sub | default(value='simple high-speed file
+            host') }}
+            <nav
+                aria-label="{{ t.site_links | default(value='Site links') }}"
+                class="footer-links"
+            >
+                <a href="/">{{ t.home | default(value='Home') }}</a>
+                •
+                <a href="/simple">{{ t.simple | default(value='Simple') }}</a>
+                •
+                <a href="/faq">{{ t.faq | default(value='FAQ') }}</a>
+                •
+                <a href="/report">{{ t.report | default(value='Report') }}</a>
+                •
+                <a href="/terms">{{ t.terms | default(value='Terms') }}</a>
+                •
+                <a
+                    href="https://buymeacoffee.com/juiceydev"
+                    target="_blank"
+                    rel="noopener"
+                    >{{ t.donate | default(value='Donate') }}</a
+                >
+            </nav>
+        </footer>
+        <script>
+            (function () {
+                const form = document.getElementById("reportForm");
+                if (!form) return;
+                const fileInput = form.querySelector("input[name=file]");
+                const btn = document.getElementById("submitBtn");
+                const msg = document.getElementById("formMsg");
+                const jsNotice = document.getElementById("jsNotice");
+                jsNotice && (jsNotice.dataset.hidden = "false");
 
-  const FILE_ID_RE = /^[A-Za-z0-9._-]{6,80}$/; // basic allowed pattern
+                const FILE_ID_RE = /^[A-Za-z0-9._-]{6,80}$/; // basic allowed pattern
 
-  // Enhance: normalize file id if full link pasted
-  fileInput && fileInput.addEventListener('input', () => {
-    let v = fileInput.value.trim();
-    const m = v.match(/\/f\/?([A-Za-z0-9._-]{6,80})$/); // capture trailing id
-    if(m) v = m[1];
-    fileInput.value = v;
-    validate();
-  });
+                // Enhance: normalize file id if full link pasted
+                fileInput &&
+                    fileInput.addEventListener("input", () => {
+                        let v = fileInput.value.trim();
+                        const m = v.match(/\/f\/?([A-Za-z0-9._-]{6,80})$/); // capture trailing id
+                        if (m) v = m[1];
+                        fileInput.value = v;
+                        validate();
+                    });
 
-  function setStatus(text, type){
-    if(!msg) return;
-    msg.textContent = text;
-    msg.dataset.hidden = 'false';
-    msg.className = 'report-msg ' + (type||'');
-  }
-  function clearStatus(){ if(msg){ msg.textContent=''; msg.dataset.hidden='true'; msg.className='report-msg'; } }
+                function setStatus(text, type) {
+                    if (!msg) return;
+                    msg.textContent = text;
+                    msg.dataset.hidden = "false";
+                    msg.className = "report-msg " + (type || "");
+                }
+                function clearStatus() {
+                    if (msg) {
+                        msg.textContent = "";
+                        msg.dataset.hidden = "true";
+                        msg.className = "report-msg";
+                    }
+                }
 
-  function validate(){
-    const val = fileInput.value.trim();
-    if(!val){ btn.disabled = true; return false; }
-    if(!FILE_ID_RE.test(val)){
-      btn.disabled = true;
-      setStatus('Invalid File ID format. Use only letters, numbers, . _ - (min 6 chars).', 'err');
-      return false;
-    }
-    if(!msg.dataset.hidden && msg.className.includes('err')){ clearStatus(); }
-    btn.disabled = false;
-    return true;
-  }
+                function validate() {
+                    const val = fileInput.value.trim();
+                    if (!val) {
+                        btn.disabled = true;
+                        return false;
+                    }
+                    if (!FILE_ID_RE.test(val)) {
+                        btn.disabled = true;
+                        setStatus(
+                            "Invalid File ID format. Use only letters, numbers, . _ - (min 6 chars).",
+                            "err",
+                        );
+                        return false;
+                    }
+                    if (!msg.dataset.hidden && msg.className.includes("err")) {
+                        clearStatus();
+                    }
+                    btn.disabled = false;
+                    return true;
+                }
 
-  validate();
+                validate();
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if(!validate()) return; // block invalid
-    clearStatus();
-    if(btn){ btn.disabled = true; btn.textContent = 'Submitting…'; btn.setAttribute('aria-busy','true'); }
-    try {
-      // Build URL-encoded body so Axum Form extractor accepts it (avoid 415)
-      const params = new URLSearchParams();
-      params.set('file', fileInput.value.trim());
-      params.set('reason', form.querySelector('select[name=reason]').value);
-      const detailsEl = form.querySelector('textarea[name=details]');
-      if(detailsEl && detailsEl.value.trim()) params.set('details', detailsEl.value.trim());
-      const resp = await fetch('/report', { method:'POST', body:params });
-      if(resp.ok){
-        setStatus('Report submitted. Thank you for helping keep the service safe.', 'ok');
-        if(btn){ btn.textContent='Reported'; btn.removeAttribute('aria-busy'); }
-        form.querySelectorAll('input,select,textarea').forEach(el=>{ if(el!==btn) el.disabled = true; });
-      } else {
-        setStatus('Failed to submit report (server responded '+resp.status+'). Try again later.', 'err');
-        if(btn){ btn.disabled = false; btn.textContent='Submit Report'; btn.removeAttribute('aria-busy'); }
-      }
-    } catch(err){
-      setStatus('Network error while submitting. Please retry.', 'err');
-      if(btn){ btn.disabled = false; btn.textContent='Submit Report'; btn.removeAttribute('aria-busy'); }
-    }
-  });
-})();
-</script>
-</body>
+                form.addEventListener("submit", async (e) => {
+                    e.preventDefault();
+                    if (!validate()) return; // block invalid
+                    clearStatus();
+                    if (btn) {
+                        btn.disabled = true;
+                        btn.textContent = "Submitting…";
+                        btn.setAttribute("aria-busy", "true");
+                    }
+                    try {
+                        // Build URL-encoded body so Axum Form extractor accepts it (avoid 415)
+                        const params = new URLSearchParams();
+                        params.set("file", fileInput.value.trim());
+                        params.set(
+                            "reason",
+                            form.querySelector("select[name=reason]").value,
+                        );
+                        const detailsEl = form.querySelector(
+                            "textarea[name=details]",
+                        );
+                        if (detailsEl && detailsEl.value.trim())
+                            params.set("details", detailsEl.value.trim());
+                        const resp = await fetch("/report", {
+                            method: "POST",
+                            body: params,
+                        });
+                        if (resp.ok) {
+                            setStatus(
+                                "Report submitted. Thank you for helping keep the service safe.",
+                                "ok",
+                            );
+                            if (btn) {
+                                btn.textContent = "Reported";
+                                btn.removeAttribute("aria-busy");
+                            }
+                            form.querySelectorAll(
+                                "input,select,textarea",
+                            ).forEach((el) => {
+                                if (el !== btn) el.disabled = true;
+                            });
+                        } else {
+                            setStatus(
+                                "Failed to submit report (server responded " +
+                                    resp.status +
+                                    "). Try again later.",
+                                "err",
+                            );
+                            if (btn) {
+                                btn.disabled = false;
+                                btn.textContent = "Submit Report";
+                                btn.removeAttribute("aria-busy");
+                            }
+                        }
+                    } catch (err) {
+                        setStatus(
+                            "Network error while submitting. Please retry.",
+                            "err",
+                        );
+                        if (btn) {
+                            btn.disabled = false;
+                            btn.textContent = "Submit Report";
+                            btn.removeAttribute("aria-busy");
+                        }
+                    }
+                });
+            })();
+        </script>
+    </body>
 </html>

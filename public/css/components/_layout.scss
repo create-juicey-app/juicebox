@@ -1,0 +1,44 @@
+/* Layout partial (extracted from components)
+   - Page header, hero title, lead text
+   - Main content container grid
+*/
+
+header {
+    padding: 1.9rem 1.2rem 0;
+    text-align: center;
+}
+
+h1 {
+    margin: 0 0 0.45rem;
+    font-size: clamp(2rem, 4.2vw, 3.25rem);
+    color: var(--text);
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+p.lead {
+    margin: 0.25rem auto 0.75rem;
+    color: var(--text-subtle);
+    font-size: 0.95rem;
+    text-align: center;
+    max-width: 70ch;
+    padding: 0 1rem;
+}
+
+/* Center section headings inside panels on the homepage */
+.panel h2 {
+    text-align: center;
+}
+
+/* Ensure footer links appear on a new line under the footer text */
+footer .footer-links {
+    display: block;
+}
+
+main {
+    width: min(880px, 82%);
+    margin: 1.1rem auto 2.5rem;
+    display: grid;
+    gap: 1.6rem;
+    grid-template-columns: 1fr;
+}

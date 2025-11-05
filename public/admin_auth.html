@@ -1,24 +1,42 @@
-<!-- filepath: /home/juiceydev/juicebox/public/admin_auth.html -->
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>Admin Authentication</title>
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<link rel="stylesheet" href="/css/app.css" />
-<style>body{display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#0f141b;color:#e8edf2;font:15px/1.4 system-ui,sans-serif;} form{background:#18222d;border:1px solid #2b3746;padding:2rem 2.2rem 2.4rem;border-radius:18px;display:flex;flex-direction:column;gap:1.1rem;min-width:320px;box-shadow:0 8px 28px -12px rgba(0,0,0,.6);} h1{margin:0 0 .25rem;font-size:1.5rem;letter-spacing:.5px;} p{margin:0 0 .2rem;font-size:.75rem;opacity:.7;} input[type=password]{background:#121b24;border:1px solid #2b394a;color:#e8edf2;padding:.65rem .75rem;border-radius:10px;font-size:.85rem;letter-spacing:.5px;} input[type=password]:focus{outline:2px solid #ff9800;border-color:#ff9800;} button{background:#ff9800;border:0;color:#111;padding:.75rem 1rem;border-radius:10px;font-weight:600;letter-spacing:.6px;font-size:.78rem;cursor:pointer;box-shadow:0 4px 16px -8px rgba(0,0,0,.6);} button:hover{filter:brightness(1.08);} .hint{font-size:.62rem;opacity:.55;line-height:1.4;} a{color:#ff9800;text-decoration:none;font-size:.65rem;} a:hover{text-decoration:underline;}</style>
-</head>
-<body>
-  <form method="post" action="/auth" aria-describedby="desc">
-    <div>
-      <h1>Admin Login</h1>
-      <p id="desc">Enter the rotating admin key to start a privileged session.</p>
-    </div>
-    <label for="key" class="visually-hidden">Admin Key</label>
-    <input id="key" name="key" type="password" placeholder="Admin Key" autofocus required />
-    <button type="submit">Authenticate</button>
-    <p class="hint">A secure session cookie is set if authentication succeeds.</p>
-    <p style="margin:0" class="hint"><a href="/">Back home</a></p>
-  </form>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <title>Admin Authentication</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body class="page-full-center">
+    <main class="container" role="main">
+      <form class="panel" method="post" action="/auth" aria-describedby="desc">
+        <header>
+          <h1 class="page-title">Admin Login</h1>
+          <p id="desc" class="lead"></head></title></header>
+            Enter the rotating admin key to start a privileged session.
+          </p>
+        </header>
+
+        <label for="key" class="visually-hidden">Admin key</label>
+        <input
+          id="key"
+          name="key"
+          type="password"
+          placeholder="Admin key"
+          required
+          autofocus
+          autocomplete="off"
+        />
+
+        <button type="submit" class="primary">Authenticate</button>
+
+        <p class="small text-subtle">
+          A secure session cookie is set if authentication succeeds.
+        </p>
+
+        <nav class="inline-nav" aria-label="Navigation">
+          <a href="/">Back home</a>
+        </nav>
+      </form>
+    </main>
+  </body>
 </html>

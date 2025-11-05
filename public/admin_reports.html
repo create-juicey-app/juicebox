@@ -1,30 +1,46 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>Admin Reports</title>
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<link rel="stylesheet" href="/css/app.css" />
-<style>body{font:14px/1.4 system-ui,sans-serif;margin:0;background:#0f141b;color:#e8edf2;padding:1.25rem;} h1{margin:0 0 1.1rem;font-size:1.4rem;} table{border-collapse:collapse;width:100%;font-size:.7rem;} th,td{border:1px solid #2c3948;padding:.5rem .55rem;text-align:left;vertical-align:top;} th{background:#18222d;text-transform:uppercase;letter-spacing:.6px;font-size:.6rem;} tbody tr:nth-child(even){background:#141d26;} a{color:#ff9800;text-decoration:none;} a:hover{text-decoration:underline;} button.del{background:#ff3d00;border:0;color:#fff;padding:.4rem .65rem;font-size:.6rem;border-radius:6px;cursor:pointer;letter-spacing:.5px;} button.del:hover{filter:brightness(1.1);} nav a{font-size:.6rem;margin-right:.75rem;} .wrap{max-width:1200px;margin:0 auto;} caption{caption-side:bottom;font-size:.55rem;opacity:.6;padding:.5rem 0;text-align:left;} .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem;} .topbar .links a{background:#18222d;padding:.45rem .65rem;border-radius:8px;border:1px solid #273341;font-size:.58rem;letter-spacing:.5px;} .topbar .links a:hover{background:#1f2934;} td:nth-child(2),td:nth-child(3){max-width:240px;word-break:break-word;} .meta-note{font-size:.58rem;opacity:.6;margin-top:1rem;line-height:1.5;} </style>
-</head>
-<body>
-<div class="wrap">
-  <div class="topbar">
-    <h1>Content Reports</h1>
-    <div class="links">
-      <a href="/admin/files">Files</a>
-      <a href="/ban">Bans</a>
-      <a href="/">Home</a>
-    </div>
-  </div>
-  <table role="table" aria-label="Reports">
-    <thead><tr><th>File</th><th>Reason</th><th>Details</th><th>Reporter ID</th><th>Time</th><th>Action</th></tr></thead>
-    <tbody>
-      {{REPORT_ROWS}}
-    </tbody>
-    <caption>Entries are raw user submissions. Sanitize externally if exporting.</caption>
-  </table>
-  <p class="meta-note">Removing a report deletes only the report entry, not the underlying file.</p>
-</div>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <title>Admin Reports</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <main class="container" role="main">
+      <header>
+        <h1 class="page-title">Content Reports</h1>
+        <nav class="inline-nav" aria-label="Admin navigation">
+          <a href="/admin/files">Files</a>
+          <a href="/</head></title></body></header>admin/ban">Bans</a>
+          <a href="/">Home</a>
+        </nav>
+      </header>
+
+      <section class="files-panel" aria-labelledby="reports-title">
+        <h2 id="reports-title" class="files-heading">Reports</h2>
+        <table class="files-table" role="table" aria-describedby="reports-caption">
+          <caption id="reports-caption">
+            Entries are raw user submissions. Sanitize externally if exporting.
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">File</th>
+              <th scope="col">Reason</th>
+              <th scope="col"></thead></tr>Details</th>
+              <th scope="col">Reporter ID</th>
+              <th scope="col">Time</th>
+              <th scope="col">Action</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+            {{REPORT_ROWS}}
+          </tbody>
+        </table>
+        <p class="small text-subtle">
+          Removing a report deletes only the report entry, not the underlying file.
+        </p>
+      </section>
+    </main>
+  </body>
 </html>

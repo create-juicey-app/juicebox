@@ -1,0 +1,425 @@
+@use "tokens";
+@use "base";
+@use "animations";
+@use "components";
+@use "content";
+
+/* Minimal app-specific overrides (avoid duplicates from partials) */
+.subtle {
+    color: var(--text-subtle);
+}
+.muted {
+    color: var(--text-muted);
+}
+
+.skip-link:focus,
+.skip-link:active {
+    left: 8px;
+    top: 8px;
+    width: auto;
+    height: auto;
+    padding: 0.6rem 0.8rem;
+    background: var(--accent);
+    color: var(--bg);
+    border-radius: 8px;
+    z-index: 1000;
+    outline: 2px solid var(--text);
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+}
+
+/* ============================================================================
+   Simple page styles (merged from simple.scss)
+   - Purpose: provide minimal, highly compatible style for templates/simple.html.tera
+   - These rules are intentionally minimal and self-contained so the simple page
+     renders correctly when the app bundle is used.
+============================================================================= */
+
+/* Basic reset & layout (kept minimal to avoid interfering with main partials) */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    font-family:
+        system-ui,
+        -apple-system,
+        "Segoe UI",
+        Roboto,
+        Ubuntu,
+        Cantarell,
+        "Noto Sans",
+        Arial,
+        sans-serif;
+    line-height: 1.5;
+}
+
+/* keep dark background consistent with tokens if available, otherwise fallback */
+body {
+    background: var(--bg);
+    color: var(--text);
+}
+
+/* Remove default heading margins; add simple rhythm */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+figure,
+blockquote,
+dl,
+dd {
+    margin: 0;
+}
+p {
+    margin: 0.75rem 0;
+}
+
+/* Media defaults */
+img,
+svg,
+video,
+canvas,
+audio,
+iframe,
+embed,
+object {
+    max-width: 100%;
+    display: block;
+}
+
+/* Forms use inherited font */
+button,
+input,
+optgroup,
+select,
+textarea {
+    font: inherit;
+    color: inherit;
+}
+
+/* Links */
+a {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+/* Table baseline */
+table {
+    border-collapse: collapse;
+    border-spacing: 0;
+}
+
+/* Accessibility helpers */
+.visually-hidden,
+.sr-only {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0 0 0 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+/* Skip link (hidden until focus) */
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: auto;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+.skip-link:focus,
+.skip-link:active {
+    left: 8px;
+    top: 8px;
+    width: auto;
+    height: auto;
+    padding: 0.6rem 0.8rem;
+    background: var(--accent);
+    color: var(--bg);
+    border-radius: 6px;
+    outline: 2px solid var(--text);
+    text-decoration: none;
+}
+
+/* Page structure */
+.page-title {
+    font-size: 1.8rem;
+    font-weight: 800;
+    margin: 1.25rem auto 0.25rem;
+    text-align: center;
+}
+
+.lead {
+    max-width: 70ch;
+    margin: 0.25rem auto 1rem;
+    padding: 0 1rem;
+    text-align: center;
+    color: var(--text-subtle);
+}
+
+p.lead {
+    max-width: 70ch;
+    margin: 0.25rem auto 1rem;
+    padding: 0 1rem;
+    text-align: center;
+    color: var(--text-subtle);
+}
+
+hr {
+    border: none;
+    height: 1px;
+    background: var(--panel-border);
+    margin: 1.25rem auto;
+    max-width: 860px;
+}
+
+/* Language selector (no JS) */
+.lang-form {
+    max-width: 340px;
+    margin: 1.2rem auto;
+    padding: 0.7rem 0.9rem;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    text-align: center;
+}
+
+.lang-label {
+    font-size: 1rem;
+    opacity: 0.95;
+    display: inline-block;
+    margin: 0.25rem 0.4rem 0.25rem 0;
+    cursor: pointer;
+}
+
+.lang-icon {
+    margin-right: 0.35em;
+}
+
+#langSelectSimple {
+    font-size: 1rem;
+    padding: 0.4rem 0.7rem;
+    border-radius: 8px;
+    background: var(--panel-darker);
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    min-width: 120px;
+    min-height: 36px;
+}
+
+.lang-btn {
+    display: inline-block;
+    font-size: 1rem;
+    padding: 0.45rem 0.9rem;
+    border-radius: 8px;
+    background: var(--accent);
+    color: var(--bg);
+    border: 1px solid var(--accent);
+    cursor: pointer;
+    font-weight: 700;
+    margin-left: 0.5rem;
+}
+.lang-btn:focus,
+#langSelectSimple:focus {
+    outline: 2px solid var(--text);
+    outline-offset: 2px;
+}
+
+/* Upload form */
+.upload {
+    width: 92%;
+    max-width: 680px;
+    margin: 0 auto 1rem;
+    padding: 0 0.25rem;
+}
+
+.upload fieldset {
+    border: 1px solid var(--accent);
+    background: var(--panel);
+    padding: 0.9rem;
+    border-radius: 10px;
+    margin: 0;
+}
+
+.upload legend {
+    padding: 0 0.25rem;
+    font-weight: 700;
+}
+
+.upload label {
+    display: block;
+    margin: 0.7rem 0 0.35rem;
+    color: var(--text-subtle);
+    font-weight: 600;
+}
+
+.upload input[type="file"] {
+    display: block;
+    width: 100%;
+    padding: 0.45rem 0.5rem;
+    background: var(--panel);
+    border: 1px dashed color-mix(in srgb, var(--accent) 25%, transparent);
+    color: var(--text);
+    border-radius: 6px;
+}
+
+/* TTL row */
+.ttl-box {
+    margin-top: 0.7rem;
+}
+.ttl-label {
+    margin-right: 0.5rem;
+    font-weight: 600;
+    color: var(--text-subtle, #b5c0cc);
+}
+#ttl {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 0.35rem 0.5rem;
+    min-height: 32px;
+}
+.note-extra {
+    display: inline-block;
+    margin-left: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--accent);
+    font-weight: 600;
+}
+
+/* Primary button */
+button.primary,
+.upload .primary {
+    display: inline-block;
+    margin-top: 0.8rem;
+    background: var(--accent);
+    color: var(--bg);
+    border: 1px solid var(--accent);
+    padding: 0.55rem 0.9rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 700;
+}
+button.primary:focus,
+.upload .primary:focus {
+    outline: 2px solid var(--text);
+    outline-offset: 2px;
+}
+
+/* Status messages */
+.status-message {
+    max-width: 680px;
+    margin: 0.75rem auto;
+    padding: 0.6rem 0.8rem;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    border: 1px solid var(--panel-border);
+    background: var(--panel-lighter);
+    color: var(--text);
+}
+.status-success {
+    background: color-mix(in srgb, var(--ok) 15%, var(--panel));
+    border-color: var(--ok);
+    color: var(--text);
+}
+
+/* Files panel and table */
+.files-panel {
+    width: 92%;
+    max-width: 860px;
+    margin: 0 auto 1rem;
+}
+
+.files-heading {
+    font-size: 1.25rem;
+    margin: 0.25rem 0 0.5rem;
+}
+
+.files-table {
+    width: 100%;
+    border: 1px solid var(--panel-border); /* template already sets border attr; this ensures collapse looks consistent */
+    font-size: 0.95rem;
+    background: var(--panel);
+    color: var(--text, #f2f6fb);
+}
+.files-table thead th {
+    text-align: left;
+    background: var(--panel-lighter);
+    border-bottom: 1px solid var(--panel-border);
+    padding: 0.5rem;
+}
+.files-table td {
+    border-top: 1px solid var(--panel-border);
+    padding: 0.45rem 0.5rem;
+    vertical-align: middle;
+}
+.files-table tr:nth-child(even) td {
+    background: var(--panel-lighter);
+}
+
+.note {
+    font-size: 0.8rem;
+    color: var(--text-subtle);
+    margin: 0.35rem 0;
+}
+
+/* Center section headings inside panels on main pages */
+.panel h2 {
+    text-align: center;
+}
+
+/* Footer */
+footer {
+    max-width: 860px;
+    margin: 1.5rem auto 2rem;
+    padding: 0 1rem;
+    color: var(--text-subtle);
+    font-size: 0.95rem;
+}
+.footer-links {
+    display: block;
+    margin-top: 0.5rem;
+}
+.footer-links a {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+/* Small screens */
+@media (max-width: 480px) {
+    .page-title {
+        font-size: 1.5rem;
+    }
+    .lang-form {
+        margin: 1rem auto;
+    }
+}
+
+/* Utilities */
+.text-center {
+    text-align: center !important;
+}
+.hide {
+    display: none !important;
+}

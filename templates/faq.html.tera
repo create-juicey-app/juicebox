@@ -13,112 +13,9 @@
     />
   <script src="/js/lang.js"></script>
   <link rel="stylesheet" href="{{ css_bundle | default(value='/css/app.css') }}" />
-    <style>
-      body {
-        max-width: 860px;
-        margin: 0 auto;
-        padding: 1.4rem;
-        font-family: system-ui, Segoe UI, Roboto, sans-serif;
-        background: #0f141b;
-        color: #e8ecf3;
-      }
-      h1 {
-        margin: 0.2rem 0 1rem;
-        font-size: 1.8rem;
-      }
-      h2 {
-        font-size: 1rem;
-        margin: 1.6rem 0 0.6rem;
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
-        opacity: 0.8;
-      }
-      p,
-      li {
-        line-height: 1.5;
-        font-size: 0.85rem;
-      }
-      code {
-        background: #1d2732;
-        padding: 0.15rem 0.35rem;
-        border-radius: 4px;
-        font-size: 0.75rem;
-      }
-      a {
-        color: #ff9800;
-      }
-      hr {
-        border: none;
-        height: 1px;
-        background: #253240;
-        margin: 2rem 0;
-      }
-      .qa {
-        margin: 0 0 1.4rem;
-        padding: 1rem 1rem 1.1rem;
-        background: #1a2230;
-        border: 1px solid #273242;
-        border-radius: 12px;
-      }
-      .callout {
-        margin: 1.4rem 0 1.8rem;
-        padding: 1rem 1.1rem 1.1rem;
-        background: #16202c;
-        border: 1px solid #2b394a;
-        border-radius: 12px;
-      }
-      .callout h2 {
-        margin-top: 0;
-        font-size: 1rem;
-        text-transform: none;
-        letter-spacing: 0;
-        opacity: 0.9;
-      }
-      .callout ul {
-        padding-left: 1.2rem;
-      }
-      details {
-        background: #141d26;
-        padding: 0.9rem 1rem;
-        border: 1px solid #22303b;
-        border-radius: 10px;
-        margin: 0.85rem 0;
-      }
-      details[open] {
-        border-color: #314356;
-      }
-      summary {
-        cursor: pointer;
-        font-weight: 600;
-        letter-spacing: 0.4px;
-        font-size: 0.8rem;
-        list-style: none;
-      }
-      summary::-webkit-details-marker {
-        display: none;
-      }
-      .small {
-        font-size: 0.62rem;
-        opacity: 0.55;
-      }
-      footer {
-        margin: 2.5rem 0 1rem;
-        font-size: 0.6rem;
-        opacity: 0.55;
-        text-align: center;
-      }
-    </style>
+
   </head>
-  <body
-    style="
-      background: #0f141b;
-      color: #e8ecf3;
-      max-width: 860px;
-      margin: 0 auto;
-      padding: 1.4rem;
-      font-family: system-ui, Segoe UI, Roboto, sans-serif;
-    "
-  >
+  <body class="doc-page">
     <nav class="skip-links" aria-label="Skip links">
       <a
         href="#mainContent"
@@ -128,7 +25,7 @@
     </nav>
     <header>
       <h1>{{ t.faq_title | default(value='JuiceBox FAQ') }}</h1>
-      <p class="lead" style="opacity: 0.75; font-size: 0.9rem">
+      <p class="lead">
         {{ t.faq_lead | default(value='Everything you usually ask before uploading.') }}
       </p>
     </header>
@@ -144,7 +41,7 @@
         <li>{{ t.faq_intro_point_3 | default(value='Ownership, rate limits, and bans use an HMAC hash of the Cloudflare edge IP plus the secret pepper—no raw addresses are ever stored.') }}</li>
         <li>{{ t.faq_intro_point_4 | default(value='Check the Terms for full policy details, especially if you are dealing with regulated or copyrighted material.') }}</li>
       </ul>
-      <p class="small" style="margin: 0">
+      <p class="small m-0">
         <a href="/terms">{{ t.view_terms | default(value='Read the updated Terms of Service') }}</a>
       </p>
     </section>
@@ -349,50 +246,39 @@
       </section>
     </main>
     <footer
-      title="{{ t.footer_tagline | default(value='Service tagline') }}"
-      style="color: #fff !important; opacity: 1 !important; background: none"
-    >
+      title="{{ t.footer_tagline | default(value='Service tagline') }}">
       juicebox //
       {{ t.footer_sub | default(value='simple high-speed file host') }}
       <nav
         aria-label="{{ t.site_links | default(value='Site links') }}"
-        class="footer-links"
-        style="
-          display: block;
-          margin-top: 0.45rem;
-          font-size: 0.6rem;
-          letter-spacing: 0.35px;
-          color: #fff !important;
-          opacity: 1 !important;
-        "
-      >
+        class="footer-links">
         <a
           href="/"
-          style="color: #fff !important"
+
           >{{ t.home | default(value='Home') }}</a
         >
         •
         <a
           href="/simple"
-          style="color: #fff !important"
+
           >{{ t.simple | default(value='Simple') }}</a
         >
         •
         <a
           href="/faq"
-          style="color: #fff !important"
+
           >{{ t.faq | default(value='FAQ') }}</a
         >
         •
         <a
           href="/report"
-          style="color: #fff !important"
+
           >{{ t.report | default(value='Report') }}</a
         >
         •
         <a
           href="/terms"
-          style="color: #fff !important"
+
           >{{ t.terms | default(value='Terms') }}</a
         >
         •
@@ -400,21 +286,10 @@
           href="https://buymeacoffee.com/juiceydev"
           target="_blank"
           rel="noopener"
-          style="color: #fff !important"
+
           >{{ t.donate | default(value='Donate') }}</a
         >
       </nav>
-      <br /><span
-        id="ipNote"
-        style="
-          display: block;
-          font-size: 0.55rem;
-          opacity: 0.95 !important;
-          margin-top: 0.4rem;
-          letter-spacing: 0.3px;
-          color: #fff !important;
-        "
-      ></span>
     </footer>
   </body>
 </html>

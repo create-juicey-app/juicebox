@@ -1,0 +1,483 @@
+/* Content pages: FAQ, Terms, Report (accordion + doc styles) */
+
+.faq-intro,
+.terms-intro {
+    animation: fadeIn 0.6s var(--e-out);
+}
+
+/* Accordion Structure:
+   .details-list
+     details
+       summary
+         .arrow (optional helper, otherwise pseudo-arrow is drawn)
+       .details-animate (optional container for smooth height transition)
+*/
+
+.details-list {
+    /* Ensure consistent stacking context for nested transitions (safeguard) */
+    position: relative;
+}
+
+/* Spacing between items */
+.details-list details:not(:last-child) {
+    margin-bottom: 0.9rem;
+}
+
+/* Clickable summary row */
+.details-list summary {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    cursor: pointer;
+}
+
+/* Optional inline arrow element; rotates when open */
+.details-list summary .arrow {
+    flex: none;
+    width: 0.85rem;
+    height: 0.85rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition:
+        0.45s var(--e-out) transform,
+        0.35s opacity;
+    font-size: 0.7rem;
+    line-height: 1;
+    opacity: 0.7;
+}
+
+.details-list details[open] summary .arrow {
+    transform: rotate(90deg);
+    opacity: 1;
+}
+
+/* Generic arrow when .arrow element is omitted */
+.details-list summary:not(.no-arrow)::before {
+    content: "";
+    display: inline-block;
+    width: 0.55rem;
+    height: 0.55rem;
+    margin-right: 0.55rem;
+    border-right: 2px solid var(--text-subtle);
+    border-bottom: 2px solid var(--text-subtle);
+    transform: rotate(-45deg) translateY(-1px);
+    transition:
+        0.45s var(--e-out) transform,
+        0.35s border-color,
+        0.35s opacity;
+    opacity: 0.75;
+}
+
+.details-list details[open] > summary:not(.no-arrow)::before {
+    transform: rotate(45deg) translateY(-1px);
+    border-color: var(--accent);
+    opacity: 1;
+}
+
+/* Content container with smooth height reveal
+   Usage:
+     <div class="details-animate">
+       <div>…content…</div>
+     </div>
+*/
+.details-animate {
+    padding-top: 1%;
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: 0fr;
+    font-size: 0.9rem;
+    transition: grid-template-rows 0.45s var(--e-out);
+}
+
+.details-animate > * {
+    overflow: hidden;
+}
+
+/* Optional inner fade/slide for content block */
+.details-animate > div {
+    opacity: 0;
+
+    transform: translateY(-4px);
+    transition: 0.45s var(--e-out);
+}
+
+details[open] .details-animate {
+    grid-template-rows: 1fr;
+}
+
+details[open] .details-animate > div {
+    opacity: 1;
+    transform: translateY(0);
+    transition-delay: 0.05s;
+}
+
+/* Visual styling for details items */
+.details-list details {
+    background: #141d26;
+    border: 1px solid #22303b;
+    border-radius: 10px;
+    padding: 0.85rem 1rem 0.95rem;
+    transition:
+        0.35s background,
+        0.35s border-color,
+        0.35s box-shadow;
+}
+
+.details-list details:hover {
+    border-color: #2e3e4d;
+}
+
+.details-list details[open] {
+    border-color: #314356;
+    background: #18222d;
+}
+
+/* Accessible focus for summary element */
+summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 6px;
+}
+
+/* Section header underline effect
+   Usage:
+     <h3 class="section-head">Title</h3>
+     <h3 class="section-head animate-in">Animated Title</h3>
+*/
+.section-head {
+    position: relative;
+    display: inline-block;
+}
+
+.section-head::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -4px;
+    width: 100%;
+    height: 2px;
+    background: linear-gradient(
+        90deg,
+        var(--accent),
+        rgba(var(--accent-rgb) / 0)
+    );
+    transform: scaleX(0.4);
+    transform-origin: left;
+    transition: 0.6s var(--e-out);
+    opacity: 0.65;
+}
+
+.section-head.animate-in::after {
+    transform: scaleX(1);
+    opacity: 1;
+}
+
+/* About section typography tweaks */
+#about {
+    margin-inline: auto;
+}
+
+#about h2 {
+    margin-bottom: 0.65rem;
+}
+
+#about p {
+    font-size: 0.9rem;
+}
+
+#about p + p {
+    margin-top: 0.65rem;
+}
+
+#about .inspired-note {
+    font-size: 0.95rem;
+    color: var(--text-subtle);
+}
+
+/* Shared content page styles (centralized from templates)
+   - FAQ / Terms / Report layout bits
+   - Banned page card styles
+   - Common helpers (callout, small text, hr, code, share links)
+*/
+
+/* Layout helpers for document-style pages */
+.page-full-center {
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.doc-page {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 1.4rem;
+}
+
+/* Light container for FAQ/Terms headings inside details list */
+.details-list > h2 {
+    font-size: 1rem;
+    margin: 1.2rem 0 0.6rem;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    opacity: 0.85;
+}
+
+/* Callout panel used on FAQ intro */
+.callout {
+    margin: 1.2rem 0 1.6rem;
+    padding: 1rem 1.1rem 1.1rem;
+    background: #16202c;
+    border: 1px solid #2b394a;
+    border-radius: 12px;
+}
+.callout h2 {
+    margin-top: 0;
+    font-size: 1rem;
+    text-transform: none;
+    letter-spacing: 0;
+    opacity: 0.9;
+}
+.callout ul {
+    padding-left: 1.2rem;
+}
+
+/* Small text helper used in FAQ footnotes/links */
+.small {
+    font-size: 0.62rem;
+    opacity: 0.6;
+    letter-spacing: 0.35px;
+}
+
+/* Content separators */
+hr {
+    border: none;
+    height: 1px;
+    background: color-mix(in srgb, var(--panel-border), transparent 30%);
+    margin: 2rem 0;
+}
+
+/* Inline code pills */
+code,
+.code {
+    background: #1d2732;
+    border: 1px solid #273240;
+    padding: 0.15rem 0.35rem;
+    border-radius: 6px;
+    font-size: 0.85em;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+/* Share links row under About */
+.share-links {
+    margin-top: 0.35rem;
+    font-size: 0.8em;
+    opacity: 0.85;
+}
+.share-links a + a {
+    margin-left: 0.6rem;
+}
+
+/* Report page */
+#reportMain {
+    width: min(760px, 88%);
+    margin-inline: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.4rem;
+}
+.report-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.05rem;
+}
+.report-form fieldset {
+    border: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.9rem;
+}
+.report-form .pair label {
+    flex: 1 1 250px;
+}
+.report-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    font-size: 0.65rem;
+    letter-spacing: 0.45px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-subtle);
+}
+.report-form input[type="text"],
+.report-form select,
+.report-form textarea {
+    background: #121b24;
+    color: var(--text);
+    border: 1px solid #2b394a;
+    border-radius: 9px;
+    padding: 0.62rem 0.7rem;
+    font: inherit;
+    font-size: 0.8rem;
+    resize: vertical;
+    transition:
+        border-color 0.25s,
+        background 0.25s,
+        box-shadow 0.25s;
+}
+.report-form input:focus,
+.report-form select:focus,
+.report-form textarea:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+.report-form textarea {
+    min-height: 170px;
+}
+.report-form button {
+    align-self: flex-start;
+    background: var(--accent);
+    color: #111;
+    border: 1px solid rgba(var(--accent-rgb) / 0.6);
+    padding: 0.65rem 1.25rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border-radius: 10px;
+    cursor: pointer;
+    letter-spacing: 0.6px;
+    transition:
+        0.35s background,
+        0.35s transform,
+        0.35s box-shadow;
+}
+.report-form button:hover:not([disabled]) {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 18px -6px rgba(0, 0, 0, 0.6);
+}
+.report-form button[disabled] {
+    opacity: 0.55;
+    filter: grayscale(1);
+    cursor: not-allowed;
+    transform: none;
+}
+.req {
+    color: #ff5252;
+    margin-left: 0.25rem;
+    font-weight: 700;
+}
+.note,
+.legal {
+    font-size: 0.6rem;
+    opacity: 0.62;
+    letter-spacing: 0.4px;
+    line-height: 1.35;
+}
+.legal {
+    margin-top: -0.3rem;
+}
+.status-area {
+    min-height: 2.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+.report-msg,
+.msg {
+    background: #223038;
+    border: 1px solid #33464f;
+    padding: 0.65rem 0.85rem;
+    border-radius: 10px;
+    font-size: 0.7rem;
+    letter-spacing: 0.4px;
+    margin: 0 0 1rem;
+    animation: fadeIn 0.5s var(--e-out);
+}
+[data-hidden="true"] {
+    display: none !important;
+}
+
+/* Banned page */
+.card {
+    background: #18222d;
+    border: 1px solid #2b3746;
+    padding: 2.2rem 2rem 2.4rem;
+    border-radius: 18px;
+    box-shadow: 0 8px 32px -12px rgba(0, 0, 0, 0.65);
+}
+.card h1 {
+    margin: 0 0 1rem;
+    font-size: 1.65rem;
+    letter-spacing: 0.5px;
+}
+.card p {
+    margin: 0.55rem 0 0.65rem;
+    font-size: 0.9rem;
+}
+.card .reason {
+    color: #ffb347;
+}
+.card .dim {
+    opacity: 0.65;
+    font-size: 0.75rem;
+}
+.ip {
+    font-weight: 600;
+}
+
+/* Language selector from index header */
+#langForm {
+    margin: 1.2rem 0 0 0;
+}
+#langLabel {
+    font-size: 0.9em;
+    opacity: 0.85;
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    cursor: pointer;
+}
+#langForm #langSelect {
+    font-size: 1em;
+    padding: 0.25em 0em 0.25em 0.7em;
+    border-radius: 7px;
+    margin-left: 0.1em;
+    background: #181f2b;
+    color: #fff;
+    border: 1px solid #2a3240;
+    box-shadow: 0 1px 4px #0002;
+    appearance: none;
+    cursor: pointer;
+    transition: border 0.2s;
+}
+#langForm select:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+#langForm svg {
+    margin-left: -1.5em;
+    pointer-events: none;
+    position: relative;
+    z-index: 2;
+    fill: #fff;
+    opacity: 0.7;
+}
+
+/* Reduced motion: minimize movement while keeping visibility cues */
+@media (prefers-reduced-motion: reduce) {
+    .details-animate {
+        transition: none;
+    }
+    .details-animate > div {
+        transition: none;
+        transform: none !important;
+        opacity: 1 !important;
+    }
+    .section-head::after {
+        transition: none;
+        transform: none;
+    }
+}

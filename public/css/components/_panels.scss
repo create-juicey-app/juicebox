@@ -1,0 +1,28 @@
+/* Panels (extracted from components)
+   - Generic panel container
+   - Section spacing within panels
+   - Panel heading
+*/
+
+.panel {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: 0 4px 16px -8px rgba(0, 0, 0, 0.6);
+}
+
+.panel {
+    padding: 1.25rem 1.35rem 1.5rem;
+}
+
+.panel h2 {
+    margin: 0 0 1rem;
+    font-size: 1.05rem;
+    font-weight: 600;
+    letter-spacing: 0.7px;
+    text-transform: uppercase;
+    color: var(--text-subtle);
+    text-align: center;
+}
