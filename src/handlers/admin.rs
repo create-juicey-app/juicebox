@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::extract::{Form, State};
-use axum::http::header::{CONTENT_TYPE, LOCATION, SET_COOKIE};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, EXPIRES, LOCATION, PRAGMA, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
@@ -263,8 +263,16 @@ pub async fn auth_post_handler(
             [(LOCATION, HeaderValue::from_static("/"))],
         )
             .into_response();
-        resp.headers_mut()
-            .append(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+        {
+            let headers = resp.headers_mut();
+            headers.insert(
+                CACHE_CONTROL,
+                HeaderValue::from_static("no-store, no-cache, must-revalidate, private"),
+            );
+            headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
+            headers.insert(EXPIRES, HeaderValue::from_static("0"));
+            headers.append(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+        }
         info!("admin auth success");
         return resp;
     }
