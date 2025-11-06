@@ -32,15 +32,23 @@ Open http://localhost:8080
 ## Configuration (env)
 
 Common options (set in .env or your environment):
-
-- MAX_FILE_SIZE — per-upload limit (e.g. 750MB, 1GB, or raw bytes)
-- JUICEBOX_STORAGE_ROOT — base directory; other storage paths resolve under it
-- JUICEBOX_DATA_DIR — metadata dir (default: data/)
-- JUICEBOX_UPLOAD_DIR — files dir (default: files/)
-- JUICEBOX_CHUNK_DIR — chunk dir (default: data/chunks)
-- JUICEBOX_PUBLIC_DIR — serve static assets from a different directory
-- JUICEBOX_PROD_HOST — canonical host for generated links when APP_ENV=production
-- APP_ENV — set to production for prod-only checks
+- MAILGUN_API_KEY - for reports, mailgun is the service of choice 
+- MAILGUN_DOMAIN - its domain for sending email (e.g. mail.juicey.dev)
+- REPORT_EMAIL_TO - reciever's email for reports (e.g. admin@juicey.dev)
+- REPORT_EMAIL_FROM - domain user (e.g. report@mail.juicey.dev)
+- TRUST_PROXY_HEADERS - security feature if you trust the proxy headers giving you right ip for the job. Required if you ever want to host it
+- TRUSTED_PROXY_CIDRS - linked with TRUST_PROXY_HEADERS, trusted domains / ip's in a list.
+- SENTRY_DSN - sentry link for errors.
+- IP_HASH_SECRET - REQUIRED. Hash secret to avoid hash lookups and get ur ip leaked
+- JUICEBOX_PROD_HOST - the juicebox domain (e.g. box.juicey.dev) only required if you put it in a website
+- MAX_FILE_SIZE - per-upload limit (e.g. 750MB, 1GB, or raw bytes)
+- JUICEBOX_STORAGE_ROOT - base directory; other storage paths resolve under it
+- JUICEBOX_DATA_DIR - metadata dir (default: data/)
+- JUICEBOX_UPLOAD_DIR - files dir (default: files/)
+- JUICEBOX_CHUNK_DIR - chunk dir (default: data/chunks)
+- JUICEBOX_PUBLIC_DIR - serve static assets from a different directory
+- JUICEBOX_PROD_HOST - canonical host for generated links when APP_ENV=production
+- APP_ENV - set to production for prod-only checks
 
 ## Frontend (will be deprecated)
 
@@ -67,10 +75,10 @@ npm test
 
 Sentry can capture errors and traces if enabled:
 
-- SENTRY_DSN — your DSN; leave unset in dev to disable (or set to disabled/off)
-- SENTRY_ENV — environment label (defaults from APP_ENV)
-- SENTRY_RELEASE — release identifier; falls back to crate version/commit
-- SENTRY_TRACES_SAMPLE_RATE — 0.0–1.0 (defaults to 0.1 in production)
+- SENTRY_DSN - your DSN; leave unset in dev to disable (or set to disabled/off)
+- SENTRY_ENV - environment label (defaults from APP_ENV)
+- SENTRY_RELEASE - release identifier; falls back to crate version/commit
+- SENTRY_TRACES_SAMPLE_RATE - 0.0–1.0 (defaults to 0.1 in production)
 
 ## Usage
 
@@ -122,8 +130,8 @@ Behaviour implemented by the server:
 
 When you delete a file the server will attempt to purge the corresponding edge cache entry via the Cloudflare Purge API. Purges run in the background (do not delay the HTTP delete response). Purge calls are optional and only attempted when the following environment variables are set:
 
-- `CLOUDFLARE_ZONE_ID` — the numeric or hex zone identifier for your site
-- `CLOUDFLARE_API_TOKEN` — an API token with the `Zone.Cache Purge` scope for that zone
+- `CLOUDFLARE_ZONE_ID` - the numeric or hex zone identifier for your site
+- `CLOUDFLARE_API_TOKEN` - an API token with the `Zone.Cache Purge` scope for that zone
 
 If those variables are not present the server will safely no-op and continue functioning normally (useful for local development / tests).
 
