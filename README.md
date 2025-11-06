@@ -42,7 +42,7 @@ Common options (set in .env or your environment):
 - JUICEBOX_PROD_HOST — canonical host for generated links when APP_ENV=production
 - APP_ENV — set to production for prod-only checks
 
-## Frontend (optional)
+## Frontend (will be deprecated)
 
 Build once:
 
