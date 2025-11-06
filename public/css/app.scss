@@ -423,3 +423,39 @@ footer {
 .hide {
     display: none !important;
 }
+
+/* Fallback: reserve space for a bottom navigation bar when present */
+body.has-bottom-nav {
+    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+}
+
+/* Mobile comfort: reduce side margins and enlarge controls */
+@media (max-width: 640px) {
+    /* Center and widen primary containers */
+    main,
+    .doc-page,
+    .files-panel,
+    .upload {
+        width: 96%;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    /* Larger, more touch-friendly controls */
+    input:not([type="range"]),
+    select,
+    textarea,
+    button,
+    .link-input,
+    #ttl,
+    #langSelectSimple {
+        min-height: 46px;
+        padding: 0.6rem 0.75rem;
+        font-size: 1rem;
+        border-radius: 12px;
+    }
+
+    input[type="file"] {
+        min-height: 46px;
+    }
+}

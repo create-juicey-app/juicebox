@@ -14,7 +14,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
     <link rel="icon" href="/img/favicon.png" type="image/png" />
   </head>
-  <body>
+  <body class="has-bottom-nav">
     {% if query.m is defined and query.m == "File Deleted Successfully." %}
       <div class="status-message status-success" id="delete-success-msg">
         {{ t.simple_delete_success | default(value="File successfully deleted.") }}
@@ -144,5 +144,19 @@
         >
       </nav>
     </footer>
+    <nav class="bottom-nav" role="navigation" aria-label="{{ t.site_primary | default(value='Primary') }}">
+      <a class="bottom-nav__item" href="/faq" aria-label="{{ t.faq | default(value='FAQ') }}">
+        <span class="bottom-nav__icon" aria-hidden="true">❓</span>
+        <span class="bottom-nav__label">{{ t.faq | default(value='FAQ') }}</span>
+      </a>
+      <a class="bottom-nav__item bottom-nav__item--primary" href="/simple" aria-current="page" aria-label="{{ t.upload | default(value='Upload') }}">
+        <span class="bottom-nav__icon" aria-hidden="true">⬆️</span>
+        <span class="bottom-nav__label">{{ t.upload | default(value='Upload') }}</span>
+      </a>
+      <a class="bottom-nav__item" href="/report" aria-label="{{ t.report | default(value='Report') }}">
+        <span class="bottom-nav__icon" aria-hidden="true">🚩</span>
+        <span class="bottom-nav__label">{{ t.report | default(value='Report') }}</span>
+      </a>
+    </nav>
   </body>
 </html>

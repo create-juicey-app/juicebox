@@ -37,7 +37,7 @@
   <link rel="stylesheet" href="{{ css_href }}" />
   <link rel="modulepreload" href="{{ app_src }}" crossorigin="anonymous" />
 </head>
-<body>
+<body class="has-bottom-nav">
   <nav class="skip-links" aria-label="Skip links">
     <a href="#mainContent" class="skip-link">{{ t.skip_main | default(value="Skip to main content") }}</a>
     <a href="#yourFiles" class="skip-link">{{ t.skip_files | default(value="Skip to your files") }}</a>
@@ -153,6 +153,20 @@
   <nav aria-label="{{ t.site_links | default(value='Site links') }}" class="footer-links">
     <a href="/">{{ t.home | default(value='Home') }}</a> • <a href="/simple">{{ t.simple | default(value='Simple') }}</a> • <a href="/faq">{{ t.faq | default(value='FAQ') }}</a> • <a href="/report">{{ t.report | default(value='Report') }}</a> • <a href="/terms">{{ t.terms | default(value='Terms') }}</a> • <a href="https://buymeacoffee.com/juiceydev" target="_blank" rel="noopener">{{ t.donate | default(value='Donate') }}</a>
   </nav></footer>
+  <nav class="bottom-nav" role="navigation" aria-label="{{ t.site_primary | default(value='Primary') }}">
+    <a class="bottom-nav__item" href="/faq" aria-label="{{ t.faq | default(value='FAQ') }}">
+      <span class="bottom-nav__icon" aria-hidden="true">❓</span>
+      <span class="bottom-nav__label">{{ t.faq | default(value='FAQ') }}</span>
+    </a>
+    <a class="bottom-nav__item bottom-nav__item--primary" href="/" aria-current="page" aria-label="{{ t.upload | default(value='Upload') }}">
+      <span class="bottom-nav__icon" aria-hidden="true">⬆️</span>
+      <span class="bottom-nav__label">{{ t.upload | default(value='Upload') }}</span>
+    </a>
+    <a class="bottom-nav__item" href="/report" aria-label="{{ t.report | default(value='Report') }}">
+      <span class="bottom-nav__icon" aria-hidden="true">🚩</span>
+      <span class="bottom-nav__label">{{ t.report | default(value='Report') }}</span>
+    </a>
+  </nav>
   <script type="module" src="{{ app_src }}" defer crossorigin="anonymous"></script>
 </body>
 </html>

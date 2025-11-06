@@ -1,0 +1,272 @@
+/* Bottom Navigation (mobile)
+   - Fixed, safe-area aware, 3-slot bar
+   - Icons + labels with clear active state
+   - Center Upload action highlighted
+   - Hides on larger screens
+   - Adds content padding so the bar doesn’t cover content
+   Markup example:
+     <nav class="bottom-nav" role="navigation" aria-label="Primary">
+       <a class="bottom-nav__item" href="/faq" data-id="faq">
+         <span class="bottom-nav__icon" aria-hidden="true">❓</span>
+         <span class="bottom-nav__label">FAQ</span>
+       </a>
+       <a class="bottom-nav__item bottom-nav__item--primary" href="/" data-id="upload">
+         <span class="bottom-nav__icon" aria-hidden="true">⬆️</span>
+         <span class="bottom-nav__label">Upload</span>
+       </a>
+       <a class="bottom-nav__item" href="/report" data-id="report">
+         <span class="bottom-nav__icon" aria-hidden="true">🚩</span>
+         <span class="bottom-nav__label">Report</span>
+       </a>
+     </nav>
+
+   To ensure page content isn’t overlapped, either:
+   - add class "has-bottom-nav" on <body>, or
+   - rely on :has(.bottom-nav) (modern browsers) to add bottom padding automatically.
+*/
+
+/* Vars */
+:root {
+    --jb-bottom-nav-h: 68px;
+    --jb-bottom-nav-bg: var(--panel);
+    --jb-bottom-nav-border: var(--panel-border);
+    --jb-bottom-nav-fg: var(--text);
+    --jb-bottom-nav-fg-muted: var(--text-subtle);
+    --jb-bottom-nav-accent: var(--accent);
+    --jb-bottom-nav-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+    --jb-bottom-fab-size: 58px; /* center action size */
+    --jb-bottom-fab-shadow:
+        0 8px 24px -8px rgba(0, 0, 0, 0.7),
+        0 0 0 1px rgba(var(--accent-rgb) / 0.25);
+}
+
+/* Reserve space for the bar under content (fallback via .has-bottom-nav) */
+body.has-bottom-nav main,
+body.has-bottom-nav .doc-page,
+body.has-bottom-nav {
+    padding-bottom: calc(
+        var(--jb-bottom-nav-h) + env(safe-area-inset-bottom, 0px)
+    );
+}
+
+/* Progressive enhancement: auto-add bottom padding when the bar exists */
+body:has(.bottom-nav) main,
+body:has(.bottom-nav) .doc-page,
+body:has(.bottom-nav) {
+    padding-bottom: calc(
+        var(--jb-bottom-nav-h) + env(safe-area-inset-bottom, 0px)
+    );
+}
+
+/* Base bar */
+.bottom-nav {
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: calc(var(--jb-bottom-nav-h) + env(safe-area-inset-bottom, 0px));
+    background: var(--jb-bottom-nav-bg);
+    color: var(--jb-bottom-nav-fg);
+    border-top: 1px solid var(--jb-bottom-nav-border);
+    box-shadow: var(--jb-bottom-nav-shadow);
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    align-items: center;
+    gap: 0;
+    -webkit-user-select: none;
+    user-select: none;
+    contain: layout paint;
+}
+
+/* Visual safe-area pad so the background extends under the home bar on iOS */
+.bottom-nav::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: env(safe-area-inset-bottom, 0px);
+    background: inherit;
+    border-top: 1px solid transparent;
+}
+
+/* Items (links/buttons) */
+.bottom-nav__item {
+    position: relative;
+    min-width: 0;
+    height: var(--jb-bottom-nav-h);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 0.2rem;
+    text-decoration: none;
+    color: var(--jb-bottom-nav-fg-muted);
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    padding: 0.35rem 0.5rem 0.4rem;
+    line-height: 1.1;
+    font-size: 0.72rem;
+    letter-spacing: 0.25px;
+    transition:
+        color 0.2s ease,
+        transform 0.2s ease,
+        background 0.2s ease;
+}
+
+.bottom-nav__item:hover {
+    color: var(--jb-bottom-nav-fg);
+}
+
+.bottom-nav__item:active {
+    transform: translateY(1px);
+}
+
+.bottom-nav__item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px; /* inside the cell */
+    border-radius: 10px;
+}
+
+.bottom-nav__icon {
+    font-size: 1.35rem;
+    line-height: 1;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+    pointer-events: none;
+}
+
+.bottom-nav__label {
+    display: block;
+    font-weight: 600;
+    pointer-events: none;
+}
+
+/* Active state helpers (any of these can be used by the template) */
+.bottom-nav__item[aria-current="page"],
+.bottom-nav__item[aria-selected="true"],
+.bottom-nav__item.is-active,
+.bottom-nav__item.active {
+    color: var(--jb-bottom-nav-fg);
+}
+
+/* Center Upload action: elevated, accent color, larger icon */
+.bottom-nav__item--primary {
+    color: var(--bg);
+}
+
+.bottom-nav__item--primary .bottom-nav__icon {
+    width: var(--jb-bottom-fab-size);
+    height: var(--jb-bottom-fab-size);
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    font-size: 1.45rem;
+    color: var(--bg);
+    border: 1px solid rgba(var(--accent-rgb) / 0.65);
+    box-shadow: var(--jb-bottom-fab-shadow);
+    text-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.12),
+        0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.bottom-nav__item--primary .bottom-nav__label {
+    margin-top: 0.2rem;
+    color: var(--jb-bottom-nav-fg);
+    opacity: 0.95;
+}
+
+/* Subtle hover/press for center action */
+.bottom-nav__item--primary:hover .bottom-nav__icon {
+    filter: brightness(1.05) saturate(1.05);
+    transform: translateY(-1px);
+    transition: transform 0.2s var(--e-out);
+}
+.bottom-nav__item--primary:active .bottom-nav__icon {
+    transform: translateY(0);
+}
+
+/* Hide labels if space-constrained (tiny phones) */
+@media (max-width: 360px) {
+    .bottom-nav__label {
+        font-size: 0.68rem;
+    }
+}
+
+/* Only show the bottom nav on small/medium screens */
+@media (min-width: 768px) {
+    .bottom-nav {
+        display: none;
+    }
+
+    /* Remove extra bottom padding where we hid the bar */
+    body.has-bottom-nav main,
+    body.has-bottom-nav .doc-page,
+    body.has-bottom-nav {
+        padding-bottom: 0;
+    }
+}
+
+/* Optional compact variant (if needed via class) */
+.bottom-nav--compact {
+    --jb-bottom-nav-h: 56px;
+    --jb-bottom-fab-size: 52px;
+}
+
+/* Optional elevated surface variant */
+.bottom-nav--elevated {
+    box-shadow:
+        0 -2px 14px rgba(0, 0, 0, 0.45),
+        0 0 0 1px rgba(var(--accent-rgb) / 0.1);
+}
+
+/* Current page highlight (non-primary items)
+   Prefer aria-current from templates; supports .is-active/.active as fallback.
+   Adds accent color, subtle background, and a top indicator bar. */
+.bottom-nav__item[aria-current="page"],
+.bottom-nav__item[aria-selected="true"],
+.bottom-nav__item.is-active,
+.bottom-nav__item.active {
+    color: var(--jb-bottom-nav-accent);
+    background: color-mix(in srgb, var(--panel-lighter) 35%, transparent);
+}
+
+.bottom-nav__item[aria-current="page"] .bottom-nav__label,
+.bottom-nav__item.is-active .bottom-nav__label,
+.bottom-nav__item.active .bottom-nav__label {
+    color: var(--jb-bottom-nav-accent);
+}
+
+.bottom-nav__item[aria-current="page"] .bottom-nav__icon,
+.bottom-nav__item.is-active .bottom-nav__icon,
+.bottom-nav__item.active .bottom-nav__icon {
+    transform: translateY(-1px);
+    text-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.1),
+        0 2px 6px rgba(0, 0, 0, 0.3);
+    filter: brightness(1.1) saturate(1.1);
+}
+
+/* Top indicator bar inside the item cell */
+.bottom-nav__item[aria-current="page"]::before,
+.bottom-nav__item.is-active::before,
+.bottom-nav__item.active::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 18%;
+    right: 18%;
+    height: 3px;
+    border-radius: 999px;
+    background: var(--jb-bottom-nav-accent);
+    opacity: 0.9;
+}
+
+/* Extra emphasis for primary Upload when current: add a soft ring */
+.bottom-nav__item--primary[aria-current="page"] .bottom-nav__icon,
+.bottom-nav__item--primary.is-active .bottom-nav__icon,
+.bottom-nav__item--primary.active .bottom-nav__icon {
+    box-shadow:
+        var(--jb-bottom-fab-shadow),
+        0 0 0 3px rgba(var(--accent-rgb) / 0.2);
+}

@@ -43,3 +43,34 @@ main {
     gap: 1.6rem;
     grid-template-columns: 1fr;
 }
+
+@media (max-width: 640px) {
+    /* Reduce side margins and tighten vertical rhythm on mobile */
+    header {
+        padding: 1.4rem 0.6rem 0;
+    }
+    main {
+        width: 96%;
+        margin: 0.9rem auto 3rem;
+        gap: 1.2rem;
+    }
+    p.lead {
+        padding: 0 0.5rem;
+        font-size: 1rem;
+    }
+
+    /* Larger, more touch-friendly controls */
+    input:not([type="range"]),
+    select,
+    textarea,
+    button,
+    .link-input {
+        min-height: 46px;
+        padding: 0.6rem 0.75rem;
+        font-size: 1rem;
+        border-radius: 12px;
+    }
+    input[type="file"] {
+        min-height: 46px;
+    }
+}

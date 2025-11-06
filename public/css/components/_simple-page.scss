@@ -94,7 +94,7 @@
 
 /* Upload block */
 .upload {
-    width: min(680px, 88%);
+    width: min(720px, 94%);
     margin: 0 auto 1rem;
 }
 
@@ -119,11 +119,13 @@ p.lead + .upload {
 .upload input[type="file"] {
     display: block;
     width: 100%;
-    padding: 0.45rem 0.5rem;
+    padding: 0.6rem 0.75rem;
+    font-size: 1rem;
+    min-height: 48px;
     background: var(--panel);
     border: 1px dashed color-mix(in srgb, var(--accent) 25%, transparent);
     color: var(--text);
-    border-radius: 8px;
+    border-radius: 12px;
 }
 
 .note-extra {
@@ -136,33 +138,50 @@ p.lead + .upload {
 button.primary {
     display: inline-block;
     margin-top: 0.8rem;
-    background: linear-gradient(
-        180deg,
-        var(--accent),
-        color-mix(in srgb, var(--accent) 75%, black)
-    );
+    background: var(--accent);
     color: var(--bg);
-    border: none;
-    padding: 0.6rem 0.9rem;
-    border-radius: 10px;
+    border: 1px solid rgba(var(--accent-rgb) / 0.6);
+    padding: 0.7rem 1rem;
+    min-height: 48px;
+    border-radius: 12px;
     cursor: pointer;
     font-weight: 700;
 }
 
 button.primary:hover {
-    transform: translateY(-2px);
+    transform: none;
 }
 
 button.primary:active {
-    transform: scale(0.99);
+    transform: none;
 }
 
 @media (max-width: 480px) {
     .upload {
-        width: 94%;
+        width: 98%;
     }
     .page-title {
         font-size: 1.5rem;
+    }
+    .files-panel {
+        width: 98%;
+    }
+    .upload fieldset {
+        padding: 1.1rem;
+        border-radius: 14px;
+    }
+    #ttl,
+    .upload .ttl-box select {
+        min-height: 46px;
+        font-size: 1rem;
+        border-radius: 10px;
+    }
+    button.primary {
+        min-height: 50px;
+        font-size: 1.02rem;
+    }
+    .upload input[type="file"] {
+        min-height: 50px;
     }
 }
 

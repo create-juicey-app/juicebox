@@ -212,7 +212,7 @@ summary:focus-visible {
 .doc-page {
     max-width: 860px;
     margin: 0 auto;
-    padding: 1.4rem;
+    padding: 1rem;
 }
 
 /* Light container for FAQ/Terms headings inside details list */
@@ -281,7 +281,7 @@ code,
 
 /* Report page */
 #reportMain {
-    width: min(760px, 88%);
+    width: min(820px, 94%);
     margin-inline: auto;
     display: flex;
     flex-direction: column;
@@ -319,10 +319,11 @@ code,
     background: var(--panel);
     color: var(--text);
     border: 1px solid var(--panel-border);
-    border-radius: 9px;
-    padding: 0.62rem 0.7rem;
+    border-radius: 12px;
+    padding: 0.7rem 0.9rem;
+    min-height: 46px;
     font: inherit;
-    font-size: 0.8rem;
+    font-size: 1rem;
     resize: vertical;
     transition:
         border-color 0.25s,
@@ -343,10 +344,11 @@ code,
     background: var(--accent);
     color: var(--bg);
     border: 1px solid rgba(var(--accent-rgb) / 0.6);
-    padding: 0.65rem 1.25rem;
-    font-size: 0.78rem;
+    padding: 0.75rem 1.2rem;
+    min-height: 46px;
+    font-size: 1rem;
     font-weight: 600;
-    border-radius: 10px;
+    border-radius: 12px;
     cursor: pointer;
     letter-spacing: 0.6px;
     transition:
