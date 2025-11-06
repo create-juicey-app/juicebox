@@ -123,9 +123,9 @@
     inset: 0;
     background: linear-gradient(
         135deg,
-        rgba(15, 20, 27, 0.7) 0%,
-        rgba(29, 39, 51, 0.65) 50%,
-        rgba(15, 20, 27, 0.7) 100%
+        color-mix(in srgb, var(--bg) 70%, transparent) 0%,
+        color-mix(in srgb, var(--panel) 65%, transparent) 50%,
+        color-mix(in srgb, var(--bg) 70%, transparent) 100%
     );
     pointer-events: none;
     border-radius: inherit;
@@ -199,7 +199,7 @@
 .owned-chip button.small {
     background: var(--panel);
     border: 1px solid var(--panel-border);
-    color: var(--text-muted);
+    color: var(--text);
     font-size: 0.75rem;
     padding: 0.28rem 0.5rem;
     border-radius: 5px;
@@ -211,8 +211,18 @@
         color 0.3s,
         transform 0.45s var(--e-out);
 }
+
+/* Ensure emojis/icons render at full brightness for better contrast */
+.owned-chip button.small :where(span, .emoji, .icon, svg) {
+    filter: brightness(1.12) saturate(1.12);
+    opacity: 1;
+    mix-blend-mode: normal;
+    text-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.1),
+        0 1px 6px rgba(0, 0, 0, 0.28);
+}
 .owned-chip button.small:hover {
-    background: #354554;
+    background: var(--panel-lighter);
     transform: translateY(-2px);
 }
 .owned-chip button.small:active {

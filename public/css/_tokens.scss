@@ -126,6 +126,7 @@ $emit-default-css-tokens: true !default;
     $ease_out_v: map-get($overrides, e-out);
     $ease_in_v: map-get($overrides, e-in);
     $font_v: map-get($overrides, font-family);
+    $color_scheme_v: map-get($overrides, color-scheme);
 
     /* Defaults when not overridden */
     $accent_v: if($accent_v == null, $accent, $accent_v);
@@ -138,6 +139,11 @@ $emit-default-css-tokens: true !default;
         $panel_lighter_v == null,
         $panel-lighter,
         $panel_lighter_v
+    );
+    $panel_darker_v: if(
+        $panel_darker_v == null,
+        $panel-darker,
+        $panel_darker_v
     );
     $panel_border_v: if(
         $panel_border_v == null,
@@ -164,6 +170,7 @@ $emit-default-css-tokens: true !default;
         --bg: #{$bg_v};
         --panel: #{$panel_v};
         --panel-lighter: #{$panel_lighter_v};
+        --panel-darker: #{$panel_darker_v};
         --panel-border: #{$panel_border_v};
 
         --fg: #{$fg_v};
@@ -175,6 +182,9 @@ $emit-default-css-tokens: true !default;
         --e-out: #{$ease_out_v};
         --e-in: #{$ease_in_v};
 
+        @if $color_scheme_v != null {
+            color-scheme: #{$color_scheme_v};
+        }
         font-family: #{$font_v};
     }
 }
@@ -186,3 +196,103 @@ $emit-default-css-tokens: true !default;
 @if $emit-default-css-tokens {
     @include css-tokens(":root", $font-sans);
 }
+
+/* -----------------------------------------
+   Theme presets and automatic/manual wiring
+   - Default dark UA hint via color-scheme
+   - Auto-follow light via prefers-color-scheme
+   - Manual data-theme overrides win last
+------------------------------------------ */
+
+/* Default UA hint for form controls, scrollbars, etc. */
+:root {
+    color-scheme: dark;
+}
+
+/* Automatic: follow user's OS/browser preference for light */
+@media (prefers-color-scheme: light) {
+    :root {
+        /* Light surfaces */
+        --bg: #f7f9fc;
+        --panel: #ffffff;
+        --panel-lighter: #f1f5f9;
+        --panel-darker: #e9eef5;
+        --panel-border: #d6e0ea;
+
+        /* Light text system */
+        --text: #0b1621;
+        --text-subtle: #33475b;
+        --text-muted: #5c7186;
+        --fg: #0b1621;
+
+        /* Hint UA for light controls */
+        /* Light brand accent (darker for light mode) */
+        --accent: #d97706;
+        --accent-rgb: 217 119 6;
+        color-scheme: light;
+    }
+}
+
+/* Manual override: attribute takes precedence over preference */
+:root[data-theme="light"],
+html[data-theme="light"] {
+    --bg: #f7f9fc;
+    --panel: #ffffff;
+    --panel-lighter: #f1f5f9;
+    --panel-darker: #e9eef5;
+    --panel-border: #d6e0ea;
+
+    --text: #0b1621;
+    --text-subtle: #33475b;
+    --text-muted: #5c7186;
+    --fg: #0b1621;
+
+    --accent: #d97706;
+    --accent-rgb: 217 119 6;
+    color-scheme: light;
+}
+
+:root[data-theme="dark"],
+html[data-theme="dark"] {
+    color-scheme: dark;
+}
+
+/* -----------------------------------------
+   Theme presets and automatic/manual wiring
+------------------------------------------ */
+
+/* Light theme palette tuned for white surfaces */
+$light-theme: (
+    accent: #d97706,
+    danger: $danger,
+    ok: $ok,
+
+    bg: #f7f9fc,
+    panel: #ffffff,
+    panel-lighter: #f1f5f9,
+    panel-darker: #e9eef5,
+    panel-border: #d6e0ea,
+
+    text: #0b1621,
+    text-subtle: #33475b,
+    text-muted: #5c7186,
+    fg: #0b1621,
+
+    /* Hint UA controls */ color-scheme: light,
+);
+
+/* Dark theme keeps existing defaults; ensure UA paints appropriately */
+$dark-theme: (
+    color-scheme: dark,
+);
+
+/* Automatic: follow user's OS/browser preference */
+@media (prefers-color-scheme: light) {
+    @include css-tokens-override(":root", $light-theme);
+}
+
+/* Manual override: attribute takes precedence over preference */
+@include css-tokens-override(':root[data-theme="light"]', $light-theme);
+@include css-tokens-override('html[data-theme="light"]', $light-theme);
+@include css-tokens-override(':root[data-theme="dark"]', $dark-theme);
+@include css-tokens-override('html[data-theme="dark"]', $dark-theme);

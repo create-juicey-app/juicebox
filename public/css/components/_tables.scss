@@ -5,38 +5,38 @@
 */
 
 .files-panel {
-  width: min(820px, 88%);
-  margin: 1rem auto;
-  padding: 1rem;
-  border-radius: 12px;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
+    width: min(820px, 88%);
+    margin: 1rem auto;
+    padding: 1rem;
+    border-radius: 12px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
 }
 
 .files-heading {
-  margin: 0.1rem 0 0.6rem;
-  font-size: 0.95rem;
-  letter-spacing: 0.5px;
-  opacity: 0.9;
-  text-transform: uppercase;
-  color: var(--text-subtle);
+    margin: 0.1rem 0 0.6rem;
+    font-size: 0.95rem;
+    letter-spacing: 0.5px;
+    opacity: 0.9;
+    text-transform: uppercase;
+    color: var(--text-subtle);
 }
 
 .files-table {
-  width: 100%;
-  border-collapse: collapse;
+    width: 100%;
+    border-collapse: collapse;
 }
 
 .files-table th,
 .files-table td {
-  text-align: left;
-  padding: 0.55rem 0.6rem;
-  border-bottom: 1px solid #23313b;
-  font-size: 0.9rem;
+    text-align: left;
+    padding: 0.55rem 0.6rem;
+    border-bottom: 1px solid var(--panel-border);
+    font-size: 0.9rem;
 }
 
 .files-table th {
-  font-weight: 700;
-  color: #fff;
-  background: #181f2b;
+    font-weight: 700;
+    color: var(--text);
+    background: var(--panel-lighter);
 }

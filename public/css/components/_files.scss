@@ -3,11 +3,11 @@
 /* File list container and items */
 ul#fileList {
     list-style: none;
-    margin: 0.9rem 0 0;
-    padding: 0;
+    margin: 1.15rem 0 0;
+    padding: 0 0.25rem;
     display: flex;
     flex-direction: column;
-    gap: 0.65rem;
+    gap: 0.8rem;
     max-height: 320px;
     overflow: auto;
     scrollbar-width: thin;
@@ -16,7 +16,7 @@ ul#fileList {
 ul#fileList li {
     background: var(--panel-darker);
     border: 1px solid var(--panel-border);
-    padding: 0.7rem 0.8rem 0.6rem;
+    padding: 0.85rem 1rem 0.8rem;
     border-radius: 11px;
     font-size: 0.78rem;
     display: flex;
@@ -78,9 +78,9 @@ ul#fileList li.removing {
 .file-row button.remove {
     background: var(--panel);
     border: 1px solid var(--panel-border);
-    color: var(--text-muted);
+    color: var(--text);
     font-size: 0.75rem;
-    padding: 0.25rem 0.4rem;
+    padding: 0.32rem 0.5rem;
     border-radius: 5px;
     cursor: pointer;
     transition:
@@ -89,8 +89,16 @@ ul#fileList li.removing {
         color 0.3s,
         transform 0.45s var(--e-out);
 }
+.file-row button.remove :where(span, .emoji, .icon, svg) {
+    filter: brightness(1.12) saturate(1.12);
+    opacity: 1;
+    mix-blend-mode: normal;
+    text-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.1),
+        0 1px 6px rgba(0, 0, 0, 0.28);
+}
 .file-row button.remove:hover {
-    background: #354554;
+    background: var(--panel-lighter);
     transform: translateY(-2px);
 }
 .file-row button.remove:active {
@@ -100,11 +108,11 @@ ul#fileList li.removing {
 /* Progress bar */
 .bar {
     height: 5px;
-    background: #141e28;
+    background: var(--panel-darker);
     border-radius: 5px;
     overflow: hidden;
     margin-top: 4px;
-    box-shadow: inset 0 0 0 1px #1d2732;
+    box-shadow: inset 0 0 0 1px var(--panel-border);
     transition:
         height 0.45s ease,
         background-color 0.45s ease,
@@ -140,14 +148,14 @@ ul#fileList li.removing {
 /* Divider variant to separate grouped sections */
 .bar.divider {
     height: 2px;
-    background: #2c394a;
+    background: var(--panel-border);
     box-shadow: none;
     margin-top: 6px;
     position: relative;
 }
 .bar.divider span {
     opacity: 0;
-    background: #2c394a !important;
+    background: var(--panel-border) !important;
     width: 100% !important;
     transition: opacity 0.4s ease;
 }
@@ -162,8 +170,8 @@ ul#fileList li.removing {
     align-items: center;
     gap: 0.55rem;
     opacity: 0.95;
-    background: rgba(24, 32, 42, 0.92);
-    border: 1px solid rgba(76, 100, 128, 0.35);
+    background: color-mix(in srgb, var(--panel) 92%, transparent);
+    border: 1px solid var(--panel-border);
     border-radius: 999px;
     padding: 0.38rem 0.75rem 0.38rem 0.5rem;
     transition:
@@ -226,7 +234,7 @@ ul#fileList li.removing {
     border: 1px solid rgba(var(--accent-rgb) / 0.45);
 }
 .status-note[data-state="finalizing"] .status-icon::after {
-    background: rgba(15, 20, 27, 0.9);
+    background: color-mix(in srgb, var(--bg) 90%, transparent);
     width: 45%;
     height: 45%;
 }
@@ -249,9 +257,9 @@ ul#fileList li.group-batch .group-files {
 }
 ul#fileList li.group-batch .file-entry {
     padding: 0.55rem 0.65rem 0.6rem;
-    border: 1px solid #2c3948;
+    border: 1px solid var(--panel-border);
     border-radius: 8px;
-    background: #1a2430;
+    background: var(--panel);
     display: flex;
     flex-direction: column;
     gap: 0.45rem;

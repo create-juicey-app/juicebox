@@ -64,4 +64,19 @@ describe("SCSS build sanity", () => {
       /\[data-theme=(?:"light"|light)\]\s*{[^}]*--text:\s*#0b1621/i,
     );
   });
+
+  test("emits prefers-color-scheme: light and data-theme overrides in app bundle", () => {
+    const result = sass.compile(appScss, {
+      loadPaths: [cssDir],
+      sourceMap: false,
+      style: "expanded",
+    });
+    const css = result.css || "";
+    // Media query for automatic light mode
+    expect(css).toMatch(/@media\s*\(prefers-color-scheme:\s*light\)/i);
+    // Manual override selectors
+    expect(css).toMatch(/(:root|html)\[data-theme=(?:"light"|light)\]/);
+    // Ensure color-scheme hint is present for light override
+    expect(css).toMatch(/color-scheme:\s*light/);
+  });
 });

@@ -1,54 +1,58 @@
 /* Badges and inline nav (extracted) */
 
 .badge {
-  display: inline-block;
-  font-size: 0.75rem;
-  letter-spacing: 0.5px;
-  padding: 0.2rem 0.45rem 0.25rem;
-  border: 1px solid #2b3744;
-  background: #18222d;
-  border-radius: 999px;
-  text-transform: uppercase;
-  color: var(--text-subtle);
+    display: inline-block;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+    padding: 0.2rem 0.45rem 0.25rem;
+    border: 1px solid var(--panel-border);
+    background: var(--panel);
+    border-radius: 999px;
+    text-transform: uppercase;
+    color: var(--text-subtle);
 }
 
 .badge.accent {
-  border-color: rgba(var(--accent-rgb) / 0.5);
-  background: linear-gradient(145deg, #1b1205, #281b08);
-  color: var(--accent);
+    border-color: rgba(var(--accent-rgb) / 0.5);
+    background: linear-gradient(
+        145deg,
+        color-mix(in srgb, var(--accent) 12%, var(--bg)),
+        color-mix(in srgb, var(--accent) 26%, var(--bg))
+    );
+    color: var(--accent);
 }
 
 .inline-nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  margin: 0 0 1.1rem;
-  padding: 0;
-  list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin: 0 0 1.1rem;
+    padding: 0;
+    list-style: none;
 }
 
 .inline-nav a {
-  text-decoration: none;
-  font-size: 0.78rem;
-  letter-spacing: 0.6px;
-  padding: 0.35rem 0.65rem 0.4rem;
-  border: 1px solid #273443;
-  background: #162029;
-  border-radius: 999px;
-  color: var(--text-subtle);
-  transition:
-    0.3s background,
-    0.3s border-color,
-    0.3s color;
+    text-decoration: none;
+    font-size: 0.78rem;
+    letter-spacing: 0.6px;
+    padding: 0.35rem 0.65rem 0.4rem;
+    border: 1px solid var(--panel-border);
+    background: var(--panel-darker);
+    border-radius: 999px;
+    color: var(--text-subtle);
+    transition:
+        0.3s background,
+        0.3s border-color,
+        0.3s color;
 }
 
 .inline-nav a:hover,
 .inline-nav a:focus-visible {
-  background: #1e2a35;
-  border-color: #314356;
-  color: var(--text);
+    background: var(--panel-lighter);
+    border-color: var(--panel-border);
+    color: var(--text);
 }
 
 .inline-nav a:active {
-  transform: translateY(1px);
+    transform: translateY(1px);
 }

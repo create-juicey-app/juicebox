@@ -2,78 +2,86 @@
 
 /* TTL mini bar */
 .ttl-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5em;
-  position: relative;
-  margin-bottom: 1em;
+    display: flex;
+    align-items: center;
+    gap: 0.5em;
+    position: relative;
+    margin-bottom: 1em;
 }
 
 .ttl-bar-wrap {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  height: 4px;
-  background: #332822;
-  border-radius: 2px;
-  overflow: hidden;
-  width: 80px;
-  z-index: 2;
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 4px;
+    background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+    border-radius: 2px;
+    overflow: hidden;
+    width: 80px;
+    z-index: 2;
 }
 
 .ttl-bar {
-  display: block;
-  height: 100%;
-  background: var(--accent);
-  border-radius: 2px;
-  transition: width 0.5s cubic-bezier(0.4, 2, 0.6, 1);
-  min-width: 0;
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.5s cubic-bezier(0.4, 2, 0.6, 1);
+    min-width: 0;
 }
 
 .ttl-row .ttl {
-  z-index: 1;
+    z-index: 1;
 }
 
 /* Icon trash button */
 button.icon-trash {
-  background: #462a2c;
-  border: 1px solid #543334;
-  color: #ffd3d2;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition:
-    0.18s background,
-    0.18s border-color,
-    0.18s color,
-    0.45s var(--e-out);
+    background: color-mix(in srgb, var(--danger) 18%, var(--panel));
+    border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--panel-border));
+    color: color-mix(in srgb, var(--danger) 88%, var(--text));
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition:
+        0.18s background,
+        0.18s border-color,
+        0.18s color,
+        0.45s var(--e-out);
 }
 
 button.icon-trash:hover {
-  background: #5b3335;
-  border-color: #683a3d;
-  color: #ffe0df;
-  transform: translateY(-2px);
+    background: color-mix(in srgb, var(--danger) 26%, var(--panel));
+    border-color: color-mix(in srgb, var(--danger) 38%, var(--panel-border));
+    color: color-mix(in srgb, var(--danger) 94%, var(--bg));
+    transform: translateY(-2px);
 }
 
 button.icon-trash:active {
-  background: #4b2b2d;
-  transform: translateY(0) scale(0.94);
+    background: color-mix(in srgb, var(--danger) 22%, var(--panel-darker));
+    transform: translateY(0) scale(0.94);
 }
 
 button.icon-trash:disabled {
-  opacity: 0.55;
-  cursor: default;
+    opacity: 0.55;
+    cursor: default;
 }
 
 button.icon-trash svg {
-  width: 14px;
-  height: 14px;
-  pointer-events: none;
+    width: 14px;
+    height: 14px;
+    pointer-events: none;
+}
+
+@media (max-width: 600px) {
+    /* Hide the 'auto delete' helper text near retention controls on small screens */
+    .ttl-row .subtle,
+    .ttl-box .subtle {
+        display: none !important;
+    }
 }

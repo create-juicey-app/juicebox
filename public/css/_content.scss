@@ -114,8 +114,8 @@ details[open] .details-animate > div {
 
 /* Visual styling for details items */
 .details-list details {
-    background: #141d26;
-    border: 1px solid #22303b;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
     border-radius: 10px;
     padding: 0.85rem 1rem 0.95rem;
     transition:
@@ -125,12 +125,12 @@ details[open] .details-animate > div {
 }
 
 .details-list details:hover {
-    border-color: #2e3e4d;
+    border-color: var(--panel-border);
 }
 
 .details-list details[open] {
-    border-color: #314356;
-    background: #18222d;
+    border-color: var(--panel-border);
+    background: var(--panel-lighter);
 }
 
 /* Accessible focus for summary element */
@@ -228,8 +228,8 @@ summary:focus-visible {
 .callout {
     margin: 1.2rem 0 1.6rem;
     padding: 1rem 1.1rem 1.1rem;
-    background: #16202c;
-    border: 1px solid #2b394a;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
     border-radius: 12px;
 }
 .callout h2 {
@@ -261,8 +261,8 @@ hr {
 /* Inline code pills */
 code,
 .code {
-    background: #1d2732;
-    border: 1px solid #273240;
+    background: var(--panel-darker);
+    border: 1px solid var(--panel-border);
     padding: 0.15rem 0.35rem;
     border-radius: 6px;
     font-size: 0.85em;
@@ -316,9 +316,9 @@ code,
 .report-form input[type="text"],
 .report-form select,
 .report-form textarea {
-    background: #121b24;
+    background: var(--panel);
     color: var(--text);
-    border: 1px solid #2b394a;
+    border: 1px solid var(--panel-border);
     border-radius: 9px;
     padding: 0.62rem 0.7rem;
     font: inherit;
@@ -341,7 +341,7 @@ code,
 .report-form button {
     align-self: flex-start;
     background: var(--accent);
-    color: #111;
+    color: var(--bg);
     border: 1px solid rgba(var(--accent-rgb) / 0.6);
     padding: 0.65rem 1.25rem;
     font-size: 0.78rem;
@@ -365,7 +365,7 @@ code,
     transform: none;
 }
 .req {
-    color: #ff5252;
+    color: var(--danger);
     margin-left: 0.25rem;
     font-weight: 700;
 }
@@ -387,8 +387,8 @@ code,
 }
 .report-msg,
 .msg {
-    background: #223038;
-    border: 1px solid #33464f;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
     padding: 0.65rem 0.85rem;
     border-radius: 10px;
     font-size: 0.7rem;
@@ -402,8 +402,8 @@ code,
 
 /* Banned page */
 .card {
-    background: #18222d;
-    border: 1px solid #2b3746;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
     padding: 2.2rem 2rem 2.4rem;
     border-radius: 18px;
     box-shadow: 0 8px 32px -12px rgba(0, 0, 0, 0.65);
@@ -418,7 +418,7 @@ code,
     font-size: 0.9rem;
 }
 .card .reason {
-    color: #ffb347;
+    color: var(--accent);
 }
 .card .dim {
     opacity: 0.65;
@@ -445,9 +445,9 @@ code,
     padding: 0.25em 0em 0.25em 0.7em;
     border-radius: 7px;
     margin-left: 0.1em;
-    background: #181f2b;
-    color: #fff;
-    border: 1px solid #2a3240;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--panel-border);
     box-shadow: 0 1px 4px #0002;
     appearance: none;
     cursor: pointer;
