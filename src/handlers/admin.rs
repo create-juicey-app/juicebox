@@ -280,6 +280,57 @@ pub async fn auth_post_handler(
     json_error(StatusCode::UNAUTHORIZED, "invalid_key", "invalid key")
 }
 
+pub async fn auth_post_json_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(frm): Form<AdminAuthForm>,
+) -> Response {
+    let submitted = frm.key.trim();
+    if submitted.is_empty() {
+        warn!("admin auth (json) rejected: empty key");
+        return json_error(StatusCode::BAD_REQUEST, "missing", "missing key");
+    }
+    let current_key = { state.admin_key.read().await.clone() };
+    if current_key.is_empty() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "no_key",
+            "admin key unavailable",
+        );
+    }
+    if subtle_equals(submitted.as_bytes(), current_key.as_bytes()) {
+        let token = new_id();
+        state.create_admin_session(token.clone()).await;
+        state.persist_admin_sessions().await;
+        let mut cookie = format!(
+            "adm={}; Path=/; HttpOnly; Max-Age={}; SameSite=Strict",
+            token, ADMIN_SESSION_TTL
+        );
+        if is_https(&headers) {
+            cookie.push_str("; Secure");
+        } else if state.production {
+            warn!("admin auth json over non-HTTPS in production; not setting Secure flag");
+        }
+        // Build 200 response with Set-Cookie (avoid redirect caching issues)
+        let mut resp =
+            (StatusCode::OK, Json(json!({"admin": true, "token": token}))).into_response();
+        {
+            let h = resp.headers_mut();
+            h.insert(
+                CACHE_CONTROL,
+                HeaderValue::from_static("no-store, no-cache, must-revalidate, private"),
+            );
+            h.insert(PRAGMA, HeaderValue::from_static("no-cache"));
+            h.insert(EXPIRES, HeaderValue::from_static("0"));
+            h.append(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+        }
+        info!("admin auth success (json)");
+        return resp;
+    }
+    warn!("admin auth (json) failed: invalid key");
+    json_error(StatusCode::UNAUTHORIZED, "invalid_key", "invalid key")
+}
+
 pub async fn is_admin_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
     trace!("checking admin session status");
     if let Some(tok) = get_cookie(&headers, "adm") {

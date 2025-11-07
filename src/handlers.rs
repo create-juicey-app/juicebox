@@ -1,16 +1,15 @@
 use axum::{
-    middleware,
+    Router, middleware,
     routing::{delete, get, post, put},
-    Router,
 };
 use tower_http::services::ServeDir;
-use tracing::{info};
+use tracing::info;
 
 use crate::state::AppState;
 
 pub mod admin;
-pub mod delete;
 pub mod debug;
+pub mod delete;
 pub mod hosting;
 pub mod reports;
 pub mod security;
@@ -20,13 +19,13 @@ pub mod web;
 pub use admin::{
     AdminAuthForm, AdminFileDeleteForm, AdminReportDeleteForm, BanForm, UnbanForm,
     admin_file_delete_handler, admin_files_handler, admin_report_delete_handler,
-    admin_reports_handler, auth_get_handler, auth_post_handler, ban_page_handler, ban_post_handler,
-    is_admin_handler, unban_post_handler,
+    admin_reports_handler, auth_get_handler, auth_post_handler, auth_post_json_handler,
+    ban_page_handler, ban_post_handler, is_admin_handler, unban_post_handler,
 };
+pub use debug::block_debug_endpoints;
 pub use delete::{
     SimpleDeleteForm, delete_handler, simple_delete_handler, simple_delete_post_handler,
 };
-pub use debug::block_debug_endpoints;
 pub use hosting::{ConfigResponse, config_handler, fetch_file_handler, file_handler};
 pub use reports::{ReportForm, ReportRecordEmail, report_handler};
 pub use security::{add_cache_headers, add_security_headers, ban_gate};
@@ -95,6 +94,7 @@ pub fn build_router(state: AppState) -> Router {
             get(simple_delete_handler).post(simple_delete_post_handler),
         )
         .route("/auth", get(auth_get_handler).post(auth_post_handler))
+        .route("/auth/json", post(auth_post_json_handler))
         .route("/isadmin", get(is_admin_handler))
         .route("/debug-ip", get(debug_ip_handler))
         .route("/visitor-debug", get(visitor_debug_handler))
