@@ -91,7 +91,7 @@ pub async fn ban_page_handler(State(state): State<AppState>, headers: HeaderMap)
             format!("<tr><td>{}</td><td>{}</td><td>{}</td><td><form method=post action=/unban style=margin:0><input type=hidden name=key value=\"{}\"><button type=submit class=del aria-label=\"Unban {}\">Unban</button></form></td></tr>", subject_enc, reason_enc, b.time, key_enc, subject_enc)
         })
         .collect();
-    let path = state.static_dir.join("ban.html");
+    let path = state.static_dir.join("admin_ban.html");
     match fs::read(&path).await {
         Ok(bytes) => {
             let mut body = String::from_utf8_lossy(&bytes).into_owned();

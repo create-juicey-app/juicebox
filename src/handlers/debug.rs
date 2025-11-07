@@ -1,21 +1,14 @@
+use crate::state::AppState;
 use axum::{
     body::Body,
     extract::State,
     http::{Request, StatusCode},
     middleware::Next,
-    response::{Html, IntoResponse, Json, Response},
+    response::{IntoResponse, Json, Response},
 };
-use crate::state::AppState;
-use std::convert::Infallible;
 use serde_json::json;
+use std::convert::Infallible;
 use tracing::warn;
-static DEBUG_ERROR_HTML: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/public/debug-error.html"));
-
-#[axum::debug_handler]
-pub async fn debug_error_page() -> impl IntoResponse {
-    Html(DEBUG_ERROR_HTML)
-}
 
 #[axum::debug_handler]
 pub async fn debug_client_error() -> impl IntoResponse {
@@ -61,9 +54,7 @@ pub async fn block_debug_endpoints(
     next: Next,
 ) -> Result<Response, Infallible> {
     let path = request.uri().path();
-    if state.production
-        && (path.starts_with("/debug") || path == "/debug-error" || path == "/debug-error.html")
-    {
+    if state.production && path.starts_with("/debug") {
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
     Ok(next.run(request).await)

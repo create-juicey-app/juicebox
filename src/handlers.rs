@@ -120,8 +120,6 @@ pub fn build_router(state: AppState) -> Router {
 
     if !state.production {
         router = router
-            .route("/debug-error", get(debug::debug_error_page))
-            .route("/debug-error.html", get(debug::debug_error_page))
             .route("/debug/client-error", get(debug::debug_client_error))
             .route("/debug/server-error", get(debug::debug_server_error))
             .route("/debug/rate-limit", get(debug::debug_rate_limit))

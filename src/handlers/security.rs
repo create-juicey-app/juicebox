@@ -6,7 +6,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use std::net::SocketAddr as ClientAddr;
 use std::time::{Duration, SystemTime};
-use tokio::fs;
+use tera::Context;
 use tracing::{debug, trace, warn};
 
 use crate::state::{AppState, IpBan};
@@ -111,32 +111,34 @@ pub async fn ban_gate(
     } else {
         String::new()
     };
-    let tpl_path = state.static_dir.join("banned.html");
-    if let Ok(bytes) = fs::read(&tpl_path).await {
-        let mut body = String::from_utf8_lossy(&bytes).into_owned();
-        body = body
-            .replace("{{REASON}}", &safe_reason)
-            .replace("{{IP}}", &label)
-            .replace("{{TIME_LINE}}", &time_line);
-        debug!(%ip, reason = %safe_reason, "serving ban template");
-        return (
-            StatusCode::FORBIDDEN,
-            [(CONTENT_TYPE, HeaderValue::from_static("text/html"))],
-            body,
-        )
-            .into_response();
+    let mut ctx = Context::new();
+    ctx.insert("IP", &label);
+    ctx.insert("REASON", &safe_reason);
+    ctx.insert("TIME_LINE", &time_line);
+    debug!(%ip, reason = %safe_reason, "rendering banned template via tera");
+    match state.tera.render("banned.html.tera", &ctx) {
+        Ok(body) => {
+            return (
+                StatusCode::FORBIDDEN,
+                [(CONTENT_TYPE, HeaderValue::from_static("text/html"))],
+                body,
+            )
+                .into_response();
+        }
+        Err(e) => {
+            warn!(%ip, error = ?e, "failed to render banned template, serving fallback");
+            let fallback = format!(
+                "<html><body><h1>Banned</h1><p>{}</p><p>{}</p></body></html>",
+                safe_reason, label
+            );
+            return (
+                StatusCode::FORBIDDEN,
+                [(CONTENT_TYPE, HeaderValue::from_static("text/html"))],
+                fallback,
+            )
+                .into_response();
+        }
     }
-    warn!(%ip, path, "ban template missing, serving fallback");
-    let fallback = format!(
-        "<html><body><h1>Banned</h1><p>{}</p><p>{}</p></body></html>",
-        safe_reason, label
-    );
-    (
-        StatusCode::FORBIDDEN,
-        [(CONTENT_TYPE, HeaderValue::from_static("text/html"))],
-        fallback,
-    )
-        .into_response()
 }
 
 pub async fn add_cache_headers(req: Request<Body>, next: Next) -> Response {
