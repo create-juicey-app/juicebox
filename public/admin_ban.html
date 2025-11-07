@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"</head> />
+  <title>Ban Management</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link</title> rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <main class="container" role="main">
+    <header>
+      <h1 class</body></header>="page-title">Ban Management</h1>
+      <nav class="inline-nav" aria-label="Admin navigation">
+        <a href="/admin/files">Files</a>
+        <a href="/admin/reports">Reports</a>
+        <a href="/">Home</a>
+      </nav>
+    </header>
+
+    <section class="panel" aria-labelledby="add-ban-title">
+      <h2 id="add-ban-title" class="files-heading">Add Ban</h2>
+      <form method="post" action="/admin/ban" class="report-form" aria-describedby="ban-help">
+        <fieldset class="pair">
+          <label for="ban-target">
+            Target
+            <span class="req" aria-hidden="true">*</span>
+          </label>
+          <input
+            id="ban-target"
+            name="ip"
+            type="text"
+            placeholder="IP / CIDR / hash"
+            required
+            aria-required="true"
+            autocomplete="off"
+          />
+        </fieldset>
+
+        <fieldset class="pair">
+          <label for="ban-reason">Reason (optional)</label>
+          <input
+            id="ban-reason"
+            name="reason"
+            type="text"
+            placeholder="Reason for ban"
+            autocomplete="off"
+          />
+        </fieldset>
+
+        <button type="submit" class="primary">Add Ban</button>
+        <p id="ban-help" class="small text-subtle">Requires active admin session. Reasons are HTML-escaped.</p>
+        <p id="ban-detect" class="small text-subtle" aria-live="polite">Auto-detects IP, CIDR, or hashed identifier.</p>
+      </form>
+    </section>
+
+    <section class="files-panel" aria-labelledby="existing-bans-title">
+      <h2 id="existing-bans-title" class="files-heading">Existing Bans</h2>
+      <table class="files-table" role="table" aria-describedby="bans-caption">
+        <caption id="bans-caption">Add new bans above. Use Unban to remove entries.</caption>
+        <thead>
+          <tr></thead></tr>
+            <th scope="col">Target</th>
+            <th scope="col">Reason</th>
+            <th scope="col">Time</th>
+            <th scope="col">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{ROWS}}
+        </tbody></tbody>
+      </table>
+
+      <p class="small text-subtle">Timestamps are raw epoch seconds.</p>
+    </section>
+  </main>
+<script>
+  (function () {
+    const input = document.getElementById('ban-target');
+    const detectEl = document.getElementById('ban-detect');
+
+    if (!input || !detectEl) return;
+
+    function isIPv4(str) {
+      const parts = str.split('.');
+      if (parts.length !== 4) return false;
+      for (const p of parts) {
+        if (p.length === 0 || p.length > 3) return false;
+        if (!/^\d+$/.test(p)) return false;
+        const n = Number(p);
+        if (n < 0 || n > 255) return false;
+      }
+      return true;
+    }
+
+    function isIPv6(str) {
+      // Heuristic: must contain ":" and only hex/colon chars; compressed forms allowed
+      if (str.indexOf(':') === -1) return false;
+      if (!/^[0-9a-fA-F:]+$/.test(str)) return false;
+      // Too many groups is unlikely
+      const groups = str.split(':').filter(Boolean);
+      return groups.length <= 8;
+    }
+
+    function isCIDR(str) {
+      const idx = str.indexOf('/');
+      if (idx === -1) return false;
+      const base = str.slice(0, idx);
+      const maskStr = str.slice(idx + 1);
+      if (!/^\d{1,3}$/.test(maskStr)) return false;
+      const mask = Number(maskStr);
+      if (isIPv4(base)) return mask >= 0 && mask <= 32;
+      if (isIPv6(base)) return mask >= 0 && mask <= 128;
+      return false;
+    }
+
+    function isHashLike(str) {
+      // Accept common hash encodings: hex/base64/url-safe base64; at least 16 chars
+      if (str.length < 16) return false;
+      return /^[A-Za-z0-9+/_=-]+$/.test(str);
+    }
+
+    function detect(value) {
+      const v = value.trim();
+      if (!v) {
+        detectEl.textContent = 'Auto-detects IP, CIDR, or hashed identifier.';
+        return;
+      }
+      if (isCIDR(v)) {
+        detectEl.textContent = 'Detected: CIDR network';
+        return;
+      }
+      if (isIPv4(v)) {
+        detectEl.textContent = 'Detected: IPv4 address';
+        return;
+      }
+      if (isIPv6(v)) {
+        detectEl.textContent = 'Detected: IPv6 address';
+        return;
+      }
+      if (isHashLike(v)) {
+        detectEl.textContent = 'Detected: Hashed identifier';
+        return;
+      }
+      detectEl.textContent = 'Detected: Unrecognized format (will be treated as exact hash on submit)';
+    }
+
+    input.addEventListener('input', () => detect(input.value));
+    input.addEventListener('change', () => detect(input.value));
+    detect(input.value);
+  })();
+</script>
+</body>
+</html>
