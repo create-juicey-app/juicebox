@@ -4,6 +4,11 @@ use axum::{
 };
 use tower_http::services::ServeDir;
 use tracing::info;
+// Cloudflare cache bypass patterns (add rules to Bypass Cache):
+//   /auth*
+//   /isadmin
+//   /admin/*
+// These ensure admin auth & status endpoints are never cached or method-normalized.
 
 use crate::state::AppState;
 
@@ -19,8 +24,8 @@ pub mod web;
 pub use admin::{
     AdminAuthForm, AdminFileDeleteForm, AdminReportDeleteForm, BanForm, UnbanForm,
     admin_file_delete_handler, admin_files_handler, admin_report_delete_handler,
-    admin_reports_handler, auth_get_handler, auth_post_handler, auth_post_json_handler,
-    ban_page_handler, ban_post_handler, is_admin_handler, unban_post_handler,
+    admin_reports_handler, auth_get_handler, auth_post_handler, ban_page_handler, ban_post_handler,
+    is_admin_handler, unban_post_handler,
 };
 pub use debug::block_debug_endpoints;
 pub use delete::{
@@ -94,7 +99,6 @@ pub fn build_router(state: AppState) -> Router {
             get(simple_delete_handler).post(simple_delete_post_handler),
         )
         .route("/auth", get(auth_get_handler).post(auth_post_handler))
-        .route("/auth/json", post(auth_post_json_handler))
         .route("/isadmin", get(is_admin_handler))
         .route("/debug-ip", get(debug_ip_handler))
         .route("/visitor-debug", get(visitor_debug_handler))

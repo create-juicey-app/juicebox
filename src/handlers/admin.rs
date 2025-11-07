@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::extract::{Form, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, EXPIRES, LOCATION, PRAGMA, SET_COOKIE};
+use axum::http::header::{CONTENT_TYPE, LOCATION, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
@@ -10,37 +10,6 @@ use tracing::{info, trace, warn};
 
 use crate::state::{AppState, BanSubject, IpBan};
 use crate::util::{ADMIN_SESSION_TTL, IpVersion, get_cookie, json_error, new_id, now_secs};
-
-fn is_https(headers: &HeaderMap) -> bool {
-    if let Some(v) = headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-    {
-        if v.split(',')
-            .next()
-            .map(|s| s.trim().eq_ignore_ascii_case("https"))
-            .unwrap_or(false)
-        {
-            return true;
-        }
-    }
-    if let Some(v) = headers
-        .get(axum::http::header::FORWARDED)
-        .and_then(|v| v.to_str().ok())
-    {
-        let lower = v.to_ascii_lowercase();
-        if lower.contains("proto=https") {
-            return true;
-        }
-    }
-    if let Some(v) = headers.get("cf-visitor").and_then(|v| v.to_str().ok()) {
-        let lower = v.to_ascii_lowercase();
-        if lower.contains("\"scheme\":\"https\"") || lower.contains("https") {
-            return true;
-        }
-    }
-    false
-}
 
 #[derive(Deserialize)]
 pub struct BanForm {
@@ -229,7 +198,7 @@ pub async fn auth_get_handler(State(state): State<AppState>, headers: HeaderMap)
 
 pub async fn auth_post_handler(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Form(frm): Form<AdminAuthForm>,
 ) -> Response {
     let submitted = frm.key.trim();
@@ -253,81 +222,20 @@ pub async fn auth_post_handler(
             "adm={}; Path=/; HttpOnly; Max-Age={}; SameSite=Strict",
             token, ADMIN_SESSION_TTL
         );
-        if is_https(&headers) {
+        if state.production {
             cookie.push_str("; Secure");
-        } else if state.production {
-            warn!("admin auth over non-HTTPS in production; not setting Secure flag");
         }
         let mut resp = (
             StatusCode::SEE_OTHER,
             [(LOCATION, HeaderValue::from_static("/"))],
         )
             .into_response();
-        {
-            let headers = resp.headers_mut();
-            headers.insert(
-                CACHE_CONTROL,
-                HeaderValue::from_static("no-store, no-cache, must-revalidate, private"),
-            );
-            headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
-            headers.insert(EXPIRES, HeaderValue::from_static("0"));
-            headers.append(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
-        }
+        resp.headers_mut()
+            .append(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
         info!("admin auth success");
         return resp;
     }
     warn!("admin auth failed: invalid key");
-    json_error(StatusCode::UNAUTHORIZED, "invalid_key", "invalid key")
-}
-
-pub async fn auth_post_json_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Form(frm): Form<AdminAuthForm>,
-) -> Response {
-    let submitted = frm.key.trim();
-    if submitted.is_empty() {
-        warn!("admin auth (json) rejected: empty key");
-        return json_error(StatusCode::BAD_REQUEST, "missing", "missing key");
-    }
-    let current_key = { state.admin_key.read().await.clone() };
-    if current_key.is_empty() {
-        return json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "no_key",
-            "admin key unavailable",
-        );
-    }
-    if subtle_equals(submitted.as_bytes(), current_key.as_bytes()) {
-        let token = new_id();
-        state.create_admin_session(token.clone()).await;
-        state.persist_admin_sessions().await;
-        let mut cookie = format!(
-            "adm={}; Path=/; HttpOnly; Max-Age={}; SameSite=Strict",
-            token, ADMIN_SESSION_TTL
-        );
-        if is_https(&headers) {
-            cookie.push_str("; Secure");
-        } else if state.production {
-            warn!("admin auth json over non-HTTPS in production; not setting Secure flag");
-        }
-        // Build 200 response with Set-Cookie (avoid redirect caching issues)
-        let mut resp =
-            (StatusCode::OK, Json(json!({"admin": true, "token": token}))).into_response();
-        {
-            let h = resp.headers_mut();
-            h.insert(
-                CACHE_CONTROL,
-                HeaderValue::from_static("no-store, no-cache, must-revalidate, private"),
-            );
-            h.insert(PRAGMA, HeaderValue::from_static("no-cache"));
-            h.insert(EXPIRES, HeaderValue::from_static("0"));
-            h.append(SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
-        }
-        info!("admin auth success (json)");
-        return resp;
-    }
-    warn!("admin auth (json) failed: invalid key");
     json_error(StatusCode::UNAUTHORIZED, "invalid_key", "invalid key")
 }
 
@@ -567,59 +475,5 @@ fn version_label(version: IpVersion) -> &'static str {
     match version {
         IpVersion::V4 => "v4",
         IpVersion::V6 => "v6",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_https;
-    use axum::http::HeaderMap;
-    use axum::http::header::{FORWARDED, HeaderName};
-
-    #[test]
-    fn https_detects_x_forwarded_proto() {
-        let mut h = HeaderMap::new();
-        h.insert(
-            HeaderName::from_static("x-forwarded-proto"),
-            "https".parse().unwrap(),
-        );
-        assert!(is_https(&h));
-    }
-
-    #[test]
-    fn https_detects_forwarded_proto() {
-        let mut h = HeaderMap::new();
-        h.insert(
-            FORWARDED,
-            "for=1.2.3.4;proto=https;host=example.com".parse().unwrap(),
-        );
-        assert!(is_https(&h));
-    }
-
-    #[test]
-    fn https_detects_cf_visitor() {
-        let mut h = HeaderMap::new();
-        h.insert(
-            HeaderName::from_static("cf-visitor"),
-            r#"{"scheme":"https"}"#.parse().unwrap(),
-        );
-        assert!(is_https(&h));
-    }
-
-    #[test]
-    fn https_negative_cases() {
-        let mut h = HeaderMap::new();
-        h.insert(
-            HeaderName::from_static("x-forwarded-proto"),
-            "http".parse().unwrap(),
-        );
-        assert!(!is_https(&h));
-
-        let mut h2 = HeaderMap::new();
-        h2.insert(FORWARDED, "for=1.2.3.4;proto=http".parse().unwrap());
-        assert!(!is_https(&h2));
-
-        let h3 = HeaderMap::new();
-        assert!(!is_https(&h3));
     }
 }
