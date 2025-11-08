@@ -10,3 +10,4 @@ public/dist/
 package-lock.json
 coverage/
 /coverage/
+tarpaulin-report.json

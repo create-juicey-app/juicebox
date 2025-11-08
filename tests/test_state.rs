@@ -6,7 +6,6 @@ use juicebox::state::{
 };
 use juicebox::util::now_secs;
 use std::collections::HashMap;
-use std::time::Duration;
 use tokio::fs;
 
 fn meta(owner_hash: String, expires: u64, original: &str) -> FileMeta {
@@ -175,6 +174,12 @@ async fn verify_user_entries_reconciles_with_disk() {
         file_b.clone(),
         meta(owner_hash.clone(), now + 2000, "keep?"),
     );
+    fs::write(state.upload_dir.join(&file_a), b"existing-a")
+        .await
+        .unwrap();
+    fs::write(state.upload_dir.join(&file_b), b"existing-b")
+        .await
+        .unwrap();
 
     // Disk will contain:
     // - a.txt updated (different expires + original)
@@ -183,23 +188,30 @@ async fn verify_user_entries_reconciles_with_disk() {
     let file_c = "c.txt".to_string();
     let other_owner = common::hash_fixture_ip("192.0.2.1");
 
-    let mut disk_map = HashMap::<String, FileMeta>::new();
-    disk_map.insert(
+    let mut serialized = Vec::new();
+    serialized.push((
         file_a.clone(),
-        meta(owner_hash.clone(), now + 9999, "new.txt"),
-    );
-    disk_map.insert(
+        serde_json::to_string(&meta(owner_hash.clone(), now + 9999, "new.txt")).unwrap(),
+    ));
+    serialized.push((
         file_c.clone(),
-        meta(owner_hash.clone(), now + 3333, "c.txt"),
-    );
-    disk_map.insert("d.txt".into(), meta(other_owner, now + 1234, "d.txt"));
+        serde_json::to_string(&meta(owner_hash.clone(), now + 3333, "c.txt")).unwrap(),
+    ));
+    serialized.push((
+        "d.txt".to_string(),
+        serde_json::to_string(&meta(other_owner, now + 1234, "d.txt")).unwrap(),
+    ));
 
-    // Persist disk metadata
-    let json = serde_json::to_vec_pretty(&disk_map).unwrap();
-    fs::write(&*state.metadata_path, json).await.unwrap();
+    fs::write(state.upload_dir.join(&file_c), b"existing-c")
+        .await
+        .unwrap();
 
-    // Give filesystem a moment to ensure mtime ordering isn't equal on some FS
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    // Persist metadata into the key-value store to simulate disk state
+    state
+        .kv
+        .replace_hash("owners", &serialized)
+        .await
+        .expect("kv write should succeed");
 
     // Run reconciliation for the target owner
     let report = verify_user_entries_with_report(&state, &owner_hash)
@@ -208,19 +220,24 @@ async fn verify_user_entries_reconciles_with_disk() {
 
     // Validate report contents
     assert!(
-        report.removed.contains(&file_b),
-        "expected b.txt to be removed: {:?}",
-        report.removed
-    );
-    assert!(
         report.updated.contains(&file_a),
         "expected a.txt to be updated: {:?}",
+        report.updated
+    );
+    assert!(
+        report.updated.contains(&file_b),
+        "expected b.txt to be synced back to the store: {:?}",
         report.updated
     );
     assert!(
         report.added.contains(&file_c),
         "expected c.txt to be added: {:?}",
         report.added
+    );
+    assert!(
+        report.removed.is_empty(),
+        "did not expect removals but saw {:?}",
+        report.removed
     );
 
     // Validate in-memory state reflects the disk
@@ -229,9 +246,89 @@ async fn verify_user_entries_reconciles_with_disk() {
     assert_eq!(a_meta.original, "new.txt");
     assert!(a_meta.expires > now);
 
-    assert!(state.owners.get(&file_b).is_none());
+    assert!(state.owners.get(&file_b).is_some());
 
     let c = state.owners.get(&file_c).unwrap();
     let c_meta = c.value();
     assert_eq!(c_meta.original, "c.txt");
+
+    let stored_entries = state.kv.load_hash("owners").await.unwrap();
+    let mut stored_map = HashMap::new();
+    for (fname, payload) in stored_entries {
+        stored_map.insert(fname, serde_json::from_str::<FileMeta>(&payload).unwrap());
+    }
+    assert!(stored_map.contains_key(&file_a));
+    assert!(stored_map.contains_key(&file_b));
+    assert!(stored_map.contains_key(&file_c));
+}
+
+#[tokio::test]
+async fn reconcile_flushes_missing_store_entries() {
+    let (state, _tmp) = common::setup_test_app();
+    let owner_hash = common::hash_fixture_ip("198.51.100.7");
+    let fname = "recover.bin".to_string();
+    let meta = meta(owner_hash.clone(), now_secs() + 3600, "recover.bin");
+
+    state.owners.insert(fname.clone(), meta.clone());
+
+    // Ensure key-value store currently lacks this entry.
+    state
+        .kv
+        .replace_hash("owners", &[])
+        .await
+        .expect("kv clear should succeed");
+
+    let report = verify_user_entries_with_report(&state, &owner_hash)
+        .await
+        .expect("reconciliation should return a report");
+    assert!(
+        report.updated.contains(&fname),
+        "expected updated list to include {} but got {:?}",
+        fname,
+        report.updated
+    );
+    assert!(
+        state.owners.get(&fname).is_some(),
+        "owner entry was unexpectedly removed from memory"
+    );
+
+    let stored_entries = state.kv.load_hash("owners").await.unwrap();
+    let stored = stored_entries
+        .into_iter()
+        .find(|(key, _)| key == &fname)
+        .map(|(_, payload)| serde_json::from_str::<FileMeta>(&payload).unwrap());
+    let stored = stored.expect("entry should be persisted to kv store");
+    assert_eq!(stored.owner_hash, owner_hash);
+    assert_eq!(stored.original, meta.original);
+}
+
+#[tokio::test]
+async fn reconcile_cleans_stale_store_entries() {
+    let (state, _tmp) = common::setup_test_app();
+    let owner_hash = common::hash_fixture_ip("203.0.113.9");
+    let fname = "orphan.bin".to_string();
+    let payload =
+        serde_json::to_string(&meta(owner_hash.clone(), now_secs() + 3600, "orphan.bin")).unwrap();
+
+    state
+        .kv
+        .replace_hash("owners", &[(fname.clone(), payload)])
+        .await
+        .expect("kv populate should succeed");
+
+    let report = verify_user_entries_with_report(&state, &owner_hash)
+        .await
+        .expect("reconciliation should return a report");
+    assert!(
+        report.removed.contains(&fname),
+        "expected removed list to include {} but got {:?}",
+        fname,
+        report.removed
+    );
+
+    let stored_entries = state.kv.load_hash("owners").await.unwrap();
+    assert!(
+        stored_entries.into_iter().all(|(key, _)| key != fname),
+        "stale kv entry should have been removed"
+    );
 }

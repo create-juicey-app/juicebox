@@ -9,9 +9,13 @@ use hyper::body::Bytes;
 use juicebox::handlers::{
     ChunkCompleteRequest, ChunkInitRequest, ChunkInitResponse, UploadResponse, build_router,
 };
+use juicebox::state::{BanSubject, IpBan};
 use sha2::{Digest, Sha256};
+use serde_json::Value;
+use std::sync::Arc;
 use std::net::SocketAddr;
 use tower::ServiceExt;
+use tokio::sync::Semaphore;
 
 fn create_multipart_body(file_content: &str, file_name: &str, ttl: &str) -> (String, Body) {
     let boundary = "----WebKitFormBoundaryTESTBOUNDARY";
@@ -119,6 +123,73 @@ async fn test_upload_duplicate_file_name() {
     let resp2 = app.clone().oneshot(upload2).await.unwrap();
     // Should allow duplicate names, but different storage names
     assert!(resp2.status() == StatusCode::OK || resp2.status() == StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_upload_rejects_banned_ip() {
+    let (state, _tmp) = common::setup_test_app();
+    let banned_ip = "198.51.100.9";
+    let hash = state
+        .hash_ip_to_string(banned_ip)
+        .expect("fixture hash available");
+    state
+        .add_ban(IpBan {
+            subject: BanSubject::Exact { hash },
+            label: None,
+            reason: "policy".to_string(),
+            time: 0,
+        })
+        .await;
+    let app = build_router(state.clone());
+
+    let (ct, body) = create_multipart_body("deny", "deny.txt", "1h");
+    let resp = app
+        .clone()
+        .oneshot(with_conn_ip(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/upload")
+                .header(header::CONTENT_TYPE, ct)
+                .body(body)
+                .unwrap(),
+            [198, 51, 100, 9],
+            7000,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "banned");
+}
+
+#[tokio::test]
+async fn test_upload_busy_returns_service_unavailable() {
+    let (mut state, _tmp) = common::setup_test_app();
+    state.upload_sem = Arc::new(Semaphore::new(0));
+    let app = build_router(state.clone());
+
+    let (ct, body) = create_multipart_body("alpha", "alpha.txt", "1h");
+    let resp = app
+        .clone()
+        .oneshot(with_conn_ip(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/upload")
+                .header(header::CONTENT_TYPE, ct)
+                .body(body)
+                .unwrap(),
+            [127, 0, 0, 42],
+            9000,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "busy");
 }
 
 #[tokio::test]
@@ -236,6 +307,209 @@ async fn test_chunk_upload_flow() {
 
     let meta = state.owners.get(&uploaded.files[0]).unwrap();
     assert_eq!(meta.hash, hash);
+}
+
+#[tokio::test]
+async fn test_chunk_init_rejects_zero_length() {
+    let (state, _tmp) = common::setup_test_app();
+    let app = build_router(state.clone());
+
+    let init_req = ChunkInitRequest {
+        filename: "nothing.bin".to_string(),
+        size: 0,
+        ttl: None,
+        chunk_size: None,
+        hash: None,
+    };
+    let resp = app
+        .clone()
+        .oneshot(with_conn_ip(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/chunk/init")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&init_req).unwrap()))
+                .unwrap(),
+            [192, 0, 2, 1],
+            5050,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "empty");
+}
+
+#[tokio::test]
+async fn test_chunk_upload_rejects_forbidden_extension() {
+    let (state, _tmp) = common::setup_test_app();
+    let app = build_router(state.clone());
+
+    let data = vec![b'a'; 1024];
+    let init_req = ChunkInitRequest {
+        filename: "malicious.exe".to_string(),
+        size: data.len() as u64,
+        ttl: Some("1h".to_string()),
+        chunk_size: None,
+        hash: None,
+    };
+    let init = with_conn_ip(
+        Request::builder()
+            .method(Method::POST)
+            .uri("/chunk/init")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&init_req).unwrap()))
+            .unwrap(),
+        [127, 0, 0, 1],
+        6500,
+    );
+    let init_resp = app.clone().oneshot(init).await.unwrap();
+    assert_eq!(init_resp.status(), StatusCode::BAD_REQUEST);
+    assert!(state.chunk_sessions.is_empty());
+}
+
+#[tokio::test]
+async fn test_chunk_upload_rejects_forbidden_content() {
+    let (state, _tmp) = common::setup_test_app();
+    let app = build_router(state.clone());
+
+    let mut data = vec![0u8; 4096];
+    data[0] = 0x4D; // 'M'
+    data[1] = 0x5A; // 'Z'
+    let init_req = ChunkInitRequest {
+        filename: "payload.bin".to_string(),
+        size: data.len() as u64,
+        ttl: Some("1h".to_string()),
+        chunk_size: Some(2048),
+        hash: None,
+    };
+    let init = with_conn_ip(
+        Request::builder()
+            .method(Method::POST)
+            .uri("/chunk/init")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&init_req).unwrap()))
+            .unwrap(),
+        [127, 0, 0, 1],
+        7500,
+    );
+    let init_resp = app.clone().oneshot(init).await.unwrap();
+    assert_eq!(init_resp.status(), StatusCode::OK);
+    let init_bytes = to_bytes(init_resp.into_body(), usize::MAX).await.unwrap();
+    let session: ChunkInitResponse = serde_json::from_slice(&init_bytes).unwrap();
+
+    for idx in 0..session.total_chunks {
+        let start = idx as usize * session.chunk_size as usize;
+        let end = std::cmp::min(start + session.chunk_size as usize, data.len());
+        let chunk = Body::from(Bytes::copy_from_slice(&data[start..end]));
+        let part = with_conn_ip(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/chunk/{}/{idx}", session.session_id))
+                .body(chunk)
+                .unwrap(),
+            [127, 0, 0, 1],
+            7500,
+        );
+        let resp = app.clone().oneshot(part).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    let complete_req = ChunkCompleteRequest { hash: None };
+    let complete = with_conn_ip(
+        Request::builder()
+            .method(Method::POST)
+            .uri(format!("/chunk/{}/complete", session.session_id))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&complete_req).unwrap()))
+            .unwrap(),
+        [127, 0, 0, 1],
+        7500,
+    );
+    let complete_resp = app.clone().oneshot(complete).await.unwrap();
+    assert_eq!(complete_resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        state
+            .owners
+            .iter()
+            .all(|entry| entry.value().original != "payload.bin")
+    );
+    assert!(state.chunk_sessions.get(&session.session_id).is_none());
+}
+
+#[tokio::test]
+async fn test_chunk_complete_rejects_missing_chunks() {
+    let (state, _tmp) = common::setup_test_app();
+    let app = build_router(state.clone());
+
+    let data = vec![b'q'; 90_000];
+    let init_req = ChunkInitRequest {
+        filename: "incomplete.bin".to_string(),
+        size: data.len() as u64,
+        ttl: Some("1h".to_string()),
+        chunk_size: Some(60_000),
+        hash: None,
+    };
+    let init_resp = app
+        .clone()
+        .oneshot(with_conn_ip(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/chunk/init")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&init_req).unwrap()))
+                .unwrap(),
+            [127, 0, 0, 1],
+            8800,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(init_resp.status(), StatusCode::OK);
+    let init_body = to_bytes(init_resp.into_body(), usize::MAX).await.unwrap();
+    let session: ChunkInitResponse = serde_json::from_slice(&init_body).unwrap();
+    assert!(session.total_chunks >= 2);
+
+    // Upload only the first chunk with the expected size.
+    let first_len = session.chunk_size as usize;
+    let chunk = Body::from(Bytes::copy_from_slice(&data[..first_len]));
+    let part_resp = app
+        .clone()
+        .oneshot(with_conn_ip(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(format!("/chunk/{}/{idx}", session.session_id, idx = 0))
+                .body(chunk)
+                .unwrap(),
+            [127, 0, 0, 1],
+            8801,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(part_resp.status(), StatusCode::NO_CONTENT);
+
+    // Attempt to complete without all chunks uploaded.
+    let complete_req = ChunkCompleteRequest { hash: None };
+    let complete_resp = app
+        .clone()
+        .oneshot(with_conn_ip(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/chunk/{}/complete", session.session_id))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&complete_req).unwrap()))
+                .unwrap(),
+            [127, 0, 0, 1],
+            8802,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(complete_resp.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(complete_resp.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["code"], "incomplete");
 }
 
 #[tokio::test]

@@ -1,29 +1,30 @@
+use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Multipart, Path, Query as AxumQuery, State};
 use axum::http::header::{ALLOW, CACHE_CONTROL, PRAGMA};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use infer;
 use mime_guess::mime;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr as ClientAddr;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::state::{
-    check_storage_integrity, cleanup_expired, spawn_integrity_check,
-    verify_user_entries_with_report, AppState, ChunkSession, FileMeta, ReconcileReport,
+    AppState, ChunkSession, FileMeta, ReconcileReport, check_storage_integrity, cleanup_expired,
+    spawn_integrity_check, verify_user_entries_with_report,
 };
 use crate::util::{
-    is_forbidden_extension, json_error, make_storage_name, max_file_bytes, new_id, now_secs,
-    qualify_path, real_client_ip, ttl_to_duration, FORBIDDEN_EXTENSIONS, MAX_ACTIVE_FILES_PER_IP,
+    FORBIDDEN_EXTENSIONS, MAX_ACTIVE_FILES_PER_IP, is_forbidden_extension, json_error,
+    make_storage_name, max_file_bytes, new_id, now_secs, qualify_path, real_client_ip,
+    ttl_to_duration,
 };
 
 #[derive(Deserialize)]
@@ -63,6 +64,7 @@ const DEFAULT_CHUNK_SIZE: u64 = 8 * 1024 * 1024; // 8 MiB
 const MIN_CHUNK_SIZE: u64 = 64 * 1024; // 64 KiB
 const MAX_CHUNK_SIZE: u64 = 32 * 1024 * 1024; // 32 MiB
 const MAX_TOTAL_CHUNKS: u64 = 20_000;
+const INFER_SAMPLE_BYTES: usize = 8 * 1024;
 
 #[derive(Serialize, Deserialize)]
 pub struct ChunkInitRequest {
@@ -240,6 +242,18 @@ pub async fn init_chunk_upload_handler(
             "unable to fingerprint client",
         );
     };
+    if is_forbidden_extension(&req.filename) {
+        warn!(
+            %client_ip,
+            filename = %req.filename,
+            "chunk upload init rejected: forbidden file extension"
+        );
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "bad_filetype",
+            "File type not allowed",
+        );
+    }
     if req.size == 0 {
         warn!(%client_ip, "chunk upload init rejected: empty size");
         return json_error(StatusCode::BAD_REQUEST, "empty", "file size required");
@@ -302,6 +316,18 @@ pub async fn init_chunk_upload_handler(
 
     let session_id = new_id();
     let storage_name = make_storage_name(Some(&req.filename));
+    if is_forbidden_extension(&storage_name) {
+        warn!(
+            %client_ip,
+            storage = %storage_name,
+            "chunk upload init rejected: forbidden storage extension"
+        );
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "bad_filetype",
+            "File type not allowed",
+        );
+    }
     let storage_dir_path = state.chunk_dir.join(&session_id);
     if let Err(err) = fs::create_dir_all(&storage_dir_path).await {
         error!(?err, session_id = %session_id, dir = ?storage_dir_path, "failed to create chunk directory");
@@ -530,6 +556,23 @@ pub async fn complete_chunk_upload_handler(
             "upload session not owned by ip",
         );
     }
+    if is_forbidden_extension(&session.original_name)
+        || is_forbidden_extension(&session.storage_name)
+    {
+        warn!(
+            session_id = %path.id,
+            owner_hash = %owner_hash,
+            original = %session.original_name,
+            storage = %session.storage_name,
+            "chunk completion rejected: forbidden file extension"
+        );
+        state.remove_chunk_session(&path.id).await;
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "bad_filetype",
+            "File type not allowed",
+        );
+    }
     if session.is_completed() {
         debug!(session_id = %path.id, "chunk completion called on already completed session");
         return json_error(
@@ -581,6 +624,7 @@ pub async fn complete_chunk_upload_handler(
     };
     session.assembled_chunks.store(0, Ordering::Relaxed);
     let mut hasher = Sha256::new();
+    let mut detector_buf = Vec::with_capacity(INFER_SAMPLE_BYTES);
     let mut chunk_buf = Vec::with_capacity(session.chunk_size as usize);
     let open_elapsed = start.elapsed();
     debug!(session = %path.id, elapsed_ms = open_elapsed.as_millis(), "chunk completion: file create ready");
@@ -629,6 +673,10 @@ pub async fn complete_chunk_upload_handler(
             };
             return code;
         }
+        if detector_buf.len() < INFER_SAMPLE_BYTES {
+            let take = std::cmp::min(chunk_buf.len(), INFER_SAMPLE_BYTES - detector_buf.len());
+            detector_buf.extend_from_slice(&chunk_buf[..take]);
+        }
         if let Err(err) = file.write_all(&chunk_buf).await {
             drop(permit);
             let _ = fs::remove_file(&tmp_path).await;
@@ -651,6 +699,29 @@ pub async fn complete_chunk_upload_handler(
     }
     let assemble_elapsed = start.elapsed();
     debug!(session = %path.id, elapsed_ms = assemble_elapsed.as_millis(), "chunk completion: chunks assembled");
+    if let Some(kind) = infer::get(&detector_buf) {
+        let ext = kind.extension();
+        if FORBIDDEN_EXTENSIONS.contains(&ext) {
+            let detected_ext = ext.to_string();
+            let detected_mime = kind.mime_type().to_string();
+            drop(file);
+            drop(permit);
+            let _ = fs::remove_file(&tmp_path).await;
+            state.remove_chunk_session(&path.id).await;
+            warn!(
+                session = %path.id,
+                storage = %storage_name,
+                detected_ext = %detected_ext,
+                detected_mime = %detected_mime,
+                "chunk completion rejected: forbidden file content"
+            );
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "bad_filetype",
+                "File type not allowed (forbidden content)",
+            );
+        }
+    }
     if file.flush().await.is_err() {
         drop(permit);
         let _ = fs::remove_file(&tmp_path).await;

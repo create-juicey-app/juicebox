@@ -1,4 +1,4 @@
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use axum::http::{Request, Response};
 use axum::{Router, extract::MatchedPath, middleware};
 use axum_server::Handle;
@@ -7,12 +7,16 @@ use juicebox::handlers::ban_gate;
 use juicebox::handlers::{add_cache_headers, add_security_headers, build_router};
 use juicebox::rate_limit::{RateLimiterInner, build_rate_limiter};
 use juicebox::state::{
-    AppState, BanSubject, FileMeta, IpBan, ReportRecord, TelemetryState, cleanup_expired,
+    AppState, BanSubject, FileMeta, IpBan, RedisStore, ReportRecord, TelemetryState,
+    cleanup_expired,
 };
 use juicebox::util::{
     IpVersion, PROD_HOST, UPLOAD_CONCURRENCY, hash_ip_string, hash_network_from_cidr,
     looks_like_hash, now_secs, ttl_to_duration,
 };
+use redis::AsyncCommands;
+use redis::Client;
+use redis::aio::ConnectionManager;
 use sentry::integrations::tracing::{self as sentry_tracing_integration, EventFilter};
 use sentry::{ClientInitGuard, SessionMode};
 use sentry_tower::{NewSentryLayer, SentryHttpLayer};
@@ -39,11 +43,32 @@ use tracing::{Level, debug, error, info, info_span, warn};
 use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
 
-#[tracing::instrument(skip(secret))]
+#[tracing::instrument(skip(secret, redis))]
 async fn load_owners_with_migration(
     path: &PathBuf,
     secret: &[u8],
+    redis: &Arc<tokio::sync::Mutex<ConnectionManager>>,
+    prefix: &str,
 ) -> anyhow::Result<(HashMap<String, FileMeta>, bool)> {
+    let redis_key = format!("{prefix}:owners");
+    {
+        let mut conn = redis.lock().await;
+        let entries: Vec<(String, String)> = conn.hgetall(&redis_key).await?;
+        drop(conn);
+        if !entries.is_empty() {
+            let mut map = HashMap::with_capacity(entries.len());
+            for (file, payload) in entries {
+                match serde_json::from_str::<FileMeta>(&payload) {
+                    Ok(meta) => {
+                        map.insert(file, meta);
+                    }
+                    Err(err) => warn!(?err, file, "ignoring malformed owner entry from redis"),
+                }
+            }
+            return Ok((map, false));
+        }
+    }
+
     let data = match fs::read(path).await {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok((HashMap::new(), false)),
@@ -62,7 +87,10 @@ async fn load_owners_with_migration(
                 }
             }
         }
-        return Ok((map, changed));
+        if changed {
+            debug!("normalized owner hashes during migration");
+        }
+        return Ok((map, true));
     }
     if let Ok(old_map) = serde_json::from_slice::<HashMap<String, String>>(&data) {
         let default_exp = now_secs() + ttl_to_duration("3d").as_secs();
@@ -86,7 +114,10 @@ async fn load_owners_with_migration(
                 },
             );
         }
-        return Ok((map, changed));
+        if changed {
+            debug!("migrated legacy owner metadata to hashed entries");
+        }
+        return Ok((map, true));
     }
     Ok((HashMap::new(), false))
 }
@@ -102,11 +133,30 @@ struct LegacyReportRecord {
     time: u64,
 }
 
-#[tracing::instrument(skip(secret))]
+#[tracing::instrument(skip(secret, redis))]
 async fn load_reports_with_migration(
     path: &PathBuf,
     secret: &[u8],
+    redis: &Arc<tokio::sync::Mutex<ConnectionManager>>,
+    prefix: &str,
 ) -> anyhow::Result<(Vec<ReportRecord>, bool)> {
+    let redis_key = format!("{prefix}:reports");
+    {
+        let mut conn = redis.lock().await;
+        let entries: Vec<String> = conn.lrange(&redis_key, 0, -1).await?;
+        drop(conn);
+        if !entries.is_empty() {
+            let mut reports = Vec::with_capacity(entries.len());
+            for payload in entries {
+                match serde_json::from_str::<ReportRecord>(&payload) {
+                    Ok(report) => reports.push(report),
+                    Err(err) => warn!(?err, "ignoring malformed report entry from redis"),
+                }
+            }
+            return Ok((reports, false));
+        }
+    }
+
     let data = match fs::read(path).await {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok((Vec::new(), false)),
@@ -125,11 +175,14 @@ async fn load_reports_with_migration(
                 }
             }
         }
-        return Ok((reports, changed));
+        if changed {
+            debug!("normalized legacy report hashes during migration");
+        }
+        return Ok((reports, true));
     }
     if let Ok(raw_reports) = serde_json::from_slice::<Vec<LegacyReportRecord>>(&data) {
         let mut reports = Vec::with_capacity(raw_reports.len());
-        let mut changed = false;
+        let mut migrated_any = false;
         for raw in raw_reports {
             let (reporter_hash, migrated) = if looks_like_hash(&raw.ip) {
                 (raw.ip, false)
@@ -139,7 +192,7 @@ async fn load_reports_with_migration(
                 (raw.ip, false)
             };
             if migrated {
-                changed = true;
+                migrated_any = true;
             }
             reports.push(ReportRecord {
                 file: raw.file,
@@ -149,9 +202,47 @@ async fn load_reports_with_migration(
                 time: raw.time,
             });
         }
-        return Ok((reports, changed));
+        if migrated_any {
+            debug!("migrated legacy report records to hashed format");
+        }
+        return Ok((reports, true));
     }
     Ok((Vec::new(), false))
+}
+
+#[tracing::instrument(skip(redis))]
+async fn load_admin_sessions_with_migration(
+    path: &PathBuf,
+    redis: &Arc<tokio::sync::Mutex<ConnectionManager>>,
+    prefix: &str,
+) -> anyhow::Result<(HashMap<String, u64>, bool)> {
+    let redis_key = format!("{prefix}:admin_sessions");
+    let redis_sessions: HashMap<String, u64> = {
+        let mut conn = redis.lock().await;
+        conn.hgetall(&redis_key).await?
+    };
+    if !redis_sessions.is_empty() {
+        return Ok((redis_sessions, false));
+    }
+
+    let data = match fs::read(path).await {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok((HashMap::new(), false)),
+        Err(err) => return Err(err.into()),
+    };
+    if data.is_empty() {
+        return Ok((HashMap::new(), false));
+    }
+    match serde_json::from_slice::<HashMap<String, u64>>(&data) {
+        Ok(map) => Ok((map, true)),
+        Err(err) => {
+            warn!(
+                ?err,
+                "failed to parse admin sessions file during migration; starting clean"
+            );
+            Ok((HashMap::new(), false))
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -186,11 +277,30 @@ enum LegacyBanSubject {
     },
 }
 
-#[tracing::instrument(skip(secret))]
+#[tracing::instrument(skip(secret, redis))]
 async fn load_bans_with_migration(
     path: &PathBuf,
     secret: &[u8],
+    redis: &Arc<tokio::sync::Mutex<ConnectionManager>>,
+    prefix: &str,
 ) -> anyhow::Result<(Vec<IpBan>, bool)> {
+    let redis_key = format!("{prefix}:bans");
+    {
+        let mut conn = redis.lock().await;
+        let entries: Vec<(String, String)> = conn.hgetall(&redis_key).await?;
+        drop(conn);
+        if !entries.is_empty() {
+            let mut bans = Vec::with_capacity(entries.len());
+            for (_, payload) in entries {
+                match serde_json::from_str::<IpBan>(&payload) {
+                    Ok(ban) => bans.push(ban),
+                    Err(err) => warn!(?err, "ignoring malformed ban entry from redis"),
+                }
+            }
+            return Ok((bans, false));
+        }
+    }
+
     let data = match fs::read(path).await {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok((Vec::new(), false)),
@@ -228,11 +338,14 @@ async fn load_bans_with_migration(
                 }
             }
         }
-        return Ok((bans, changed));
+        if changed {
+            debug!("normalized legacy ban entries during migration");
+        }
+        return Ok((bans, true));
     }
     if let Ok(raw_bans) = serde_json::from_slice::<Vec<LegacyIpBan>>(&data) {
         let mut bans = Vec::with_capacity(raw_bans.len());
-        let mut changed = false;
+        let mut migrated_any = false;
         for raw in raw_bans {
             let subject = match raw.subject {
                 LegacyBanSubject::Exact { hash, ip } => {
@@ -245,7 +358,7 @@ async fn load_bans_with_migration(
                         (value, false)
                     };
                     if migrated {
-                        changed = true;
+                        migrated_any = true;
                     }
                     BanSubject::Exact { hash: final_hash }
                 }
@@ -301,7 +414,7 @@ async fn load_bans_with_migration(
                             (IpVersion::V4, 32, String::new())
                         };
                     if migrated {
-                        changed = true;
+                        migrated_any = true;
                     }
                     BanSubject::Network {
                         hash: final_hash,
@@ -317,7 +430,10 @@ async fn load_bans_with_migration(
                 time: raw.time,
             });
         }
-        return Ok((bans, changed));
+        if migrated_any {
+            debug!("migrated legacy ban records to hashed format");
+        }
+        return Ok((bans, true));
     }
     Ok((Vec::new(), false))
 }
@@ -724,6 +840,18 @@ async fn main() -> anyhow::Result<()> {
         chunk_dir = ?chunk_dir,
         "ensured storage directories exist"
     );
+    let redis_url = std::env::var("JUICEBOX_REDIS_URL")
+        .or_else(|_| std::env::var("REDIS_URL"))
+        .context("JUICEBOX_REDIS_URL or REDIS_URL environment variable is required")?;
+    let redis_client = Client::open(redis_url.clone())
+        .with_context(|| format!("failed to create redis client for {redis_url}"))?;
+    let redis_manager = ConnectionManager::new(redis_client)
+        .await
+        .context("failed to establish redis connection")?;
+    let redis_prefix =
+        std::env::var("JUICEBOX_REDIS_PREFIX").unwrap_or_else(|_| "juicebox".to_string());
+    debug!(redis_url = %redis_url, prefix = %redis_prefix, "connected to redis");
+    let redis_manager = Arc::new(tokio::sync::Mutex::new(redis_manager));
     let ip_hash_secret = Arc::new(load_hash_secret_from_env()?);
     // ensure bans file presence
     let _ = fs::OpenOptions::new()
@@ -732,16 +860,33 @@ async fn main() -> anyhow::Result<()> {
         .open(&*bans_path)
         .await;
 
-    let (owners_map, owners_migrated) =
-        load_owners_with_migration(metadata_path.as_ref(), &ip_hash_secret).await?;
-    let (reports_vec, reports_migrated) =
-        load_reports_with_migration(reports_path.as_ref(), &ip_hash_secret).await?;
-    let admin_sessions_map: HashMap<String, u64> = match fs::read(&*admin_sessions_path).await {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
-        Err(_) => HashMap::new(),
-    };
-    let (bans_vec, bans_migrated) =
-        load_bans_with_migration(bans_path.as_ref(), &ip_hash_secret).await?;
+    let (owners_map, owners_migrated) = load_owners_with_migration(
+        metadata_path.as_ref(),
+        &ip_hash_secret,
+        &redis_manager,
+        &redis_prefix,
+    )
+    .await?;
+    let (reports_vec, reports_migrated) = load_reports_with_migration(
+        reports_path.as_ref(),
+        &ip_hash_secret,
+        &redis_manager,
+        &redis_prefix,
+    )
+    .await?;
+    let (admin_sessions_map, admin_sessions_migrated) = load_admin_sessions_with_migration(
+        admin_sessions_path.as_ref(),
+        &redis_manager,
+        &redis_prefix,
+    )
+    .await?;
+    let (bans_vec, bans_migrated) = load_bans_with_migration(
+        bans_path.as_ref(),
+        &ip_hash_secret,
+        &redis_manager,
+        &redis_prefix,
+    )
+    .await?;
     info!(
         owners = owners_map.len(),
         migrated = owners_migrated,
@@ -757,8 +902,9 @@ async fn main() -> anyhow::Result<()> {
         migrated = bans_migrated,
         "loaded ban metadata"
     );
-    debug!(
+    info!(
         admin_sessions = admin_sessions_map.len(),
+        migrated = admin_sessions_migrated,
         "loaded admin sessions"
     );
 
@@ -814,6 +960,7 @@ async fn main() -> anyhow::Result<()> {
         ip_hash_secret: ip_hash_secret.clone(),
         owners_persist_lock: Arc::new(tokio::sync::Mutex::new(())),
         telemetry: Arc::new(telemetry_state.clone()),
+        kv: Arc::new(RedisStore::new(redis_prefix.clone(), redis_manager.clone())),
     };
 
     if owners_migrated {
@@ -824,6 +971,9 @@ async fn main() -> anyhow::Result<()> {
     }
     if bans_migrated {
         state.persist_bans().await;
+    }
+    if admin_sessions_migrated {
+        state.persist_admin_sessions().await;
     }
 
     if let Err(err) = state.load_chunk_sessions_from_disk().await {

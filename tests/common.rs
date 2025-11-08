@@ -1,6 +1,6 @@
 mod common {}
 
-use juicebox::state::{AppState, ReportRecord, TelemetryState};
+use juicebox::state::{AppState, MemoryStore, ReportRecord, TelemetryState};
 use juicebox::util::{UPLOAD_CONCURRENCY, hash_ip_string};
 use std::{collections::HashMap, path::Path, sync::Arc, time::SystemTime};
 use tempfile::TempDir;
@@ -88,6 +88,7 @@ pub fn setup_test_app() -> (AppState, TempDir) {
         ip_hash_secret,
         owners_persist_lock: Arc::new(tokio::sync::Mutex::new(())),
         telemetry: test_telemetry_state(),
+        kv: Arc::new(MemoryStore::new("test".to_string())),
     };
 
     (state, temp_dir)
@@ -146,5 +147,6 @@ pub fn recreate_state(base_path: &Path) -> AppState {
         ip_hash_secret,
         owners_persist_lock: Arc::new(tokio::sync::Mutex::new(())),
         telemetry: test_telemetry_state(),
+        kv: Arc::new(MemoryStore::new("test".to_string())),
     }
 }

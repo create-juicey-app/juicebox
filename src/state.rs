@@ -1,10 +1,12 @@
 use crate::util::{
     ADMIN_KEY_TTL, ADMIN_SESSION_TTL, IpVersion, MAX_ACTIVE_FILES_PER_IP, hash_ip_addr,
     hash_ip_string, hash_network_from_cidr, hash_network_from_ip, new_id, now_secs,
-    ttl_to_duration,
 };
 use anyhow::Result;
+use async_trait::async_trait;
 use dashmap::DashMap;
+use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -68,6 +70,140 @@ pub struct IpBan {
     pub label: Option<String>,
     pub reason: String,
     pub time: u64,
+}
+
+#[async_trait]
+pub trait KvStore: Send + Sync {
+    async fn replace_hash(&self, key: &str, entries: &[(String, String)]) -> Result<()>;
+    async fn load_hash(&self, key: &str) -> Result<Vec<(String, String)>>;
+    async fn replace_list(&self, key: &str, values: &[String]) -> Result<()>;
+    async fn load_list(&self, key: &str) -> Result<Vec<String>>;
+}
+
+pub struct RedisStore {
+    prefix: String,
+    manager: Arc<Mutex<ConnectionManager>>,
+}
+
+impl RedisStore {
+    pub fn new(prefix: String, manager: Arc<Mutex<ConnectionManager>>) -> Self {
+        Self { prefix, manager }
+    }
+
+    fn key(&self, suffix: &str) -> String {
+        format!("{}:{suffix}", self.prefix)
+    }
+}
+
+#[async_trait]
+impl KvStore for RedisStore {
+    async fn replace_hash(&self, key: &str, entries: &[(String, String)]) -> Result<()> {
+        let redis_key = self.key(key);
+        let mut conn = self.manager.lock().await;
+        redis::cmd("DEL")
+            .arg(&redis_key)
+            .query_async::<_, ()>(&mut *conn)
+            .await?;
+        if !entries.is_empty() {
+            let mut cmd = redis::cmd("HSET");
+            cmd.arg(&redis_key);
+            for (field, value) in entries {
+                cmd.arg(field).arg(value);
+            }
+            cmd.query_async::<_, ()>(&mut *conn).await?;
+        }
+        Ok(())
+    }
+
+    async fn load_hash(&self, key: &str) -> Result<Vec<(String, String)>> {
+        let redis_key = self.key(key);
+        let mut conn = self.manager.lock().await;
+        let entries: Vec<(String, String)> = conn.hgetall(&redis_key).await?;
+        Ok(entries)
+    }
+
+    async fn replace_list(&self, key: &str, values: &[String]) -> Result<()> {
+        let redis_key = self.key(key);
+        let mut conn = self.manager.lock().await;
+        redis::cmd("DEL")
+            .arg(&redis_key)
+            .query_async::<_, ()>(&mut *conn)
+            .await?;
+        if !values.is_empty() {
+            let mut pipe = redis::pipe();
+            pipe.atomic();
+            for value in values {
+                pipe.cmd("RPUSH").arg(&redis_key).arg(value);
+            }
+            pipe.query_async::<_, ()>(&mut *conn).await?;
+        }
+        Ok(())
+    }
+
+    async fn load_list(&self, key: &str) -> Result<Vec<String>> {
+        let redis_key = self.key(key);
+        let mut conn = self.manager.lock().await;
+        let entries: Vec<String> = conn.lrange(&redis_key, 0, -1).await?;
+        Ok(entries)
+    }
+}
+
+#[derive(Default)]
+pub struct MemoryStore {
+    prefix: String,
+    hashes: Mutex<HashMap<String, HashMap<String, String>>>,
+    lists: Mutex<HashMap<String, Vec<String>>>,
+}
+
+impl MemoryStore {
+    pub fn new(prefix: String) -> Self {
+        Self {
+            prefix,
+            hashes: Mutex::new(HashMap::new()),
+            lists: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn key(&self, suffix: &str) -> String {
+        format!("{}:{suffix}", self.prefix)
+    }
+}
+
+#[async_trait]
+impl KvStore for MemoryStore {
+    async fn replace_hash(&self, key: &str, entries: &[(String, String)]) -> Result<()> {
+        let redis_key = self.key(key);
+        let mut hashes = self.hashes.lock().await;
+        let mut map = HashMap::new();
+        for (field, value) in entries {
+            map.insert(field.clone(), value.clone());
+        }
+        hashes.insert(redis_key, map);
+        Ok(())
+    }
+
+    async fn load_hash(&self, key: &str) -> Result<Vec<(String, String)>> {
+        let redis_key = self.key(key);
+        let hashes = self.hashes.lock().await;
+        let entries = hashes
+            .get(&redis_key)
+            .map(|map| map.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+        Ok(entries)
+    }
+
+    async fn replace_list(&self, key: &str, values: &[String]) -> Result<()> {
+        let redis_key = self.key(key);
+        let mut lists = self.lists.lock().await;
+        lists.insert(redis_key, values.to_vec());
+        Ok(())
+    }
+
+    async fn load_list(&self, key: &str) -> Result<Vec<String>> {
+        let redis_key = self.key(key);
+        let lists = self.lists.lock().await;
+        Ok(lists.get(&redis_key).cloned().unwrap_or_default())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -282,6 +418,7 @@ pub struct AppState {
     pub ip_hash_secret: Arc<Vec<u8>>,
     pub owners_persist_lock: Arc<Mutex<()>>,
     pub telemetry: Arc<TelemetryState>,
+    pub kv: Arc<dyn KvStore>,
 }
 
 impl AppState {
@@ -380,46 +517,29 @@ impl AppState {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn persist_owners_inner(&self) {
-        // DashMap is not directly serializable, so collect to HashMap
         let owners: HashMap<String, FileMeta> = self
             .owners
             .iter()
             .map(|r| (r.key().clone(), r.value().clone()))
             .collect();
-        match serde_json::to_vec(&owners) {
-            Ok(json) => {
-                let tmp = self.metadata_path.with_extension("tmp");
-                match fs::File::create(&tmp).await {
-                    Ok(mut f) => {
-                        if let Err(err) = f.write_all(&json).await {
-                            error!(?err, path = ?tmp, "failed to write owners metadata temp file");
-                            return;
-                        }
-                        if let Err(err) = f.sync_all().await {
-                            warn!(?err, path = ?tmp, "failed to sync owners metadata temp file");
-                        }
-                        if let Err(err) = fs::rename(&tmp, &*self.metadata_path).await {
-                            error!(?err, from = ?tmp, to = ?self.metadata_path, "failed to replace owners metadata");
-                            return;
-                        }
-                        if let Ok(md) = fs::metadata(&*self.metadata_path).await {
-                            if let Ok(modified) = md.modified() {
-                                let mut lm = self.last_meta_mtime.write().await;
-                                *lm = modified;
-                                debug!(modified = ?modified, "updated owners metadata mtime");
-                            }
-                        }
-                        debug!(count = owners.len(), "persisted owners metadata");
-                    }
-                    Err(err) => {
-                        error!(?err, path = ?tmp, "failed to create owners metadata temp file");
-                    }
+        let mut encoded = Vec::with_capacity(owners.len());
+        for (key, meta) in owners.iter() {
+            match serde_json::to_string(meta) {
+                Ok(value) => encoded.push((key.clone(), value)),
+                Err(err) => {
+                    error!(?err, file = key, "failed to serialize file meta for redis");
+                    return;
                 }
             }
-            Err(err) => {
-                error!(?err, "failed to serialize owners metadata");
-            }
         }
+        if let Err(err) = self.kv.replace_hash("owners", &encoded).await {
+            error!(?err, "failed to persist owners metadata to key-value store");
+            return;
+        }
+        debug!(
+            count = encoded.len(),
+            "persisted owners metadata to key-value store"
+        );
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -437,96 +557,64 @@ impl AppState {
     }
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn persist_reports(&self) {
-        let reports = self.reports.read().await;
-        match serde_json::to_vec(&*reports) {
-            Ok(json) => {
-                let tmp = self.reports_path.with_extension("tmp");
-                match fs::File::create(&tmp).await {
-                    Ok(mut file) => {
-                        if let Err(err) = file.write_all(&json).await {
-                            error!(?err, path = ?tmp, "failed to write reports temp file");
-                            return;
-                        }
-                        if let Err(err) = file.sync_all().await {
-                            warn!(?err, path = ?tmp, "failed to sync reports temp file");
-                        }
-                        if let Err(err) = fs::rename(&tmp, &*self.reports_path).await {
-                            error!(?err, from = ?tmp, to = ?self.reports_path, "failed to replace reports file");
-                            return;
-                        }
-                        debug!(count = reports.len(), "persisted reports metadata");
-                    }
-                    Err(err) => {
-                        error!(?err, path = ?tmp, "failed to create reports temp file");
-                    }
+        let reports = self.reports.read().await.clone();
+        let mut encoded = Vec::with_capacity(reports.len());
+        for report in reports.iter() {
+            match serde_json::to_string(report) {
+                Ok(value) => encoded.push(value),
+                Err(err) => {
+                    error!(?err, "failed to serialize report for redis");
+                    return;
                 }
             }
-            Err(err) => {
-                error!(?err, "failed to serialize reports metadata");
-            }
         }
+        if let Err(err) = self.kv.replace_list("reports", &encoded).await {
+            error!(?err, "failed to persist reports to key-value store");
+            return;
+        }
+        debug!(
+            count = encoded.len(),
+            "persisted reports to key-value store"
+        );
     }
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn persist_admin_sessions(&self) {
-        let map = self.admin_sessions.read().await;
-        match serde_json::to_vec(&*map) {
-            Ok(json) => {
-                let tmp = self.admin_sessions_path.with_extension("tmp");
-                match fs::File::create(&tmp).await {
-                    Ok(mut file) => {
-                        if let Err(err) = file.write_all(&json).await {
-                            error!(?err, path = ?tmp, "failed to write admin sessions temp file");
-                            return;
-                        }
-                        if let Err(err) = file.sync_all().await {
-                            warn!(?err, path = ?tmp, "failed to sync admin sessions temp file");
-                        }
-                        if let Err(err) = fs::rename(&tmp, &*self.admin_sessions_path).await {
-                            error!(?err, from = ?tmp, to = ?self.admin_sessions_path, "failed to replace admin sessions file");
-                            return;
-                        }
-                        debug!(count = map.len(), "persisted admin sessions");
-                    }
-                    Err(err) => {
-                        error!(?err, path = ?tmp, "failed to create admin sessions temp file");
-                    }
-                }
-            }
-            Err(err) => {
-                error!(?err, "failed to serialize admin sessions");
-            }
+        let map_snapshot = self.admin_sessions.read().await.clone();
+        let entries: Vec<(String, String)> = map_snapshot
+            .iter()
+            .map(|(token, exp)| (token.clone(), exp.to_string()))
+            .collect();
+        if let Err(err) = self.kv.replace_hash("admin_sessions", &entries).await {
+            error!(?err, "failed to persist admin sessions to key-value store");
+            return;
         }
+        debug!(
+            count = map_snapshot.len(),
+            "persisted admin sessions to key-value store"
+        );
     }
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn persist_bans(&self) {
-        let bans = self.bans.read().await;
-        match serde_json::to_vec(&*bans) {
-            Ok(json) => {
-                let tmp = self.bans_path.with_extension("tmp");
-                match fs::File::create(&tmp).await {
-                    Ok(mut file) => {
-                        if let Err(err) = file.write_all(&json).await {
-                            error!(?err, path = ?tmp, "failed to write bans temp file");
-                            return;
-                        }
-                        if let Err(err) = file.sync_all().await {
-                            warn!(?err, path = ?tmp, "failed to sync bans temp file");
-                        }
-                        if let Err(err) = fs::rename(&tmp, &*self.bans_path).await {
-                            error!(?err, from = ?tmp, to = ?self.bans_path, "failed to replace bans file");
-                            return;
-                        }
-                        debug!(count = bans.len(), "persisted bans list");
-                    }
-                    Err(err) => {
-                        error!(?err, path = ?tmp, "failed to create bans temp file");
-                    }
+        let bans_snapshot = self.bans.read().await.clone();
+        let mut encoded = Vec::with_capacity(bans_snapshot.len());
+        for ban in bans_snapshot.iter() {
+            match serde_json::to_string(ban) {
+                Ok(value) => encoded.push((ban.subject.key().to_string(), value)),
+                Err(err) => {
+                    error!(
+                        ?err,
+                        key = ban.subject.key(),
+                        "failed to serialize ban for redis"
+                    );
+                    return;
                 }
             }
-            Err(err) => {
-                error!(?err, "failed to serialize bans metadata");
-            }
         }
+        if let Err(err) = self.kv.replace_hash("bans", &encoded).await {
+            error!(?err, "failed to persist bans to key-value store");
+            return;
+        }
+        debug!(count = encoded.len(), "persisted bans to key-value store");
     }
 
     #[tracing::instrument(level = "debug", skip(self, session))]
@@ -913,48 +1001,30 @@ pub async fn cleanup_expired(state: &AppState) {
 
 #[tracing::instrument(level = "debug", skip(state))]
 pub async fn reload_metadata_if_changed(state: &AppState) {
-    let meta_res = fs::metadata(&*state.metadata_path).await;
-    let md = match meta_res {
-        Ok(m) => m,
-        Err(_) => return,
+    let entries: Vec<(String, String)> = match state.kv.load_hash("owners").await {
+        Ok(items) => items,
+        Err(err) => {
+            error!(?err, "failed to reload owners from key-value store");
+            return;
+        }
     };
-    let modified = match md.modified() {
-        Ok(t) => t,
-        Err(_) => return,
-    };
-    let need_reload = {
-        let lm = state.last_meta_mtime.read().await;
-        modified > *lm
-    };
-    if !need_reload {
-        return;
-    }
-    if let Ok(bytes) = fs::read(&*state.metadata_path).await {
-        if let Ok(map) = serde_json::from_slice::<HashMap<String, FileMeta>>(&bytes) {
-            state.owners.clear();
-            for (k, v) in map.into_iter() {
-                state.owners.insert(k, v);
+    state.owners.clear();
+    let mut restored = 0usize;
+    for (file, payload) in entries {
+        match serde_json::from_str::<FileMeta>(&payload) {
+            Ok(meta) => {
+                state.owners.insert(file, meta);
+                restored += 1;
             }
-        } else if let Ok(old) = serde_json::from_slice::<HashMap<String, String>>(&bytes) {
-            state.owners.clear();
-            let default_exp = now_secs() + ttl_to_duration("3d").as_secs();
-            for (k, v) in old.into_iter() {
-                state.owners.insert(
-                    k,
-                    FileMeta {
-                        owner_hash: v,
-                        expires: default_exp,
-                        original: String::new(),
-                        created: now_secs(),
-                        hash: String::new(),
-                    },
+            Err(err) => {
+                warn!(
+                    ?err,
+                    file, "failed to deserialize file meta from key-value store"
                 );
             }
         }
-        let mut lm = state.last_meta_mtime.write().await;
-        *lm = modified;
-        info!(?modified, "reloaded metadata from disk");
     }
+    debug!(restored, "reloaded owners metadata from key-value store");
 }
 
 // Simplified: delegate to the already tested reconcile implementation, ignore its report.
@@ -975,59 +1045,101 @@ pub async fn verify_user_entries_with_report(
     state: &AppState,
     owner_hash: &str,
 ) -> Option<ReconcileReport> {
-    if let Ok(bytes) = fs::read(&*state.metadata_path).await {
-        if let Ok(disk_map) = serde_json::from_slice::<HashMap<String, FileMeta>>(&bytes) {
-            let mut to_remove = Vec::new();
-            let mut to_update = Vec::new();
-            let mut to_add = Vec::new();
-            for entry in state.owners.iter() {
-                let (fname, meta_mem) = (entry.key(), entry.value());
-                if meta_mem.owner_hash == owner_hash {
-                    match disk_map.get(fname) {
-                        Some(meta_disk) => {
-                            if meta_disk.owner_hash != meta_mem.owner_hash
-                                || meta_disk.expires != meta_mem.expires
-                                || meta_disk.original != meta_mem.original
-                            {
-                                to_update.push((fname.clone(), meta_disk.clone()));
-                            }
-                        }
-                        _none => to_remove.push(fname.clone()),
+    let entries: Vec<(String, String)> = match state.kv.load_hash("owners").await {
+        Ok(items) => items,
+        Err(err) => {
+            error!(
+                ?err,
+                "failed to fetch owners from key-value store for reconciliation"
+            );
+            return None;
+        }
+    };
+    let mut disk_map = HashMap::with_capacity(entries.len());
+    for (fname, payload) in entries {
+        if let Ok(meta) = serde_json::from_str::<FileMeta>(&payload) {
+            disk_map.insert(fname, meta);
+        }
+    }
+
+    let mut missing_in_store = Vec::new();
+    let mut memory_preferred = Vec::new();
+    let mut store_applied = Vec::new();
+    let mut store_applied_payloads = Vec::new();
+    for entry in state.owners.iter() {
+        let (fname, meta_mem) = (entry.key(), entry.value());
+        if meta_mem.owner_hash != owner_hash {
+            continue;
+        }
+        match disk_map.get(fname) {
+            Some(meta_disk) => {
+                if meta_disk.owner_hash != meta_mem.owner_hash
+                    || meta_disk.expires != meta_mem.expires
+                    || meta_disk.original != meta_mem.original
+                    || meta_disk.hash != meta_mem.hash
+                {
+                    if meta_disk.created >= meta_mem.created {
+                        store_applied.push(fname.clone());
+                        store_applied_payloads.push((fname.clone(), meta_disk.clone()));
+                    } else {
+                        memory_preferred.push(fname.clone());
                     }
                 }
             }
-            for (fname, meta_disk) in disk_map.iter() {
-                if meta_disk.owner_hash == owner_hash && state.owners.get(fname).is_none() {
-                    to_add.push((fname.clone(), meta_disk.clone()));
-                }
-            }
-            if to_remove.is_empty() && to_update.is_empty() && to_add.is_empty() {
-                return None;
-            }
-            for f in &to_remove {
-                state.owners.remove(f);
-            }
-            for (f, m) in &to_update {
-                state.owners.insert(f.clone(), m.clone());
-            }
-            for (f, m) in &to_add {
-                state.owners.insert(f.clone(), m.clone());
-            }
-            let report = ReconcileReport {
-                added: to_add.into_iter().map(|(f, _)| f).collect(),
-                removed: to_remove,
-                updated: to_update.into_iter().map(|(f, _)| f).collect(),
-            };
-            info!(
-                owner_hash,
-                added = report.added.len(),
-                removed = report.removed.len(),
-                updated = report.updated.len(),
-                "reconciled user entries"
-            );
-            return Some(report);
+            None => missing_in_store.push(fname.clone()),
         }
     }
-    trace!(owner_hash, "no reconciliation needed for owner");
-    None
+
+    for (fname, meta) in &store_applied_payloads {
+        state.owners.insert(fname.clone(), meta.clone());
+    }
+
+    let mut restored = Vec::new();
+    let mut stale_store = Vec::new();
+    for (fname, meta_disk) in disk_map.iter() {
+        if meta_disk.owner_hash != owner_hash {
+            continue;
+        }
+        if state.owners.get(fname).is_none() {
+            let path = state.upload_dir.join(fname);
+            if tokio::fs::metadata(&path).await.is_ok() {
+                state.owners.insert(fname.clone(), meta_disk.clone());
+                restored.push(fname.clone());
+            } else {
+                stale_store.push(fname.clone());
+            }
+        }
+    }
+
+    if missing_in_store.is_empty()
+        && memory_preferred.is_empty()
+        && store_applied.is_empty()
+        && restored.is_empty()
+        && stale_store.is_empty()
+    {
+        trace!(owner_hash, "reconciliation found no divergences");
+        return None;
+    }
+
+    if !missing_in_store.is_empty() || !memory_preferred.is_empty() || !stale_store.is_empty() {
+        state.persist_owners().await;
+    }
+
+    let report = ReconcileReport {
+        added: restored.clone(),
+        removed: stale_store.clone(),
+        updated: missing_in_store
+            .into_iter()
+            .chain(memory_preferred.into_iter())
+            .chain(store_applied.into_iter())
+            .collect(),
+    };
+    info!(
+        owner_hash,
+        added = report.added.len(),
+        removed = report.removed.len(),
+        updated = report.updated.len(),
+        "reconciled user entries"
+    );
+    Some(report)
 }

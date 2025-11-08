@@ -32,7 +32,8 @@ Open http://localhost:8080
 ## Configuration (env)
 
 Common options (set in .env or your environment):
-- MAILGUN_API_KEY - for reports, mailgun is the service of choice 
+
+- MAILGUN_API_KEY - for reports, mailgun is the service of choice
 - MAILGUN_DOMAIN - its domain for sending email (e.g. mail.juicey.dev)
 - REPORT_EMAIL_TO - reciever's email for reports (e.g. admin@juicey.dev)
 - REPORT_EMAIL_FROM - domain user (e.g. report@mail.juicey.dev)
@@ -42,6 +43,8 @@ Common options (set in .env or your environment):
 - IP_HASH_SECRET - REQUIRED. Hash secret to avoid hash lookups and get ur ip leaked
 - JUICEBOX_PROD_HOST - the juicebox domain (e.g. box.juicey.dev) only required if you put it in a website
 - MAX_FILE_SIZE - per-upload limit (e.g. 750MB, 1GB, or raw bytes)
+- JUICEBOX_REDIS_URL / REDIS_URL - Redis (or Dragonfly) connection string used for metadata
+- JUICEBOX_REDIS_PREFIX - key namespace prefix (default: `juicebox`)
 - JUICEBOX_STORAGE_ROOT - base directory; other storage paths resolve under it
 - JUICEBOX_DATA_DIR - metadata dir (default: data/)
 - JUICEBOX_UPLOAD_DIR - files dir (default: files/)
@@ -49,6 +52,19 @@ Common options (set in .env or your environment):
 - JUICEBOX_PUBLIC_DIR - serve static assets from a different directory
 - JUICEBOX_PROD_HOST - canonical host for generated links when APP_ENV=production
 - APP_ENV - set to production for prod-only checks
+
+## Persistence & migrations
+
+Juicebox stores all mutable metadata (owners, reports, IP bans, admin sessions) in Redis.
+
+- Point `JUICEBOX_REDIS_URL` (or `REDIS_URL`) at your Redis/Dragonfly instance.
+- Set `JUICEBOX_REDIS_PREFIX` if you want to isolate keys per deployment (defaults to `juicebox`).
+- The admin key still lives on disk (`admin_key.json`) so you can rotate it manually if needed.
+
+On startup the server will migrate any legacy JSON files into Redis the first time it sees empty
+keys. Once migrated, the JSON files are no longer written to, and Redis is treated as the source of
+truth. This lets you roll back easily (JSON files stay on disk) while giving you the durability
+and concurrency benefits of a real key-value store.
 
 ## Frontend (will be deprecated)
 

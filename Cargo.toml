@@ -34,6 +34,8 @@ sha2 = { version = "0.10.9", features = ["std"] }
 hmac = "0.12"
 dashmap = "6.1.0"
 rand = "0.8"
+redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
+async-trait = "0.1.83"
 sentry = { version = "0.45.0", features = ["logs", "tracing"] }
 sentry-tower = { version = "0.45.0", features = ["http", "axum", "axum-matched-path"] }
 sentry-tracing = "0.45.0"
