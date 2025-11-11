@@ -8,7 +8,7 @@ export const deleteHandler = {
     if (!f.deleteBtn) return;
     if (f.deleting) {
       f.deleteBtn.disabled = true;
-      f.deleteBtn.textContent = "…";
+      f.deleteBtn.textContent = "🗑️";
       f.deleteBtn.title = "Deleting...";
       f.deleteBtn.setAttribute("aria-label", "Deleting file");
     } else if (f.failed) {
