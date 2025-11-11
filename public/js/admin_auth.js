@@ -1,29 +1,6 @@
-/**
- * Admin auth helper script.
- *
- * Purpose:
- *  - Submit the admin key to the new /auth/json endpoint.
- *  - Avoid Cloudflare / proxy stripping of 303 + Set-Cookie by using a 200 JSON flow.
- *  - Provide accessible feedback and retry logic.
- *
- * Usage:
- *  Include this script only on /auth pages (e.g. <script type="module" src="/js/admin_auth.js"></script>)
- *
- * Markup assumptions (progressive enhancement):
- *  - A <form method="post" action="/auth"> containing an <input name="key">
- *  - We do NOT remove existing action; fallback submission still works if JS fails.
- *
- * Behavior:
- *  - Intercepts submit.
- *  - Posts key via fetch() to /auth/json (application/x-www-form-urlencoded).
- *  - On success ({"admin": true}) polls /isadmin to confirm cookie presence.
- *  - Redirects to / (or configurable target) once confirmed.
- *  - If cookie not visible after a few retries, offers a manual fallback link & explains potential proxy interference.
- */
-
-const JSON_ENDPOINT = "/auth"; // unified endpoint (previously /auth/json)
+const JSON_ENDPOINT = "/auth";
 const STATUS_ENDPOINT = "/isadmin"; // unchanged
-const REDIRECT_TARGET = null; // no longer used; we reload instead of explicit navigation
+const REDIRECT_TARGET = null; // no longer used
 const MAX_STATUS_RETRIES = 6;
 const STATUS_RETRY_INTERVAL_MS = 400;
 

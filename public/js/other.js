@@ -1,9 +1,6 @@
-// js/others.js aaaaaaaaaaaaaaaaaaaaa
-
 import { showSnack, fmtBytes } from "./utils.js";
 import { fileInput, dropZone } from "./ui.js";
 
-// This function will be called once in app.js to apply all patches.
 export function applyother(uploadHandler, ownedHandler) {
   // --- Patch for File Size Limit ---
   (() => {

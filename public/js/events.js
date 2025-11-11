@@ -1,5 +1,3 @@
-// js/events.js
-
 import { dropZone, fileInput } from "./ui.js";
 import { uploadHandler } from "./upload.js";
 
@@ -10,14 +8,14 @@ function setupUploadEvents() {
       e.preventDefault();
       e.stopPropagation();
       dropZone.classList.add("drag");
-    })
+    }),
   );
   ["dragleave", "dragend", "drop"].forEach((evt) =>
     dropZone.addEventListener(evt, (e) => {
       e.preventDefault();
       e.stopPropagation();
       dropZone.classList.remove("drag");
-    })
+    }),
   );
   document.addEventListener("dragover", (e) => e.preventDefault());
   document.addEventListener("drop", (e) => e.preventDefault());

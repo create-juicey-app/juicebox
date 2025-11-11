@@ -1,15 +1,8 @@
-// js/config.js
-
 // Default values
 window.MAX_FILE_BYTES = 500 * 1024 * 1024;
 window.MAX_FILE_SIZE_STR = "500MB";
 window.ENABLE_STREAMING_UPLOADS = false;
 
-/**
- * Fetches dynamic configuration from the server and updates global settings.
- * We keep these on the `window` object because many enhancement patches rely on it.
- * @returns {Promise<void>}
- */
 export async function fetchConfig() {
   try {
     const resp = await fetch("/api/config", { cache: "no-store" });

@@ -1,5 +1,3 @@
-// js/delete.js
-
 import { animateRemove, showSnack } from "./utils.js";
 import { uploadHandler } from "./upload.js";
 import { ownedHandler } from "./owned.js";
