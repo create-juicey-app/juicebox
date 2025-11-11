@@ -4,6 +4,15 @@
     <meta charset="utf-8" />
     <title>Admin Files</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      (function() {
+        var d = document.documentElement;
+        if (!d.hasAttribute('data-theme')) d.setAttribute('data-theme', 'dark');
+        try { localStorage.setItem('jb.theme', d.getAttribute('data-theme')); } catch (e) {}
+        try { d.style.colorScheme = 'dark'; } catch (e) {}
+      })();
+    </script>
+    <style>html{background:#070a0e;color:#fff}</style>
     <link rel="stylesheet" href="/css/app.css" />
   </head>
   <body>

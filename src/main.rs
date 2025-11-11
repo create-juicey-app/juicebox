@@ -596,6 +596,16 @@ fn resolve_sentry_traces_sample_rate(_production: bool) -> f32 {
         .unwrap_or(1.0)
 }
 
+fn resolve_sentry_profiles_sample_rate(traces_sample_rate: f32) -> f32 {
+    std::env::var("SENTRY_PROFILES_SAMPLE_RATE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .and_then(|value| value.parse::<f32>().ok())
+        .map(|value| value.clamp(0.0, 1.0))
+        .unwrap_or_else(|| traces_sample_rate.clamp(0.0, 1.0))
+}
+
 fn resolve_sentry_error_sample_rate(_production: bool) -> f32 {
     std::env::var("SENTRY_SAMPLE_RATE")
         .ok()
@@ -719,6 +729,7 @@ async fn main() -> anyhow::Result<()> {
     let release = resolve_sentry_release().into_owned();
     let environment = resolve_sentry_environment(production);
     let traces_sample_rate = resolve_sentry_traces_sample_rate(production);
+    let profiles_sample_rate = resolve_sentry_profiles_sample_rate(traces_sample_rate);
     let error_sample_rate = resolve_sentry_error_sample_rate(production);
     let trace_propagation_targets = resolve_sentry_trace_targets();
     let sentry_dsn = resolve_sentry_dsn(production);
@@ -759,6 +770,7 @@ async fn main() -> anyhow::Result<()> {
             environment = %sentry_info.environment,
             error_sample_rate = sentry_info.error_sample_rate,
             traces_sample_rate = sentry_info.traces_sample_rate,
+            profiles_sample_rate,
             session_mode = ?sentry_info.session_mode,
             auto_session_tracking = sentry_info.auto_session_tracking,
             trace_propagation_targets = ?sentry_info.trace_propagation_targets,
@@ -769,6 +781,7 @@ async fn main() -> anyhow::Result<()> {
             release = %release,
             environment = %environment,
             traces_sample_rate,
+            profiles_sample_rate,
             error_sample_rate,
             trace_propagation_targets = ?trace_propagation_targets,
             "Sentry telemetry disabled"
@@ -780,6 +793,7 @@ async fn main() -> anyhow::Result<()> {
         release,
         environment,
         traces_sample_rate,
+        profiles_sample_rate,
         error_sample_rate,
         trace_propagation_targets,
     };
@@ -787,6 +801,7 @@ async fn main() -> anyhow::Result<()> {
         release = %telemetry_state.release,
         environment = %telemetry_state.environment,
         traces_sample_rate = telemetry_state.traces_sample_rate,
+        profiles_sample_rate = telemetry_state.profiles_sample_rate,
         error_sample_rate = telemetry_state.error_sample_rate,
         trace_propagation_targets = ?telemetry_state.trace_propagation_targets,
         sentry_dsn_present = telemetry_state.sentry_dsn.is_some(),

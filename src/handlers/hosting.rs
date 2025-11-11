@@ -37,6 +37,8 @@ pub struct FrontendSentryTelemetry {
     pub environment: String,
     #[serde(rename = "traces_sample_rate")]
     pub traces_sample_rate: f32,
+    #[serde(rename = "profiles_sample_rate")]
+    pub profiles_sample_rate: f32,
     #[serde(default)]
     pub trace_propagation_targets: Vec<String>,
 }
@@ -234,6 +236,7 @@ pub async fn config_handler(State(state): State<AppState>) -> Response {
             release: telemetry.release.clone(),
             environment: telemetry.environment.clone(),
             traces_sample_rate: telemetry.traces_sample_rate,
+            profiles_sample_rate: telemetry.profiles_sample_rate,
             trace_propagation_targets: telemetry.trace_propagation_targets.clone(),
         },
     };

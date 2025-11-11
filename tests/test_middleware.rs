@@ -1,12 +1,12 @@
 mod common;
 
+use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::ConnectInfo;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, EXPIRES};
 use axum::http::{HeaderValue, Request, StatusCode};
-use axum::routing::get;
 use axum::response::Response;
-use axum::Router;
+use axum::routing::get;
 use juicebox::handlers::{add_cache_headers, add_security_headers, ban_gate};
 use juicebox::state::{BanSubject, IpBan, TelemetryState};
 use std::net::SocketAddr;
@@ -86,6 +86,7 @@ async fn test_security_headers_injected_and_csp_includes_connect_origin() {
         release: "test-release".to_string(),
         environment: "test".to_string(),
         traces_sample_rate: 0.0,
+        profiles_sample_rate: 0.0,
         error_sample_rate: 0.0,
         trace_propagation_targets: vec!["^/".to_string()],
     });
@@ -164,12 +165,7 @@ async fn test_security_headers_respect_existing_and_normalize_charset() {
         ));
 
     let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/html")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::builder().uri("/html").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -184,9 +180,7 @@ async fn test_security_headers_respect_existing_and_normalize_charset() {
     );
     // Content-Type should gain UTF-8 charset when missing.
     assert_eq!(
-        headers
-            .get(CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok()),
+        headers.get(CONTENT_TYPE).and_then(|v| v.to_str().ok()),
         Some("text/html; charset=utf-8")
     );
     // Other baseline headers should still be applied.
@@ -277,9 +271,7 @@ async fn test_ban_gate_falls_back_when_template_missing() {
     state.tera = Arc::new(tera::Tera::default());
 
     let ip = "203.0.113.99";
-    let hash = state
-        .hash_ip_to_string(ip)
-        .expect("fixture ip hash");
+    let hash = state.hash_ip_to_string(ip).expect("fixture ip hash");
     state
         .add_ban(IpBan {
             subject: BanSubject::Exact { hash },

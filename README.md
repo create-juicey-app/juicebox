@@ -87,6 +87,57 @@ Tests:
 npm test
 ```
 
+## Profiling
+
+### Backend (Rust)
+
+Use [`cargo-flamegraph`](https://github.com/flamegraph-rs/flamegraph) locally to profile the Rust
+server. The web flamegraph endpoint has been removed, so profiling now runs entirely from your
+terminal:
+
+```bash
+cargo install flamegraph            # once, installs cargo-flamegraph
+sudo cargo flamegraph --bin juicebox
+```
+
+- `sudo` is required on Linux because `perf` needs elevated privileges; use `perf_event_paranoid`
+  tweaks if you prefer a passwordless setup.
+- Pass the same flags you would give `cargo run` after the `--`. Example:
+  `sudo cargo flamegraph --bin juicebox -- --config configs/dev.toml`
+- The SVG flamegraph is written to `flamegraph.svg` in the project root.
+
+For lightweight sampling without `perf`, hit `GET /debug/profile/raw` while the server handles
+traffic. The endpoint returns a `pprof` protobuf that you can open with `go tool pprof` or
+[`pprof-rs`](https://github.com/tikv/pprof-rs).
+
+- `seconds` clamps between 1–60 (default 15)
+- `frequency` can be tuned via `?frequency=500` (10–2000 Hz)
+- Only `format=protobuf|pprof|pb` is supported now.
+- The endpoint returns HTTP 429 while another capture is running to avoid overlapping samples.
+
+### Frontend (bundle)
+
+Run the profiling build to emit bundle metadata and summaries under `public/dist/profile/`:
+
+```bash
+npm run profile:frontend
+```
+
+Artifacts:
+
+- `meta.json` – full esbuild metafile for interactive analysis
+- `summary.json` – machine-readable size summary (bundles + top modules)
+- `summary.md` – human-friendly report with tables and quick links
+
+Open `summary.md` for a quick overview, or launch the interactive analyzer:
+
+```bash
+npx esbuild-analyze public/dist/profile/meta.json
+```
+
+The profiling build uses production optimisations so you can diff bundle sizes before/after
+changes. Outputs are regenerated on each run alongside the normal `public/dist` artifacts.
+
 ## Telemetry (optional)
 
 Sentry can capture errors and traces if enabled:
@@ -94,7 +145,8 @@ Sentry can capture errors and traces if enabled:
 - SENTRY_DSN - your DSN; leave unset in dev to disable (or set to disabled/off)
 - SENTRY_ENV - environment label (defaults from APP_ENV)
 - SENTRY_RELEASE - release identifier; falls back to crate version/commit
-- SENTRY_TRACES_SAMPLE_RATE - 0.0–1.0 (defaults to 0.1 in production)
+- SENTRY_TRACES_SAMPLE_RATE - 0.0–1.0 (defaults to 1.0)
+- SENTRY_PROFILES_SAMPLE_RATE - 0.0–1.0 (defaults to the trace rate when unset)
 
 ## Usage
 

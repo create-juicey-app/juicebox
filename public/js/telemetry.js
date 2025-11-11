@@ -9,9 +9,9 @@ const DEFAULT_TRACE_TARGETS = [
   /^\/list/,
   /^\/mine/,
   /^\/report/,
-  /^\/simple/,
   /^\/auth/,
   /^\/checkhash/,
+  /^\/simple/,
   /^\/upload/,
   /^\/d\//,
   /^\/f\//,
@@ -57,6 +57,14 @@ export function initTelemetry(config) {
   const sampleRate = Number.isFinite(sampleRateRaw)
     ? Math.max(0, Math.min(1, sampleRateRaw))
     : 0;
+  const profileRateRaw = sentryConfig.profiles_sample_rate;
+  const normalizedProfileRate = Number.isFinite(profileRateRaw)
+    ? Math.max(0, Math.min(1, profileRateRaw))
+    : Math.max(0, Math.min(1, sampleRate));
+  const effectiveProfileRate =
+    sampleRate > 0
+      ? Math.min(normalizedProfileRate, sampleRate)
+      : normalizedProfileRate;
   const traceTargets = normalizeTraceTargets(
     sentryConfig.trace_propagation_targets
   );
@@ -77,6 +85,22 @@ export function initTelemetry(config) {
     );
   }
 
+  const profilingIntegrationFactory =
+    typeof Sentry.browserProfilingIntegration === "function"
+      ? Sentry.browserProfilingIntegration
+      : typeof Sentry.profilingIntegration === "function"
+      ? Sentry.profilingIntegration
+      : null;
+  if (profilingIntegrationFactory && effectiveProfileRate > 0) {
+    try {
+      integrations.push(profilingIntegrationFactory({}));
+    } catch (err) {
+      if (window?.DEBUG_LOGS) {
+        console.warn("[telemetry] profiling integration failed", err);
+      }
+    }
+  }
+
   try {
     Sentry.init({
       dsn: sentryConfig.dsn,
@@ -84,6 +108,7 @@ export function initTelemetry(config) {
       environment: sentryConfig.environment,
       integrations,
       tracesSampleRate: sampleRate,
+      profilesSampleRate: effectiveProfileRate,
       autoSessionTracking: true,
       sendDefaultPii: false,
       // Enable distributed tracing
@@ -120,6 +145,11 @@ export function initTelemetry(config) {
         traceTargets.map((target) =>
           target instanceof RegExp ? target.toString() : String(target)
         )
+      );
+      scope.setExtra("profiles_sample_rate", effectiveProfileRate);
+      scope.setTag(
+        "profiling",
+        effectiveProfileRate > 0 ? "enabled" : "disabled"
       );
     });
     telemetryInitialized = true;

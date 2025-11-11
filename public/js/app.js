@@ -1,5 +1,3 @@
-// js/app.js
-
 import { fetchConfig } from "./config.js";
 import { initTelemetry, captureException } from "./telemetry.js";
 import { setupTTL, setupUI } from "./ui.js";
@@ -14,6 +12,10 @@ let initPromise = null;
 export async function initializeApp() {
   if (!initPromise) {
     initPromise = (async () => {
+      // Show "Your Files" skeleton immediately before any awaits
+      try {
+        ownedHandler.setLoading(true);
+      } catch {}
       const config = await fetchConfig();
       try {
         initTelemetry(config?.telemetry);

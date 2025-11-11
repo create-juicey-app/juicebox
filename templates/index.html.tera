@@ -98,9 +98,62 @@
   <p class="site-note" title="Upload usage note">{{ t.upload_note | default(value="Upload your files. Links show after each finishes. Maximum file size is {max_size}, Files expire after selected retention. Limit: maximum 10 active files per IP (delete one to free a slot). See <a href='/faq' target='_blank' rel='noopener' title='Open FAQ in new tab'>Read the FAQ</a>.") | replace(from='{max_size}', to=max_file_size_str) }}</p>
   <p class="site-note" title="Privacy notice">{{ t.privacy_note | default(value="Notice: Your IP address is immediately hashed with a secret pepper and used only to associate uploads with your session, apply limits, and enable abuse/moderation actions. It is never stored in plaintext and the hash is removed once all related files expire.") }}</p>
     </section></div>
-    <div class="panel" id="ownedPanel"><section>
+    <div class="panel" id="ownedPanel" data-state="loading"><section>
       <h2 id="yourFiles" title="Files previously uploaded from this connection">{{ t.your_files | default(value="Your Files") }}</h2>
-      <ul id="ownedList" title="List of files you have uploaded" role="list" aria-label="Your uploaded files" aria-live="polite"></ul>
+      <ul id="ownedList" title="List of files you have uploaded" role="list" aria-label="Your uploaded files" aria-live="polite">
+        <li class="owned-item owned-item-skeleton" data-kind="skeleton" aria-hidden="true">
+          <div class="owned-grid morph-ready" data-skeleton="true" aria-hidden="true">
+            <div class="owned-skeleton" style="min-height:132px">
+              <div class="top">
+                <div class="name" aria-hidden="true">
+                  <div class="skeleton-line" style="width:70%"></div>
+                </div>
+                <div class="actions" aria-hidden="true">
+                  <span class="skeleton-line" style="width:18px;height:18px"></span>
+                  <span class="skeleton-line" style="width:18px;height:18px"></span>
+                </div>
+              </div>
+              <div class="ttl-row" aria-hidden="true" style="display:flex;align-items:center;gap:0.5rem">
+                <span class="skeleton-line compact" style="width:80px"></span>
+                <span class="skeleton-bar"></span>
+              </div>
+              <div class="skeleton-line" style="height:14px;width:100%"></div>
+            </div>
+            <div class="owned-skeleton" style="min-height:132px">
+              <div class="top">
+                <div class="name" aria-hidden="true">
+                  <div class="skeleton-line" style="width:60%"></div>
+                </div>
+                <div class="actions" aria-hidden="true">
+                  <span class="skeleton-line" style="width:18px;height:18px"></span>
+                  <span class="skeleton-line" style="width:18px;height:18px"></span>
+                </div>
+              </div>
+              <div class="ttl-row" aria-hidden="true" style="display:flex;align-items:center;gap:0.5rem">
+                <span class="skeleton-line compact" style="width:72px"></span>
+                <span class="skeleton-bar"></span>
+              </div>
+              <div class="skeleton-line" style="height:14px;width:100%"></div>
+            </div>
+            <div class="owned-skeleton" style="min-height:132px">
+              <div class="top">
+                <div class="name" aria-hidden="true">
+                  <div class="skeleton-line" style="width:75%"></div>
+                </div>
+                <div class="actions" aria-hidden="true">
+                  <span class="skeleton-line" style="width:18px;height:18px"></span>
+                  <span class="skeleton-line" style="width:18px;height:18px"></span>
+                </div>
+              </div>
+              <div class="ttl-row" aria-hidden="true" style="display:flex;align-items:center;gap:0.5rem">
+                <span class="skeleton-line compact" style="width:88px"></span>
+                <span class="skeleton-bar"></span>
+              </div>
+              <div class="skeleton-line" style="height:14px;width:100%"></div>
+            </div>
+          </div>
+        </li>
+      </ul>
         <p class="site-note" title="Owned files note">{{ t.owned_note | default(value="These are files linked to your IP, They persist across refresh until deleted.") }}</p>
         <script>
         // Accessibility: add aria-label and autocomplete to .link-input fields after they are created

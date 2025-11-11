@@ -10,12 +10,12 @@ use juicebox::handlers::{
     ChunkCompleteRequest, ChunkInitRequest, ChunkInitResponse, UploadResponse, build_router,
 };
 use juicebox::state::{BanSubject, IpBan};
-use sha2::{Digest, Sha256};
 use serde_json::Value;
-use std::sync::Arc;
+use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
-use tower::ServiceExt;
+use std::sync::Arc;
 use tokio::sync::Semaphore;
+use tower::ServiceExt;
 
 fn create_multipart_body(file_content: &str, file_name: &str, ttl: &str) -> (String, Body) {
     let boundary = "----WebKitFormBoundaryTESTBOUNDARY";
@@ -507,7 +507,9 @@ async fn test_chunk_complete_rejects_missing_chunks() {
         .unwrap();
 
     assert_eq!(complete_resp.status(), StatusCode::BAD_REQUEST);
-    let body = to_bytes(complete_resp.into_body(), usize::MAX).await.unwrap();
+    let body = to_bytes(complete_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["code"], "incomplete");
 }

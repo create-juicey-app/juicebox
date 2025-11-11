@@ -22,6 +22,7 @@ fn test_telemetry_state() -> Arc<TelemetryState> {
         release: "test-release".to_string(),
         environment: "test".to_string(),
         traces_sample_rate: 0.0,
+        profiles_sample_rate: 0.0,
         error_sample_rate: 0.0,
         trace_propagation_targets: vec!["^/".to_string()],
     })

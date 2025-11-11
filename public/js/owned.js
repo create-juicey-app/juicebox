@@ -9,7 +9,12 @@ import {
 } from "./utils.js";
 import { deleteHandler } from "./delete.js";
 import { startSpan } from "./telemetry.js";
-import { tOwned, expiredLabel } from "./i18n-owned.js";
+// Minimal inline i18n for Owned UI (removed external i18n-owned.js)
+/* Removed i18n + hardcoded user-facing strings:
+   - Neutral logic only
+   - Language-specific labels handled elsewhere (server/templates)
+   - Expired state returns empty string
+*/
 
 export const ownedHandler = {
   /**
@@ -28,11 +33,30 @@ export const ownedHandler = {
   ownedMeta: new Map(),
   ownedCache: new Set(),
   ownedInitialRender: false,
-  loading: false,
+  loading: true,
   skeletonCount: 3,
   refreshTimer: null,
   renderState: "init",
   lastSignature: "",
+
+  // Early boot: ensure skeleton appears immediately at module load to avoid empty gap
+  boot: (() => {
+    try {
+      if (
+        typeof document !== "undefined" &&
+        ownedList &&
+        !ownedList.querySelector('[data-skeleton="true"]')
+      ) {
+        // Defer until after export binding is created
+        setTimeout(() => {
+          try {
+            ownedHandler.setLoading(true);
+          } catch (_) {}
+        }, 0);
+      }
+    } catch (_) {}
+    return 1;
+  })(),
 
   // Localization moved to i18n-owned.js
 
@@ -64,7 +88,8 @@ export const ownedHandler = {
     if (state) {
       this.renderSkeleton();
     } else {
-      this.clearSkeleton();
+      // Defer removing the skeleton to renderOwned()
+      // to avoid any empty gap between states.
     }
   },
 
@@ -122,12 +147,8 @@ export const ownedHandler = {
   },
 
   formatRemaining(sec) {
-    if (sec <= 0) return expiredLabel();
-    if (sec < 60) return `${Math.floor(sec)}s`;
-    if (sec < 3600) return `${Math.floor(sec / 60)}m ${Math.floor(sec % 60)}s`;
-    if (sec < 86400)
-      return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
-    return `${Math.floor(sec / 86400)}d ${Math.floor((sec % 86400) / 3600)}h`;
+    // Non-text TTL: raw whole seconds; expired => empty string
+    return sec <= 0 ? "" : String(Math.floor(sec));
   },
 
   buildSignature(names) {
@@ -385,23 +406,14 @@ export const ownedHandler = {
         percent = 0;
       }
 
-      chip.innerHTML = `<div class="top"><div class="name" title="${escapeHtml(
-        titleFull,
-      )}">${escapeHtml(
-        displayName,
-      )}</div><div class="actions"></div></div><div class="ttl-row"><span class="ttl">${this.formatRemaining(
-        remainRaw,
-      )}</span><span class="ttl-bar-wrap"><span class="ttl-bar" style="width:${percent.toFixed(
-        2,
-      )};"></span></span></div>`;
+      chip.innerHTML = `<div class="top"><div class="name">${escapeHtml(displayName)}</div><div class="actions"></div></div><div class="ttl-row"><span class="ttl" data-ttl="${remainRaw > 0 ? Math.floor(remainRaw) : ""}"></span><span class="ttl-bar-wrap"><span class="ttl-bar" style="width:${percent.toFixed(2)}%;"></span></span></div>`;
 
       const linkInput = document.createElement("input");
       linkInput.type = "text";
       linkInput.readOnly = true;
       linkInput.className = "link-input";
       linkInput.value = `${location.origin}/f/${n}`;
-      linkInput.title = "Click to copy direct link";
-      linkInput.setAttribute("aria-label", "Direct file link (click to copy)");
+      // Removed hardcoded tooltip / aria-label text
       linkInput.addEventListener("click", () => {
         linkInput.select();
         copyToClipboard(linkInput.value).then(() => flashCopied());
@@ -412,7 +424,7 @@ export const ownedHandler = {
       copyBtn.className = "small";
       copyBtn.type = "button";
       copyBtn.textContent = "📋";
-      copyBtn.title = "Copy direct link";
+      // Removed hardcoded copy tooltip
       copyBtn.addEventListener("click", () =>
         copyToClipboard(`${location.origin}/f/${n}`).then(() => flashCopied()),
       );
@@ -421,7 +433,7 @@ export const ownedHandler = {
       delBtn.className = "small";
       delBtn.type = "button";
       delBtn.textContent = "❌";
-      delBtn.title = "Delete file from server";
+      // Removed hardcoded delete tooltip
       delBtn.addEventListener("click", () => {
         fetch(`/d/${encodeURIComponent(n)}`, { method: "DELETE" })
           .then(async (r) => {
@@ -431,15 +443,15 @@ export const ownedHandler = {
               deleteHandler.removeFromUploads(n);
               this.renderOwned();
             } else {
-              let msg = "Delete failed.";
+              /* no user-facing message */
               try {
                 const err = await r.json();
                 if (err && err.message) msg = err.message;
               } catch {}
-              showSnack(msg);
+              /* no-op */
             }
           })
-          .catch(() => showSnack("Delete failed."));
+          .catch(() => {});
       });
 
       chip.querySelector(".actions").append(copyBtn, delBtn);
@@ -471,8 +483,9 @@ export const ownedHandler = {
     grid.dataset.empty = "true";
     grid.setAttribute("aria-hidden", "false");
     const empty = document.createElement("div");
-    empty.className = "owned-empty";
-    empty.innerHTML = `<strong>${escapeHtml(tOwned("empty_title"))}</strong><span>${escapeHtml(tOwned("empty_hint"))}</span>`;
+    empty.className = "owned-empty owned-empty-neutral";
+    // Neutral placeholder: no text strings
+    empty.innerHTML = `<div class="owned-empty-block" aria-hidden="true"></div>`;
     grid.appendChild(empty);
     const wrapper = this.createListItem("empty");
     wrapper.appendChild(grid);
@@ -568,6 +581,30 @@ export const ownedHandler = {
 
   renderOwned() {
     if (!ownedList) return;
+
+    const haveNames =
+      this.ownedCache &&
+      typeof this.ownedCache.size === "number" &&
+      this.ownedCache.size > 0;
+
+    // If loading and no names yet, keep skeleton and return early
+    if (this.loading && !haveNames) {
+      if (ownedPanel) ownedPanel.setAttribute("data-state", "loading");
+      if (!ownedList.querySelector('[data-skeleton="true"]')) {
+        this.renderSkeleton();
+      }
+      return;
+    }
+
+    // If loading but we now have names, drop loading state and proceed to build grid
+    if (this.loading && haveNames) {
+      this.loading = false;
+      if (ownedPanel) {
+        ownedPanel.classList.remove("owned-loading");
+        ownedPanel.setAttribute("data-state", "has-files");
+      }
+    }
+
     this.clearSkeleton();
     this.clearRefreshing();
 

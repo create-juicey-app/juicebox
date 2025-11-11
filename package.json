@@ -6,6 +6,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:watch": "node scripts/build.mjs --watch",
+    "profile:frontend": "node scripts/build.mjs --profile",
     "test": "jest",
     "test:watch": "jest --watch"
   },

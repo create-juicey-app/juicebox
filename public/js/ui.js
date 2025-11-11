@@ -45,8 +45,43 @@ export function setupTTL() {
   updateTTL();
 }
 
+// Ensure a theme is set; default to dark when none is specified or detectable
+// Run immediately to guarantee dark-first rendering before additional UI code
+ensureTheme({ defaultTheme: "dark" });
+try {
+  document.documentElement.style.colorScheme = "dark";
+} catch {}
+export function ensureTheme({ defaultTheme = "dark" } = {}) {
+  const root = document.documentElement;
+  if (!root) return;
+  // If already specified, respect it
+  let theme = root.getAttribute("data-theme");
+  // Try localStorage if attribute not present
+  if (!theme) {
+    try {
+      theme =
+        localStorage.getItem("jb.theme") ||
+        localStorage.getItem("theme") ||
+        null;
+    } catch (_) {
+      theme = null;
+    }
+  }
+  // Normalize and set default if still missing
+  theme =
+    typeof theme === "string" && theme.trim() ? theme.trim() : defaultTheme;
+  if (root.getAttribute("data-theme") !== theme) {
+    root.setAttribute("data-theme", theme);
+  }
+  // Persist for next loads
+  try {
+    localStorage.setItem("jb.theme", theme);
+  } catch (_) {}
+}
+
 // --- Other UI Initializations ---
 export function setupUI() {
+  ensureTheme();
   // Panel reveal for owned panel (initial)
   if (ownedPanel) {
     ownedPanel.classList.add("reveal-start");
@@ -72,9 +107,9 @@ export function setupUI() {
       } else if (!_dragSpecial) {
         iconEl.textContent = "📂";
       }
-    };    dropZone.addEventListener("mouseleave", () => setOpen(false));
+    };
+    dropZone.addEventListener("mouseleave", () => setOpen(false));
     dropZone.addEventListener("focusout", () => setOpen(false));
-
 
     ["dragenter", "dragover"].forEach((evt) => {
       dropZone.addEventListener(evt, (ev) => updateDragIcon(ev), true);
@@ -93,7 +128,7 @@ export function setupUI() {
     dropZone.addEventListener("dragenter", () => setOpen(true));
     dropZone.addEventListener(
       "dragleave",
-      () => !dropZone.classList.contains("drag") && setOpen(false)
+      () => !dropZone.classList.contains("drag") && setOpen(false),
     );
 
     // Ripple click effect

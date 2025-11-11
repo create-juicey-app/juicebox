@@ -41,6 +41,7 @@ sentry-tower = { version = "0.45.0", features = ["http", "axum", "axum-matched-p
 sentry-tracing = "0.45.0"
 log = "0.4"
 tracing-log = "0.2"
+pprof = { version = "0.14", features = ["prost-codec"] }
 
 [dev-dependencies]
 tempfile = "3.23.0"

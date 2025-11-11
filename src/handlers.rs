@@ -124,7 +124,8 @@ pub fn build_router(state: AppState) -> Router {
             .route("/debug/server-error", get(debug::debug_server_error))
             .route("/debug/rate-limit", get(debug::debug_rate_limit))
             .route("/debug/panic", get(debug::debug_panic))
-            .route("/debug/custom-error", get(debug::debug_custom_error));
+            .route("/debug/custom-error", get(debug::debug_custom_error))
+            .route("/debug/profile/raw", get(debug::debug_profile_pprof));
     }
 
     router = router.layer(middleware::from_fn_with_state(

@@ -61,6 +61,10 @@ async fn test_config_handler_includes_telemetry_and_streaming_flag() {
         tele.get("traces_sample_rate").and_then(|v| v.as_f64()),
         Some(0.0)
     );
+    assert_eq!(
+        tele.get("profiles_sample_rate").and_then(|v| v.as_f64()),
+        Some(0.0)
+    );
     let targets = tele
         .get("trace_propagation_targets")
         .and_then(|v| v.as_array())

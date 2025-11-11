@@ -28,6 +28,9 @@ function mockSentry(overrides = {}) {
       name: "browserTracingIntegration",
       opts,
     })),
+    browserProfilingIntegration: jest.fn(() => ({
+      name: "browserProfilingIntegration",
+    })),
     startSpan: jest.fn(async (_opts, cb) => {
       return await cb();
     }),
@@ -57,7 +60,7 @@ function mockTracing(overrides = {}) {
 
 async function importTelemetryWithMocks(
   mockSentryOverrides = {},
-  mockTracingOverrides = {},
+  mockTracingOverrides = {}
 ) {
   jest.resetModules();
   resetScopeMocks();
@@ -128,6 +131,7 @@ describe("telemetry.js", () => {
         release: "1.2.3",
         environment: "test",
         traces_sample_rate: 0.42,
+        profiles_sample_rate: 0.25,
         trace_propagation_targets: ["/api/.*", "^/upload", /\/list/],
       },
     };
@@ -145,20 +149,29 @@ describe("telemetry.js", () => {
       release: cfg.sentry.release,
       environment: cfg.sentry.environment,
       tracesSampleRate: cfg.sentry.traces_sample_rate,
+      profilesSampleRate: cfg.sentry.profiles_sample_rate,
       autoSessionTracking: true,
       sendDefaultPii: false,
       enableTracing: true,
     });
+    expect(initArg.tracesSampler).toEqual(expect.any(Function));
     // Integrations include browser tracing (from mocked browserTracingIntegration)
     expect(Array.isArray(initArg.integrations)).toBe(true);
-    expect(initArg.integrations.length).toBeGreaterThanOrEqual(1);
+    expect(initArg.integrations.length).toBeGreaterThanOrEqual(2);
+    expect(Sentry.browserTracingIntegration).toHaveBeenCalledTimes(1);
+    expect(Sentry.browserProfilingIntegration).toHaveBeenCalledTimes(1);
 
     // Tags and extras configured on scope
     expect(SCOPE.setTag).toHaveBeenCalledWith("service", "juicebox-frontend");
     expect(SCOPE.setTag).toHaveBeenCalledWith("runtime", "browser");
+    expect(SCOPE.setTag).toHaveBeenCalledWith("profiling", "enabled");
     expect(SCOPE.setExtra).toHaveBeenCalledWith(
       "trace_propagation_targets",
-      expect.any(Array),
+      expect.any(Array)
+    );
+    expect(SCOPE.setExtra).toHaveBeenCalledWith(
+      "profiles_sample_rate",
+      cfg.sentry.profiles_sample_rate
     );
 
     // Second init is no-op, still enabled and not re-initialized
@@ -174,7 +187,7 @@ describe("telemetry.js", () => {
       const out = await telemetry.startSpan(
         "my.span",
         { op: "x" },
-        async () => 42,
+        async () => 42
       );
       expect(out).toBe(42);
       expect(Sentry.startSpan).not.toHaveBeenCalled();
@@ -186,7 +199,7 @@ describe("telemetry.js", () => {
       const out = await telemetry.startSpan(
         "upload",
         { op: "http.client" },
-        async () => "ok",
+        async () => "ok"
       );
       expect(out).toBe("ok");
       expect(Sentry.startSpan).toHaveBeenCalledTimes(1);
@@ -222,7 +235,7 @@ describe("telemetry.js", () => {
     expect(Sentry.captureException).toHaveBeenCalledTimes(1);
     expect(Sentry.captureException).toHaveBeenCalledWith(
       err,
-      expect.any(Function),
+      expect.any(Function)
     );
   });
 
@@ -245,12 +258,12 @@ describe("telemetry.js", () => {
 
     const levels = events.map((e) => e.level);
     expect(levels).toEqual(
-      expect.arrayContaining(["warning", "error", "info"]),
+      expect.arrayContaining(["warning", "error", "info"])
     );
 
     // One of the messages should match our warn
     expect(
-      events.some((e) => String(e.message).includes("something happened")),
+      events.some((e) => String(e.message).includes("something happened"))
     ).toBe(true);
     // Logger should be annotated
     events.forEach((e) => {

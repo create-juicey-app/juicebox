@@ -23,7 +23,14 @@ const distDir = path.join(projectRoot, "public", "dist");
 // SCSS source: single app.scss
 const cssSourcePath = path.join(projectRoot, "public", "css", "app.scss");
 const cssDir = path.dirname(cssSourcePath);
-const watchMode = process.argv.includes("--watch");
+const args = process.argv.slice(2);
+const watchMode = args.includes("--watch");
+const profileMode = args.includes("--profile");
+
+if (watchMode && profileMode) {
+  console.error("[build] --watch and --profile cannot be used together");
+  process.exit(1);
+}
 
 async function ensureCleanDist() {
   await rm(distDir, { recursive: true, force: true });
@@ -50,7 +57,7 @@ async function precompressArtifacts(dir) {
         writeFile(`${full}.br`, brBuf),
         writeFile(`${full}.gz`, gzBuf),
       ]);
-    }),
+    })
   );
 }
 
@@ -71,7 +78,7 @@ async function generateManifest(dir, overrides = {}) {
 
   await writeFile(
     path.join(dir, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
+    JSON.stringify(manifest, null, 2)
   );
 }
 
@@ -124,7 +131,10 @@ async function buildCss({ production }) {
     await writeFile(`${outPath}.map`, postcssResult.map.toString(), "utf8");
   }
 
-  return fileName;
+  return {
+    fileName,
+    bytes: Buffer.byteLength(postcssResult.css, "utf8"),
+  };
 }
 
 function setupCssWatcher(rebuild) {
@@ -138,7 +148,7 @@ function setupCssWatcher(rebuild) {
     timeout = setTimeout(() => {
       timeout = null;
       rebuild().catch((err) =>
-        console.error("[build] CSS rebuild failed", err),
+        console.error("[build] CSS rebuild failed", err)
       );
     }, 50);
   });
@@ -152,8 +162,8 @@ function setupCssWatcher(rebuild) {
   };
 }
 
-async function buildApp({ watch }) {
-  const production = !watch;
+async function buildApp({ watch, profile }) {
+  const production = profile || !watch;
 
   const common = {
     platform: "browser",
@@ -180,7 +190,7 @@ async function buildApp({ watch }) {
     entryNames: production ? "[name]-[hash]" : "[name]",
     define: {
       "process.env.NODE_ENV": JSON.stringify(
-        production ? "production" : "development",
+        production ? "production" : "development"
       ),
       "window.DEBUG_LOGS": "false",
     },
@@ -188,7 +198,7 @@ async function buildApp({ watch }) {
   };
 
   if (watch) {
-    let cssFile = await buildCss({ production });
+    let cssInfo = await buildCss({ production });
 
     function createRebuildPlugin(label, onSuccess) {
       return {
@@ -202,7 +212,7 @@ async function buildApp({ watch }) {
             ) {
               console.error(
                 "[build] " + label + " rebuild failed",
-                result.errors,
+                result.errors
               );
             } else {
               if (typeof onSuccess === "function") {
@@ -211,8 +221,8 @@ async function buildApp({ watch }) {
                     "[build]",
                     label,
                     "post-rebuild hook failed",
-                    err,
-                  ),
+                    err
+                  )
                 );
               }
               console.log("[build] " + label + " rebuilt");
@@ -227,20 +237,20 @@ async function buildApp({ watch }) {
       plugins: [
         ...(appOptions.plugins || []),
         createRebuildPlugin("app", () =>
-          generateManifest(distDir, { cssPath: `/dist/${cssFile}` }),
+          generateManifest(distDir, { cssPath: `/dist/${cssInfo.fileName}` })
         ),
       ],
     });
 
     await mkdir(distDir, { recursive: true });
     await appCtx.rebuild();
-    await generateManifest(distDir, { cssPath: `/dist/${cssFile}` });
+    await generateManifest(distDir, { cssPath: `/dist/${cssInfo.fileName}` });
 
     await appCtx.watch();
 
     const disposeCssWatcher = setupCssWatcher(async () => {
-      cssFile = await buildCss({ production });
-      await generateManifest(distDir, { cssPath: `/dist/${cssFile}` });
+      cssInfo = await buildCss({ production });
+      await generateManifest(distDir, { cssPath: `/dist/${cssInfo.fileName}` });
       console.log("[build] CSS rebuilt");
     });
 
@@ -248,16 +258,166 @@ async function buildApp({ watch }) {
     return () => Promise.all([appCtx.dispose(), disposeCssWatcher()]);
   }
 
-  const cssFile = await buildCss({ production });
-  await build(appOptions);
+  const cssInfo = await buildCss({ production });
+  const buildResult = await build({
+    ...appOptions,
+    metafile: profile,
+    logLevel: profile ? "warning" : appOptions.logLevel,
+  });
+  if (profile && buildResult.metafile) {
+    const summary = await writeBundleProfile(buildResult.metafile, cssInfo);
+    console.log(
+      `[profile] Bundle total ${summary.totalJsHumanSize} (JS) · CSS ${
+        summary.css?.humanSize ?? "n/a"
+      }`
+    );
+  }
   await precompressArtifacts(distDir);
-  await generateManifest(distDir, { cssPath: `/dist/${cssFile}` });
+  await generateManifest(distDir, { cssPath: `/dist/${cssInfo.fileName}` });
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
+  }
+  const precision = value >= 100 || idx === 0 ? 0 : value >= 10 ? 1 : 2;
+  const formatted = value.toFixed(precision).replace(/\.0+$/, "");
+  return `${formatted} ${units[idx]}`;
+}
+
+function summarizeMetafile(metafile, cssInfo) {
+  const outputs = Object.entries(metafile.outputs || {});
+  const bundles = outputs
+    .filter(([, info]) => info.entryPoint || info.inputs)
+    .map(([file, info]) => ({
+      file,
+      bytes: info.bytes || 0,
+      humanSize: formatBytes(info.bytes || 0),
+      entryPoint: info.entryPoint || null,
+      imports: Array.isArray(info.imports) ? info.imports.length : 0,
+    }))
+    .sort((a, b) => b.bytes - a.bytes);
+
+  const totalJsBytes = bundles.reduce((acc, item) => acc + item.bytes, 0);
+
+  const moduleSizes = new Map();
+  for (const [, info] of outputs) {
+    if (!info.inputs) continue;
+    for (const [modulePath, meta] of Object.entries(info.inputs)) {
+      const previous = moduleSizes.get(modulePath) || 0;
+      const moduleBytes = meta.bytesInOutput ?? meta.bytes ?? 0;
+      moduleSizes.set(modulePath, previous + moduleBytes);
+    }
+  }
+
+  const topModules = Array.from(moduleSizes.entries())
+    .map(([path, bytes]) => ({
+      path,
+      bytes,
+      humanSize: formatBytes(bytes),
+    }))
+    .sort((a, b) => b.bytes - a.bytes)
+    .slice(0, 25);
+
+  const cssSummary = cssInfo
+    ? {
+        file: cssInfo.fileName,
+        bytes: cssInfo.bytes,
+        humanSize: formatBytes(cssInfo.bytes),
+      }
+    : null;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totalJsBytes,
+    totalJsHumanSize: formatBytes(totalJsBytes),
+    bundleCount: bundles.length,
+    css: cssSummary,
+    bundles,
+    topModules,
+  };
+}
+
+function formatProfileMarkdown(summary) {
+  const lines = [];
+  lines.push("# Frontend Bundle Profile");
+  lines.push("");
+  lines.push(`Generated at ${summary.generatedAt}`);
+  lines.push("");
+  lines.push(
+    `- Total JS: **${summary.totalJsHumanSize}** (${summary.totalJsBytes} bytes)`
+  );
+  if (summary.css) {
+    lines.push(
+      `- CSS (${summary.css.file}): **${summary.css.humanSize}** (${summary.css.bytes} bytes)`
+    );
+  }
+  lines.push(`- Bundles emitted: ${summary.bundleCount}`);
+  lines.push("");
+
+  if (summary.bundles.length) {
+    lines.push("## Bundles");
+    lines.push("");
+    lines.push("| File | Size | Entry Point | Imports |");
+    lines.push("| --- | --- | --- | --- |");
+    for (const bundle of summary.bundles) {
+      const entry = bundle.entryPoint ? `\`${bundle.entryPoint}\`` : "—";
+      lines.push(
+        `| \`${bundle.file}\` | ${bundle.humanSize} | ${entry} | ${bundle.imports} |`
+      );
+    }
+    lines.push("");
+  }
+
+  if (summary.topModules.length) {
+    lines.push("## Top modules by size");
+    lines.push("");
+    lines.push("| Module | Size |");
+    lines.push("| --- | --- |");
+    for (const module of summary.topModules) {
+      lines.push(`| \`${module.path}\` | ${module.humanSize} |`);
+    }
+    lines.push("");
+  }
+
+  lines.push(
+    "Use `npx esbuild-analyze public/dist/profile/meta.json` for an interactive view."
+  );
+
+  return `${lines.join("\n")}\n`;
+}
+
+async function writeBundleProfile(metafile, cssInfo) {
+  const profileDir = path.join(distDir, "profile");
+  await mkdir(profileDir, { recursive: true });
+  await writeFile(
+    path.join(profileDir, "meta.json"),
+    JSON.stringify(metafile, null, 2),
+    "utf8"
+  );
+  const summary = summarizeMetafile(metafile, cssInfo);
+  await writeFile(
+    path.join(profileDir, "summary.json"),
+    JSON.stringify(summary, null, 2),
+    "utf8"
+  );
+  await writeFile(
+    path.join(profileDir, "summary.md"),
+    formatProfileMarkdown(summary),
+    "utf8"
+  );
+  return summary;
 }
 
 (async () => {
   try {
     await ensureCleanDist();
-    await buildApp({ watch: watchMode });
+    await buildApp({ watch: watchMode, profile: profileMode });
   } catch (err) {
     console.error(err);
     process.exitCode = 1;

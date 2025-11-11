@@ -212,6 +212,7 @@ pub struct TelemetryState {
     pub release: String,
     pub environment: String,
     pub traces_sample_rate: f32,
+    pub profiles_sample_rate: f32,
     pub error_sample_rate: f32,
     pub trace_propagation_targets: Vec<String>,
 }
@@ -252,6 +253,7 @@ mod telemetry_tests {
             release: "rel".into(),
             environment: "env".into(),
             traces_sample_rate: 1.0,
+            profiles_sample_rate: 1.0,
             error_sample_rate: 1.0,
             trace_propagation_targets: Vec::new(),
         };
@@ -268,6 +270,7 @@ mod telemetry_tests {
             release: String::new(),
             environment: String::new(),
             traces_sample_rate: 0.0,
+            profiles_sample_rate: 0.0,
             error_sample_rate: 0.0,
             trace_propagation_targets: Vec::new(),
         };
@@ -281,6 +284,7 @@ mod telemetry_tests {
             release: String::new(),
             environment: String::new(),
             traces_sample_rate: 0.0,
+            profiles_sample_rate: 0.0,
             error_sample_rate: 0.0,
             trace_propagation_targets: Vec::new(),
         };

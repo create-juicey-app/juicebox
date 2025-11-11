@@ -44,7 +44,8 @@ function mockDeps() {
 
   // Telemetry wrapper should just run the callback
   jest.unstable_mockModule("../public/js/telemetry.js", () => ({
-    startSpan: async (_name, _attrs, fn) => (typeof fn === "function" ? await fn() : undefined),
+    startSpan: async (_name, _attrs, fn) =>
+      typeof fn === "function" ? await fn() : undefined,
     initTelemetry: () => {},
     captureException: () => {},
   }));
@@ -70,6 +71,7 @@ describe("owned list rendering and persistence", () => {
 
   it("keeps the same grid node and does not disappear when adding a file", async () => {
     const owned = await loadOwned();
+    owned.setLoading(false);
 
     // Initial state with two files
     owned.applyResponse({ files: ["alpha", "beta"] });
@@ -101,6 +103,7 @@ describe("owned list rendering and persistence", () => {
 
   it("keeps the grid node and does not disappear when removing a file", async () => {
     const owned = await loadOwned();
+    owned.setLoading(false);
 
     // Start with three files
     owned.applyResponse({ files: ["one", "two", "three"] });
@@ -133,12 +136,15 @@ describe("owned list rendering and persistence", () => {
 
   it("remains stable across rapid successive renders", async () => {
     const owned = await loadOwned();
+    owned.setLoading(false);
 
     owned.applyResponse({ files: ["a"] });
     owned.renderOwned();
 
     const ownedList = document.getElementById("ownedList");
-    const gridInitial = ownedList.querySelector('.owned-grid[data-role="owned"]');
+    const gridInitial = ownedList.querySelector(
+      '.owned-grid[data-role="owned"]',
+    );
     expect(gridInitial).not.toBeNull();
 
     // Rapid re-renders with varying sets
