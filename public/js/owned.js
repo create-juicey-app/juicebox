@@ -1,6 +1,6 @@
 // js/owned.js
 
-import { ownedList, ownedPanel } from "./ui.js";
+import { ownedList, ownedPanel, openFilePicker } from "./ui.js";
 import {
   escapeHtml,
   copyToClipboard,
@@ -112,7 +112,7 @@ export const ownedHandler = {
   renderSkeleton() {
     if (!ownedList || ownedList.querySelector('[data-skeleton="true"]')) return;
     this.renderState = "loading";
-    this.removeListItemsByKinds(["empty", "grid"]);
+    this.removeListItemsByKinds(["grid"]);
     const grid = document.createElement("div");
     grid.className = "owned-grid";
     grid.dataset.skeleton = "true";
@@ -147,8 +147,23 @@ export const ownedHandler = {
   },
 
   formatRemaining(sec) {
-    // Non-text TTL: raw whole seconds; expired => empty string
-    return sec <= 0 ? "" : String(Math.floor(sec));
+    const s = Math.floor(sec);
+    if (!isFinite(s) || s <= 0) return "";
+    const days = Math.floor(s / 86400);
+    const hours = Math.floor((s % 86400) / 3600);
+    const minutes = Math.floor((s % 3600) / 60);
+    const seconds = s % 60;
+
+    if (days > 0) {
+      return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+    }
+    if (hours > 0) {
+      return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+    }
+    if (minutes > 0) {
+      return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+    }
+    return `${seconds}s`;
   },
 
   buildSignature(names) {
@@ -361,7 +376,12 @@ export const ownedHandler = {
     if (animate && !instant) {
       this.capturePositions();
     }
-    this.removeListItemsByKinds(["empty", "skeleton"]);
+    const emptyItem = ownedList.querySelector('li[data-kind="empty"]');
+    if (emptyItem) {
+      emptyItem.hidden = true;
+      emptyItem.setAttribute("aria-hidden", "true");
+    }
+    this.removeListItemsByKinds(["skeleton"]);
     const existingItem = this.getListItemByKind("grid");
     let grid =
       existingItem?.querySelector('.owned-grid[data-role="owned"]') ||
@@ -406,7 +426,7 @@ export const ownedHandler = {
         percent = 0;
       }
 
-      chip.innerHTML = `<div class="top"><div class="name">${escapeHtml(displayName)}</div><div class="actions"></div></div><div class="ttl-row"><span class="ttl" data-ttl="${remainRaw > 0 ? Math.floor(remainRaw) : ""}"></span><span class="ttl-bar-wrap"><span class="ttl-bar" style="width:${percent.toFixed(2)}%;"></span></span></div>`;
+      chip.innerHTML = `<div class="top"><div class="name">${escapeHtml(displayName)}</div><div class="actions"></div></div><div class="ttl-row"><span class="ttl" data-ttl="${remainRaw > 0 ? Math.floor(remainRaw) : ""}">${this.formatRemaining(remainRaw)}</span><span class="ttl-bar-wrap"><span class="ttl-bar" style="width:${percent.toFixed(2)}%;"></span></span></div>`;
 
       const linkInput = document.createElement("input");
       linkInput.type = "text";
@@ -477,20 +497,34 @@ export const ownedHandler = {
 
   mountEmptyState({ instant = false } = {}) {
     if (!ownedList) return;
+    // Remove other transient states
     this.removeListItemsByKinds(["grid", "skeleton"]);
-    const grid = document.createElement("div");
-    grid.className = "owned-grid";
-    grid.dataset.empty = "true";
-    grid.setAttribute("aria-hidden", "false");
-    const empty = document.createElement("div");
-    empty.className = "owned-empty owned-empty-neutral";
-    // Neutral placeholder: no text strings
-    empty.innerHTML = `<div class="owned-empty-block" aria-hidden="true"></div>`;
-    grid.appendChild(empty);
-    const wrapper = this.createListItem("empty");
-    wrapper.appendChild(grid);
-    ownedList.appendChild(wrapper);
-    this.prepareGridEnter(grid, { instant });
+    // Reveal server-rendered empty item (Tera template)
+    const wrapper =
+      ownedList.querySelector('li.owned-item-empty[data-kind="empty"]') ||
+      ownedList.querySelector('li[data-kind="empty"]');
+    if (!wrapper) {
+      return;
+    }
+    wrapper.hidden = false;
+    wrapper.removeAttribute("hidden");
+    const grid =
+      wrapper.querySelector('.owned-grid[data-empty="true"]') ||
+      wrapper.querySelector(".owned-grid");
+    if (grid) {
+      grid.setAttribute("aria-hidden", "false");
+      this.prepareGridEnter(grid, { instant });
+    }
+    // Wire up the round Choose Files button once
+    const btn =
+      wrapper.querySelector(".choose-files-round") ||
+      wrapper.querySelector(".choose-files");
+    if (btn && !btn.dataset.bound) {
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", () => {
+        openFilePicker();
+      });
+    }
   },
 
   renderEmptyState(options = {}) {

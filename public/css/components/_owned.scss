@@ -44,7 +44,7 @@
 }
 #ownedList [data-empty="true"] .owned-empty {
     min-height: 132px;
-    font-size: 1rem;
+    font-size: 0.9rem;
     font-weight: 600;
     letter-spacing: 0.01em;
     color: var(--text);
@@ -82,12 +82,45 @@
     text-align: center;
     font-size: 0.85rem;
     color: var(--text-muted);
+    gap: 0.2rem;
+}
+.owned-empty .owned-empty-title {
+    margin-bottom: 0.1rem;
+    color: var(--text);
+    font-weight: 700;
+}
+.owned-empty .owned-empty-description {
+    margin: 0 0 0.15rem;
+    color: var(--text-subtle);
+    font-weight: 500;
 }
 .owned-empty span {
     display: block;
     font-size: 0.75rem;
     opacity: 0.7;
-    margin-top: 0.35rem;
+    margin-top: 0.25rem;
+}
+
+/* Accent primary round button for empty state */
+.choose-files-round {
+    background: var(--accent);
+    color: var(--bg);
+    border: 1px solid rgba(var(--accent-rgb) / 0.6);
+    font-size: 0.85rem;
+    padding: 0.3rem 0.7rem;
+    font-weight: 600;
+    border-radius: 9999px;
+    box-shadow: none;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+.choose-files-round:hover {
+    transform: none;
+    box-shadow: none;
+}
+.choose-files-round:focus-visible {
+    outline: 2px solid var(--text);
+    outline-offset: 2px;
 }
 
 /* Skeleton shimmer lines/bars (uses keyframes from _animations.scss) */

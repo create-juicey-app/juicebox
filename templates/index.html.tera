@@ -153,6 +153,22 @@
             </div>
           </div>
         </li>
+        <li class="owned-item owned-item-empty" data-kind="empty" aria-hidden="true" hidden>
+          <div class="owned-grid" data-empty="true" aria-hidden="false">
+            <div class="owned-empty text-center">
+              <h3 class="owned-empty-title mb-1">{{ t.owned_empty_title | default(value="No files yet") }}</h3>
+              <p class="owned-empty-description mt-1 mb-1">{{ t.owned_empty_hint | default(value="Upload files to see them here and manage their links.") }}</p>
+              <p>
+                <button
+                  type="button"
+                  class="choose-files-round primary rounded"
+
+                  aria-label="{{ t.file_picker | default(value='Select files to upload') }}"
+                >{{ t.owned_empty_pick | default(value="Choose files") }}</button>
+              </p>
+            </div>
+          </div>
+        </li>
       </ul>
         <p class="site-note" title="Owned files note">{{ t.owned_note | default(value="These are files linked to your IP, They persist across refresh until deleted.") }}</p>
         <script>

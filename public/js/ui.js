@@ -79,6 +79,23 @@ export function ensureTheme({ defaultTheme = "dark" } = {}) {
   } catch (_) {}
 }
 
+export function openFilePicker(target = fileInput) {
+  const input = target || document.getElementById("fileInput");
+  if (input) {
+    try {
+      if (typeof input.showPicker === "function") {
+        input.showPicker();
+      } else {
+        input.click();
+      }
+    } catch {
+      try {
+        input.click();
+      } catch {}
+    }
+  }
+}
+
 // --- Other UI Initializations ---
 export function setupUI() {
   ensureTheme();
@@ -145,8 +162,8 @@ export function setupUI() {
       ripple.addEventListener("animationend", () => ripple.remove(), {
         once: true,
       });
-      if (fileInput && !e.defaultPrevented && e.target !== fileInput) {
-        fileInput.click();
+      if (!e.defaultPrevented && e.target !== fileInput) {
+        openFilePicker();
       }
     });
   }
