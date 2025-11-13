@@ -20,6 +20,20 @@ export const ttlValueLabel = document.getElementById("ttlValue");
 
 // --- TTL Logic ---
 const ttlMap = ["1h", "3h", "12h", "1d", "3d", "7d", "14d"];
+const QUOTA_MESSAGE_FALLBACK =
+  "Maximum storage quota has been reached. You cannot upload for now.";
+
+if (
+  dropZone &&
+  dropZone.dataset &&
+  dropZone.dataset.quotaDisabled === "true"
+) {
+  const reason =
+    dropZone.dataset.quotaMessage && dropZone.dataset.quotaMessage.trim()
+      ? dropZone.dataset.quotaMessage
+      : QUOTA_MESSAGE_FALLBACK;
+  disableUploads(reason);
+}
 
 export function getTTL() {
   if (!ttlSelect) return "3d";
@@ -80,6 +94,8 @@ export function ensureTheme({ defaultTheme = "dark" } = {}) {
 }
 
 export function openFilePicker(target = fileInput) {
+  if (window.JB_UPLOADS_DISABLED) return;
+  if (dropZone && dropZone.classList.contains("is-disabled")) return;
   const input = target || document.getElementById("fileInput");
   if (input) {
     try {
@@ -107,6 +123,10 @@ export function setupUI() {
 
   // Drop-zone animation setup
   if (dropZone) {
+    if (dropZone.classList.contains("is-disabled")) {
+      disableUploads();
+      return;
+    }
     setTimeout(() => dropZone.classList.add("animate"), 500);
     const iconEl = dropZone.querySelector(".icon");
     const setOpen = (open) => {
@@ -166,5 +186,95 @@ export function setupUI() {
         openFilePicker();
       }
     });
+  }
+}
+
+export function getQuotaMessage() {
+  if (dropZone && dropZone.dataset && dropZone.dataset.quotaMessage) {
+    return dropZone.dataset.quotaMessage;
+  }
+  if (
+    window.JB_QUOTA_INFO &&
+    typeof window.JB_QUOTA_INFO.quota_message === "string" &&
+    window.JB_QUOTA_INFO.quota_message.trim()
+  ) {
+    return window.JB_QUOTA_INFO.quota_message.trim();
+  }
+  if (window.JBLang && typeof window.JBLang.quota_blocked === "string") {
+    return window.JBLang.quota_blocked;
+  }
+  return QUOTA_MESSAGE_FALLBACK;
+}
+
+export function disableUploads(reason = getQuotaMessage()) {
+  window.JB_UPLOADS_DISABLED = true;
+  if (!window.JB_QUOTA_INFO || typeof window.JB_QUOTA_INFO !== "object") {
+    window.JB_QUOTA_INFO = {};
+  }
+  window.JB_QUOTA_INFO.uploads_blocked = true;
+  window.JB_QUOTA_INFO.quota_message = reason;
+  if (dropZone) {
+    dropZone.classList.add("is-disabled");
+    dropZone.setAttribute("aria-disabled", "true");
+    dropZone.dataset.quotaDisabled = "true";
+    dropZone.dataset.quotaMessage = reason;
+    dropZone.style.pointerEvents = "none";
+    dropZone.style.cursor = "not-allowed";
+  }
+  if (fileInput) {
+    fileInput.disabled = true;
+    fileInput.setAttribute("aria-disabled", "true");
+  }
+  const hint = document.getElementById("dropHint");
+  if (hint) {
+    if (dropZone && !dropZone.dataset.hintOriginal) {
+      dropZone.dataset.hintOriginal = hint.textContent || "";
+    }
+    hint.textContent = reason;
+  }
+  document.querySelectorAll(".choose-files-round").forEach((btn) => {
+    btn.classList.add("is-disabled");
+    btn.setAttribute("aria-disabled", "true");
+    btn.setAttribute("disabled", "true");
+  });
+}
+
+export function enableUploads() {
+  window.JB_UPLOADS_DISABLED = false;
+  if (dropZone) {
+    dropZone.classList.remove("is-disabled");
+    dropZone.removeAttribute("aria-disabled");
+    dropZone.dataset.quotaDisabled = "false";
+    dropZone.style.removeProperty("pointer-events");
+    dropZone.style.removeProperty("cursor");
+  }
+  if (fileInput) {
+    fileInput.disabled = false;
+    fileInput.removeAttribute("aria-disabled");
+  }
+  const hint = document.getElementById("dropHint");
+  if (hint && dropZone) {
+    const original = dropZone.dataset.hintOriginal;
+    if (original) {
+      hint.textContent = original;
+    }
+  }
+  document.querySelectorAll(".choose-files-round").forEach((btn) => {
+    btn.classList.remove("is-disabled");
+    btn.removeAttribute("aria-disabled");
+    btn.removeAttribute("disabled");
+  });
+}
+
+export function applyQuotaState(quota) {
+  const blocked = quota && quota.uploads_blocked;
+  if (blocked) {
+    const reason =
+      typeof quota.message === "string" && quota.message.trim()
+        ? quota.message.trim()
+        : getQuotaMessage();
+    disableUploads(reason);
+  } else {
+    enableUploads();
   }
 }

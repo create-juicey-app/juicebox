@@ -14,6 +14,9 @@ use tracing::{debug, info, trace, warn};
 use crate::state::{AppState, cleanup_expired};
 use crate::util::{format_bytes, json_error, max_file_bytes, now_secs};
 
+const DEFAULT_QUOTA_MESSAGE: &str =
+    "Maximum storage quota has been reached. You cannot upload for now.";
+
 #[derive(Serialize)]
 pub struct ConfigResponse {
     pub max_file_bytes: u64,
@@ -21,6 +24,8 @@ pub struct ConfigResponse {
     pub enable_streaming_uploads: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub telemetry: Option<FrontendTelemetry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota: Option<FrontendQuota>,
 }
 
 #[derive(Serialize)]
@@ -41,6 +46,39 @@ pub struct FrontendSentryTelemetry {
     pub profiles_sample_rate: f32,
     #[serde(default)]
     pub trace_propagation_targets: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct FrontendQuota {
+    pub max_bytes: u64,
+    pub used_bytes: u64,
+    pub remaining_bytes: u64,
+    pub uploads_blocked: bool,
+    pub max_bytes_str: String,
+    pub used_bytes_str: String,
+    pub remaining_bytes_str: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+fn compute_frontend_quota(state: &AppState, now: u64) -> Option<FrontendQuota> {
+    let threshold_opt = state.storage_quota_block_threshold();
+    state.storage_quota_limit().map(|limit| {
+        let used = state.global_reserved_storage_bytes(now);
+        let remaining = limit.saturating_sub(used);
+        let threshold = threshold_opt.unwrap_or(limit);
+        let blocked = used >= threshold;
+        FrontendQuota {
+            max_bytes: limit,
+            used_bytes: used,
+            remaining_bytes: remaining,
+            uploads_blocked: blocked,
+            max_bytes_str: format_bytes(limit),
+            used_bytes_str: format_bytes(used),
+            remaining_bytes_str: format_bytes(remaining),
+            message: blocked.then(|| DEFAULT_QUOTA_MESSAGE.to_string()),
+        }
+    })
 }
 
 #[axum::debug_handler]
@@ -240,17 +278,43 @@ pub async fn config_handler(State(state): State<AppState>) -> Response {
             trace_propagation_targets: telemetry.trace_propagation_targets.clone(),
         },
     };
+    state.cleanup_chunk_sessions().await;
+    let now = now_secs();
+    let quota = compute_frontend_quota(&state, now);
     let resp = ConfigResponse {
         max_file_bytes: max_file_bytes(),
         max_file_size_str: format_bytes(max_file_bytes()),
         enable_streaming_uploads: streaming_opt_in,
         telemetry: Some(telemetry_payload),
+        quota,
     };
     debug!(
         enable_streaming_uploads = resp.enable_streaming_uploads,
         max_file_bytes = resp.max_file_bytes,
         sentry_enabled,
         "serving config"
+    );
+    Json(resp).into_response()
+}
+
+#[derive(Serialize)]
+pub struct QuotaResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota: Option<FrontendQuota>,
+}
+
+pub async fn quota_handler(State(state): State<AppState>) -> Response {
+    state.cleanup_chunk_sessions().await;
+    let now = now_secs();
+    let quota = compute_frontend_quota(&state, now);
+    let resp = QuotaResponse { quota };
+    debug!(
+        uploads_blocked = resp
+            .quota
+            .as_ref()
+            .map(|q| q.uploads_blocked)
+            .unwrap_or(false),
+        "serving quota status"
     );
     Json(resp).into_response()
 }

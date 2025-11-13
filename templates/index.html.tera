@@ -85,15 +85,18 @@
       <h2 title="Upload new files below">{{ t.upload | default(value="Upload") }}</h2>
       <div class="ttl-row" title="{{ t.ttl_title | default(value="Choose how long the uploaded files will be kept before automatic deletion") }}">
         <label for="ttlSelect" class="subtle" title="Retention period">{{ t.retention | default(value="Retention:") }}</label>
-        <input id="ttlSelect" type="range" min="0" max="6" step="1" value="4" aria-label="Retention" title="{{ t.ttl_adjust | default(value='Adjust retention from 1 hour up to 14 days') }}" />
+  <input id="ttlSelect" type="range" min="0" max="6" step="1" value="4" aria-label="Retention" title="{{ t.ttl_adjust | default(value='Adjust retention from 1 hour up to 14 days') }}" {% if quota_reached %}disabled{% endif %} />
         <span id="ttlValue" class="ttl-value" title="Current retention value">3d</span>
         <span class="subtle" title="Files are automatically deleted after retention">{{ t.auto_delete | default(value="auto delete") }}</span>
       </div>
-  <div class="drop-zone" id="dropZone" aria-describedby="dropHint" title="{{ t.drop_title | default(value='Click or drag files here to upload (max {max_size} each)') | replace(from='{max_size}', to=max_file_size_str) }}">
-        <input type="file" id="fileInput" multiple title="File picker" aria-label="{{ t.file_picker | default(value='Select files to upload (maximum {max_size} each)') | replace(from='{max_size}', to=max_file_size_str) }}" aria-describedby="dropHint" />
+  <div class="drop-zone{% if quota_reached %} is-disabled{% endif %}" id="dropZone" aria-describedby="dropHint" {% if quota_reached %}aria-disabled="true" title="{{ quota_message | default(value='Maximum storage quota has been reached. You cannot upload for now.') | escape }}"{% else %}title="{{ t.drop_title | default(value='Click or drag files here to upload (max {max_size} each)') | replace(from='{max_size}', to=max_file_size_str) }}"{% endif %} data-quota-disabled="{{ quota_reached | default(value=false) }}" data-quota-message="{{ quota_message | default(value='Maximum storage quota has been reached. You cannot upload for now.') | escape }}">
+        <input type="file" id="fileInput" multiple title="File picker" aria-label="{{ t.file_picker | default(value='Select files to upload (maximum {max_size} each)') | replace(from='{max_size}', to=max_file_size_str) }}" aria-describedby="dropHint" {% if quota_reached %}disabled{% endif %} />
         <div class="icon" title="Folder icon">📁</div>
-        <div class="muted" id="dropHint" title="Click or drop to begin selecting files">{{ t.drop_hint | default(value="Click or drop files") }}</div>
+  <div class="muted" id="dropHint" title="Click or drop to begin selecting files">{% if quota_reached %}{{ quota_message | default(value='Maximum storage quota has been reached. You cannot upload for now.') }}{% else %}{{ t.drop_hint | default(value="Click or drop files") }}{% endif %}</div>
       </div>
+      {% if quota_reached %}
+  <div class="quota-banner" role="alert">{{ quota_message | default(value='Maximum storage quota has been reached. You cannot upload for now.') }}</div>
+      {% endif %}
       <ul id="fileList" title="Upload queue showing files, progress bars, and actions" role="list"></ul>
   <p class="site-note" title="Upload usage note">{{ t.upload_note | default(value="Upload your files. Links show after each finishes. Maximum file size is {max_size}, Files expire after selected retention. Limit: maximum 10 active files per IP (delete one to free a slot). See <a href='/faq' target='_blank' rel='noopener' title='Open FAQ in new tab'>Read the FAQ</a>.") | replace(from='{max_size}', to=max_file_size_str) }}</p>
   <p class="site-note" title="Privacy notice">{{ t.privacy_note | default(value="Notice: Your IP address is immediately hashed with a secret pepper and used only to associate uploads with your session, apply limits, and enable abuse/moderation actions. It is never stored in plaintext and the hash is removed once all related files expire.") }}</p>
@@ -161,9 +164,9 @@
               <p>
                 <button
                   type="button"
-                  class="choose-files-round primary rounded"
-
+                  class="choose-files-round primary rounded{% if quota_reached %} is-disabled{% endif %}"
                   aria-label="{{ t.file_picker | default(value='Select files to upload') }}"
+                  {% if quota_reached %}disabled aria-disabled="true"{% endif %}
                 >{{ t.owned_empty_pick | default(value="Choose files") }}</button>
               </p>
             </div>

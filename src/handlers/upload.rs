@@ -169,6 +169,20 @@ fn file_limit_response() -> Response {
         .into_response()
 }
 
+const QUOTA_MESSAGE: &str = "Maximum storage quota has been reached. You cannot upload for now.";
+
+fn quota_limit_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "code": "quota_full",
+            "message": QUOTA_MESSAGE,
+            "quota_reached": true,
+        })),
+    )
+        .into_response()
+}
+
 fn compute_chunk_layout(total_size: u64, requested: Option<u64>) -> Option<(u64, u32)> {
     if total_size == 0 {
         return None;
@@ -272,7 +286,27 @@ pub async fn init_chunk_upload_handler(
         );
     }
     cleanup_expired(&state).await;
+    state.cleanup_chunk_sessions().await;
     let now = now_secs();
+    if state.storage_quota_reached(now) {
+        warn!(
+            owner_hash = %owner_hash,
+            requested = req.size,
+            "chunk upload init rejected: global storage quota guard reached"
+        );
+        return quota_limit_response();
+    }
+    if let Some(remaining) = state.storage_quota_remaining(now) {
+        if req.size > remaining {
+            warn!(
+                owner_hash = %owner_hash,
+                requested = req.size,
+                remaining,
+                "chunk upload init rejected: insufficient free storage"
+            );
+            return quota_limit_response();
+        }
+    }
     let ttl_code = req.ttl.clone().unwrap_or_else(|| "24h".to_string());
     let ttl = ttl_to_duration(&ttl_code).as_secs();
     let expires = now + ttl;
@@ -785,6 +819,7 @@ pub async fn complete_chunk_upload_handler(
         original: session.original_name.clone(),
         created: now_secs(),
         hash: digest.clone(),
+        size: session.total_bytes,
     };
     session.mark_completed();
     if let Err(err) = state
@@ -1087,6 +1122,10 @@ pub async fn upload_handler(
 
     cleanup_expired(&state).await;
     let now = now_secs();
+    if state.storage_quota_reached(now) {
+        tracing::warn!("Upload rejected: global storage quota guard reached");
+        return quota_limit_response();
+    }
     let mut slots_remaining = state.remaining_file_slots(owner_hash.as_str(), now);
     if slots_remaining == 0 {
         tracing::warn!(owner_hash = %owner_hash, "Upload rejected: active file limit reached");
@@ -1103,8 +1142,9 @@ pub async fn upload_handler(
             limit_reached = true;
             break;
         }
-        if data.len() as u64 > max_file_bytes() {
-            tracing::warn!(owner_hash = %owner_hash, ?original_name, size = data.len(), "Upload rejected: file too large");
+        let data_len = data.len() as u64;
+        if data_len > max_file_bytes() {
+            tracing::warn!(owner_hash = %owner_hash, ?original_name, size = data_len, "Upload rejected: file too large");
             continue;
         }
         let mut hasher = Sha256::new();
@@ -1119,6 +1159,28 @@ pub async fn upload_handler(
             }));
             continue;
         }
+        let quota_check_now = now_secs();
+        if state.storage_quota_reached(quota_check_now) {
+            tracing::warn!(
+                owner_hash = %owner_hash,
+                ?original_name,
+                size = data_len,
+                "Upload rejected: global storage quota guard reached during multipart"
+            );
+            return quota_limit_response();
+        }
+        if let Some(remaining) = state.storage_quota_remaining(quota_check_now) {
+            if data_len > remaining {
+                tracing::warn!(
+                    owner_hash = %owner_hash,
+                    ?original_name,
+                    size = data_len,
+                    remaining,
+                    "Upload rejected: insufficient free storage during multipart"
+                );
+                return quota_limit_response();
+            }
+        }
         let storage_name = make_storage_name(original_name.as_deref());
         if is_forbidden_extension(&storage_name) {
             tracing::warn!(owner_hash = %owner_hash, ?original_name, file = %storage_name, "Upload rejected: forbidden extension");
@@ -1132,6 +1194,7 @@ pub async fn upload_handler(
                 expires,
                 owner_hash: owner_hash.clone(),
                 original: original_name.clone().unwrap_or_default(),
+                size: data.len() as u64,
             };
             state.owners.insert(storage_name.clone(), meta);
             let check_now = now_secs();
@@ -1402,6 +1465,14 @@ pub async fn simple_upload_handler(
 
     cleanup_expired(&state).await;
     let now = now_secs();
+    if state.storage_quota_reached(now) {
+        tracing::warn!(
+            owner_hash = %owner_hash,
+            "Simple upload rejected: global storage quota guard reached"
+        );
+        let url = format!("/simple?m={}", urlencoding::encode(QUOTA_MESSAGE));
+        return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response();
+    }
     let mut slots_remaining = state.remaining_file_slots(owner_hash.as_str(), now);
     if slots_remaining == 0 {
         tracing::warn!(owner_hash = %owner_hash, "Simple upload rejected: active file limit reached");
@@ -1422,6 +1493,31 @@ pub async fn simple_upload_handler(
             tracing::warn!(owner_hash = %owner_hash, ?original_name, size = data.len(), "Simple upload rejected: file too large");
             continue;
         }
+        let quota_check_now = now_secs();
+        if state.storage_quota_reached(quota_check_now) {
+            tracing::warn!(
+                owner_hash = %owner_hash,
+                ?original_name,
+                size = data.len(),
+                "Simple upload rejected: global storage quota guard reached during upload"
+            );
+            let url = format!("/simple?m={}", urlencoding::encode(QUOTA_MESSAGE));
+            return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)]).into_response();
+        }
+        if let Some(remaining) = state.storage_quota_remaining(quota_check_now) {
+            if data.len() as u64 > remaining {
+                tracing::warn!(
+                    owner_hash = %owner_hash,
+                    ?original_name,
+                    size = data.len(),
+                    remaining,
+                    "Simple upload rejected: insufficient free storage during upload"
+                );
+                let url = format!("/simple?m={}", urlencoding::encode(QUOTA_MESSAGE));
+                return (StatusCode::SEE_OTHER, [(axum::http::header::LOCATION, url)])
+                    .into_response();
+            }
+        }
         let mut hasher = Sha256::new();
         hasher.update(&data);
         let hash = format!("{:x}", hasher.finalize());
@@ -1438,6 +1534,7 @@ pub async fn simple_upload_handler(
                 original: original_name.clone().unwrap_or_default(),
                 created,
                 hash: hash.clone(),
+                size: data.len() as u64,
             };
             state.owners.insert(storage_name.clone(), meta);
             let check_now = now_secs();

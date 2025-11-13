@@ -450,22 +450,38 @@ pub fn get_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
 }
 
 // Helper: parse human-readable size (e.g. "500MB", "1GB")
-fn parse_size_bytes(s: &str) -> Option<u64> {
-    let s = s.trim().to_ascii_lowercase();
-    if let Some(num) = s.strip_suffix("gb") {
-        num.trim()
-            .parse::<u64>()
-            .ok()
-            .map(|n| n * 1024 * 1024 * 1024)
-    } else if let Some(num) = s.strip_suffix("mb") {
-        num.trim().parse::<u64>().ok().map(|n| n * 1024 * 1024)
-    } else if let Some(num) = s.strip_suffix("kb") {
-        num.trim().parse::<u64>().ok().map(|n| n * 1024)
-    } else if let Some(num) = s.strip_suffix("b") {
-        num.trim().parse::<u64>().ok()
-    } else {
-        s.parse::<u64>().ok()
+pub fn parse_size_bytes(input: &str) -> Option<u64> {
+    let cleaned: String = input
+        .trim()
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace() && *c != '_')
+        .collect();
+    if cleaned.is_empty() {
+        return None;
     }
+    let lower = cleaned.to_ascii_lowercase();
+    let (number, multiplier): (&str, u128) = [
+        ("tib", 1024_u128.pow(4)),
+        ("tb", 1024_u128.pow(4)),
+        ("gib", 1024_u128.pow(3)),
+        ("gb", 1024_u128.pow(3)),
+        ("mib", 1024_u128.pow(2)),
+        ("mb", 1024_u128.pow(2)),
+        ("kib", 1024_u128),
+        ("kb", 1024_u128),
+        ("bytes", 1_u128),
+        ("byte", 1_u128),
+        ("b", 1_u128),
+    ]
+    .into_iter()
+    .find_map(|(suffix, mult)| lower.strip_suffix(suffix).map(|num| (num, mult)))
+    .unwrap_or_else(|| (lower.as_str(), 1_u128));
+    let value = number.parse::<u128>().ok()?;
+    let total = value.checked_mul(multiplier)?;
+    if total > u64::MAX as u128 {
+        return None;
+    }
+    Some(total as u64)
 }
 
 // Helper: format bytes as human readable (e.g. 500MB, 1GB)

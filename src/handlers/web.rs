@@ -17,6 +17,9 @@ use crate::util::{
     max_file_bytes, now_secs, qualify_path, real_client_ip,
 };
 
+const DEFAULT_QUOTA_MESSAGE: &str =
+    "Maximum storage quota has been reached. You cannot upload for now.";
+
 #[derive(Deserialize)]
 pub struct SimpleQuery {
     pub m: Option<String>,
@@ -61,6 +64,20 @@ pub async fn root_handler(
     ctx.insert("t", &t_map);
     ctx.insert("max_file_bytes", &max_file_bytes());
     ctx.insert("max_file_size_str", &format_bytes(max_file_bytes()));
+    let now = now_secs();
+    let quota_limit = state.storage_quota_limit();
+    let quota_used = state.global_reserved_storage_bytes(now);
+    let quota_remaining = quota_limit.map(|limit| limit.saturating_sub(quota_used));
+    let quota_reached = state.storage_quota_reached(now);
+    let quota_message = t_map
+        .get("quota_blocked")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_QUOTA_MESSAGE.to_string());
+    ctx.insert("quota_limit", &quota_limit);
+    ctx.insert("quota_used", &quota_used);
+    ctx.insert("quota_remaining", &quota_remaining);
+    ctx.insert("quota_reached", &quota_reached);
+    ctx.insert("quota_message", &quota_message);
     apply_manifest_assets(&state, &mut ctx).await;
     let tera = &state.tera;
     match tera.render("index.html.tera", &ctx) {
@@ -333,7 +350,7 @@ pub async fn simple_handler(
     let lang = query.lang.as_deref().unwrap_or("en");
     trace!(lang, "rendering simple upload page");
 
-    let message = if let Some(_) = query.deleted {
+    let mut message = if query.deleted.is_some() {
         Some("File DEleted Successfully.".to_string())
     } else {
         query.m.clone()
@@ -391,13 +408,30 @@ pub async fn simple_handler(
             htmlescape::encode_minimal(fname)
         ));
     }
+    let t_map = load_translation_map(lang).await;
+    let now = now_secs();
+    let quota_limit = state.storage_quota_limit();
+    let quota_used = state.global_reserved_storage_bytes(now);
+    let quota_remaining = quota_limit.map(|limit| limit.saturating_sub(quota_used));
+    let quota_reached = state.storage_quota_reached(now);
+    let quota_message = t_map
+        .get("quota_blocked")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_QUOTA_MESSAGE.to_string());
+    if quota_reached && message.is_none() {
+        message = Some(quota_message.clone());
+    }
     let mut ctx = tera::Context::new();
     ctx.insert("lang", lang);
     ctx.insert("ROWS", &rows);
     if let Some(msg) = message {
         ctx.insert("MESSAGE", &msg);
     }
-    let t_map = load_translation_map(lang).await;
+    ctx.insert("quota_limit", &quota_limit);
+    ctx.insert("quota_used", &quota_used);
+    ctx.insert("quota_remaining", &quota_remaining);
+    ctx.insert("quota_reached", &quota_reached);
+    ctx.insert("quota_message", &quota_message);
     ctx.insert("t", &t_map);
     apply_manifest_assets(&state, &mut ctx).await;
     let tera = &state.tera;

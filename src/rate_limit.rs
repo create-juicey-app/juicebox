@@ -114,8 +114,9 @@ where
         let limiter = self.limiter.clone();
         let mut inner = self.inner.clone();
         let path = req.uri().path().to_string();
-        // Bypass rate limiting for core static assets (css/js) so ban page renders correctly
-        if path.starts_with("/css/") || path.starts_with("/js/") {
+        // Bypass rate limiting for core static assets (css/js) and high-frequency
+        // chunk endpoints so uploads are not throttled mid-flight.
+        if path.starts_with("/css/") || path.starts_with("/js/") || path.starts_with("/chunk/") {
             return Box::pin(async move { inner.call(req).await });
         }
         let edge_ip = req

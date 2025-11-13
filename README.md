@@ -43,6 +43,7 @@ Common options (set in .env or your environment):
 - IP_HASH_SECRET - REQUIRED. Hash secret to avoid hash lookups and get ur ip leaked
 - JUICEBOX_PROD_HOST - the juicebox domain (e.g. box.juicey.dev) only required if you put it in a website
 - MAX_FILE_SIZE - per-upload limit (e.g. 750MB, 1GB, or raw bytes)
+- MAX_STORAGE_QUOTA - optional global cap on active storage. Uploads pause once free space falls below `MAX_FILE_SIZE` so there is always room for one full upload. Accepts bytes or values like `750GB` (omit or 0 to disable)
 - JUICEBOX_REDIS_URL / REDIS_URL - Redis (or Dragonfly) connection string used for metadata
 - JUICEBOX_REDIS_PREFIX - key namespace prefix (default: `juicebox`)
 - JUICEBOX_STORAGE_ROOT - base directory; other storage paths resolve under it

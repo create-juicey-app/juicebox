@@ -1,6 +1,6 @@
 mod common {}
 
-use juicebox::state::{AppState, MemoryStore, ReportRecord, TelemetryState};
+use juicebox::state::{AppState, KvStore, MemoryStore, ReportRecord, TelemetryState};
 use juicebox::util::{UPLOAD_CONCURRENCY, hash_ip_string};
 use std::{collections::HashMap, path::Path, sync::Arc, time::SystemTime};
 use tempfile::TempDir;
@@ -78,6 +78,7 @@ pub fn setup_test_app() -> (AppState, TempDir) {
         admin_key,
         bans_path,
         bans,
+        max_storage_quota: None,
         mailgun_api_key,
         mailgun_domain,
         report_email_to,
@@ -96,7 +97,7 @@ pub fn setup_test_app() -> (AppState, TempDir) {
 }
 
 #[allow(dead_code)]
-pub fn recreate_state(base_path: &Path) -> AppState {
+pub fn recreate_state(base_path: &Path, kv: Arc<dyn KvStore>) -> AppState {
     let static_dir = Arc::new(base_path.join("public"));
     let upload_dir = Arc::new(base_path.join("files"));
     let data_dir = Arc::new(base_path.join("data"));
@@ -137,6 +138,7 @@ pub fn recreate_state(base_path: &Path) -> AppState {
         admin_key,
         bans_path,
         bans,
+        max_storage_quota: None,
         mailgun_api_key: None,
         mailgun_domain: None,
         report_email_to: None,
@@ -148,6 +150,6 @@ pub fn recreate_state(base_path: &Path) -> AppState {
         ip_hash_secret,
         owners_persist_lock: Arc::new(tokio::sync::Mutex::new(())),
         telemetry: test_telemetry_state(),
-        kv: Arc::new(MemoryStore::new("test".to_string())),
+        kv,
     }
 }

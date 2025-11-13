@@ -559,9 +559,9 @@ async fn test_chunk_session_persistence_across_restart() {
     assert_eq!(chunk_resp.status(), StatusCode::NO_CONTENT);
 
     // Recreate state from disk and ensure session metadata is restored.
-    let restored_state = common::recreate_state(tmp.path());
+    let restored_state = common::recreate_state(tmp.path(), state.kv.clone());
     restored_state
-        .load_chunk_sessions_from_disk()
+        .load_chunk_sessions_from_store()
         .await
         .expect("load chunk sessions");
     let restored = restored_state

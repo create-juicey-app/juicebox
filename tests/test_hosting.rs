@@ -4,7 +4,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{HeaderValue, Request, StatusCode, header};
 use juicebox::handlers::build_router;
 use juicebox::state::FileMeta;
-use juicebox::util::now_secs;
+use juicebox::util::{max_file_bytes, now_secs};
 use once_cell::sync::Lazy;
 use serde_json::Value;
 use std::sync::Mutex;
@@ -71,7 +71,194 @@ async fn test_config_handler_includes_telemetry_and_streaming_flag() {
         .unwrap();
     assert!(targets.iter().any(|t| t.as_str() == Some("^/")));
 
+    assert!(json.get("quota").is_none());
+
     // Skipping env-toggling assertions; ensure the field exists and is boolean (checked above).
+}
+
+#[tokio::test]
+async fn test_config_handler_returns_quota_payload_when_enabled() {
+    let _lock = ENV_GUARD.lock().unwrap();
+
+    let (mut state, _tmp) = common::setup_test_app();
+    state.max_storage_quota = Some(1_048_576); // 1 MiB
+    let app = build_router(state.clone());
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let quota = json
+        .get("quota")
+        .and_then(|q| q.as_object())
+        .expect("quota payload missing");
+
+    assert_eq!(
+        quota.get("max_bytes").and_then(Value::as_u64),
+        Some(1_048_576)
+    );
+    assert_eq!(
+        quota.get("uploads_blocked").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        quota.get("remaining_bytes").and_then(Value::as_u64),
+        Some(1_048_576)
+    );
+    assert!(quota.get("message").is_none());
+}
+
+#[tokio::test]
+async fn test_quota_endpoint_reports_blocked_status() {
+    let _lock = ENV_GUARD.lock().unwrap();
+
+    let (mut state, _tmp) = common::setup_test_app();
+    state.max_storage_quota = Some(512);
+    let now = now_secs();
+    let owner = common::hash_fixture_ip("203.0.113.42");
+    state.owners.insert(
+        "blocked.bin".to_string(),
+        FileMeta {
+            owner_hash: owner,
+            expires: now + 3_600,
+            original: "blocked.bin".to_string(),
+            created: now,
+            hash: String::new(),
+            size: 512,
+        },
+    );
+
+    let app = build_router(state.clone());
+
+    // Config endpoint should reflect blocked quota state
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let quota = json
+        .get("quota")
+        .and_then(|q| q.as_object())
+        .expect("quota payload missing from config");
+    assert_eq!(
+        quota.get("uploads_blocked").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        quota.get("remaining_bytes").and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        quota.get("message").and_then(Value::as_str),
+        Some("Maximum storage quota has been reached. You cannot upload for now.")
+    );
+
+    // Quota endpoint should match the same data shape
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/quota")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let quota = json
+        .get("quota")
+        .and_then(|q| q.as_object())
+        .expect("quota payload missing from quota endpoint");
+    assert_eq!(
+        quota.get("uploads_blocked").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        quota.get("remaining_bytes").and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        quota.get("message").and_then(Value::as_str),
+        Some("Maximum storage quota has been reached. You cannot upload for now.")
+    );
+}
+
+#[tokio::test]
+async fn test_quota_guard_triggers_when_only_max_file_space_remains() {
+    let _lock = ENV_GUARD.lock().unwrap();
+
+    let guard = max_file_bytes();
+    let limit = guard.saturating_mul(5).max(guard.saturating_add(1));
+
+    let (mut state, _tmp) = common::setup_test_app();
+    state.max_storage_quota = Some(limit);
+
+    let now = now_secs();
+    let owner = common::hash_fixture_ip("198.51.100.77");
+    state.owners.insert(
+        "guard.bin".to_string(),
+        FileMeta {
+            owner_hash: owner,
+            expires: now + 3_600,
+            original: "guard.bin".to_string(),
+            created: now,
+            hash: String::new(),
+            size: limit.saturating_sub(guard),
+        },
+    );
+
+    let app = build_router(state.clone());
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/quota")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let quota = json
+        .get("quota")
+        .and_then(|q| q.as_object())
+        .expect("quota payload missing");
+
+    assert_eq!(
+        quota.get("uploads_blocked").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        quota.get("remaining_bytes").and_then(Value::as_u64),
+        Some(guard)
+    );
+    assert_eq!(
+        quota.get("message").and_then(Value::as_str),
+        Some("Maximum storage quota has been reached. You cannot upload for now.")
+    );
 }
 
 #[tokio::test]
@@ -94,6 +281,7 @@ async fn test_fetch_file_serves_and_sets_cache_headers() {
             original: "hello.txt".to_string(),
             created: now_secs(),
             hash: String::new(),
+            size: b"hi there".len() as u64,
         },
     );
 
@@ -161,6 +349,7 @@ async fn test_fetch_file_404_missing_or_orphan() {
             original: orphan.clone(),
             created: now_secs(),
             hash: String::new(),
+            size: 0,
         },
     );
     let resp2 = app

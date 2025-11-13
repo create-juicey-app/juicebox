@@ -1,6 +1,6 @@
-import { fetchConfig } from "./config.js";
+import { fetchConfig, fetchQuotaStatus } from "./config.js";
 import { initTelemetry, captureException } from "./telemetry.js";
-import { setupTTL, setupUI } from "./ui.js";
+import { setupTTL, setupUI, applyQuotaState } from "./ui.js";
 import { uploadHandler } from "./upload.js";
 import { ownedHandler } from "./owned.js";
 import { setupEventListeners } from "./events.js";
@@ -16,6 +16,12 @@ export async function initializeApp() {
       try {
         ownedHandler.setLoading(true);
       } catch {}
+      const quota = await fetchQuotaStatus();
+      if (quota) {
+        applyQuotaState(quota);
+      } else if (window.JB_QUOTA_INFO) {
+        applyQuotaState(window.JB_QUOTA_INFO);
+      }
       const config = await fetchConfig();
       try {
         initTelemetry(config?.telemetry);
@@ -26,6 +32,11 @@ export async function initializeApp() {
       applyother(uploadHandler, ownedHandler);
       setupTTL();
       setupUI();
+      if (config?.quota) {
+        applyQuotaState(config.quota);
+      } else if (window.JB_QUOTA_INFO) {
+        applyQuotaState(window.JB_QUOTA_INFO);
+      }
       await ownedHandler.loadExisting();
       if (window.JBLang) {
         if (typeof window.JBLang.rewriteLinks === "function") {

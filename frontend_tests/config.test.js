@@ -55,6 +55,8 @@ describe("config.js fetchConfig", () => {
     expect(window.MAX_FILE_BYTES).toBe(DEFAULT_BYTES);
     expect(window.MAX_FILE_SIZE_STR).toBe(DEFAULT_SIZE_STR);
     expect(window.ENABLE_STREAMING_UPLOADS).toBe(DEFAULT_STREAMING);
+    expect(window.JB_UPLOADS_DISABLED).toBe(false);
+    expect(window.JB_QUOTA_INFO).toBeNull();
   });
 
   it("updates globals from a successful server config and returns the cfg", async () => {
@@ -65,6 +67,15 @@ describe("config.js fetchConfig", () => {
       max_file_size_str: "117.74 MB",
       enable_streaming_uploads: true,
       sentry: { enabled: false }, // unrelated but should be preserved in return value
+      quota: {
+        max_bytes: 50,
+        used_bytes: 50,
+        remaining_bytes: 0,
+        uploads_blocked: true,
+        max_bytes_str: "50B",
+        used_bytes_str: "50B",
+        remaining_bytes_str: "0B",
+      },
     };
     mockFetchOk(cfg);
 
@@ -79,6 +90,8 @@ describe("config.js fetchConfig", () => {
     expect(window.MAX_FILE_BYTES).toBe(123456789);
     expect(window.MAX_FILE_SIZE_STR).toBe("117.74 MB");
     expect(window.ENABLE_STREAMING_UPLOADS).toBe(true);
+    expect(window.JB_UPLOADS_DISABLED).toBe(true);
+    expect(window.JB_QUOTA_INFO).toEqual(cfg.quota);
   });
 
   it("ignores invalid types and preserves existing values", async () => {
@@ -88,12 +101,15 @@ describe("config.js fetchConfig", () => {
     window.MAX_FILE_BYTES = 42;
     window.MAX_FILE_SIZE_STR = "42B";
     window.ENABLE_STREAMING_UPLOADS = true;
+    window.JB_UPLOADS_DISABLED = true;
+    window.JB_QUOTA_INFO = { uploads_blocked: true };
 
     // Provide mixed-type payload (only one valid field)
     mockFetchOk({
       max_file_bytes: "oops", // invalid
       max_file_size_str: "1TB", // valid
       enable_streaming_uploads: "nope", // invalid
+      quota: null,
     });
 
     const returned = await fetchConfig();
@@ -101,12 +117,15 @@ describe("config.js fetchConfig", () => {
       max_file_bytes: "oops",
       max_file_size_str: "1TB",
       enable_streaming_uploads: "nope",
+      quota: null,
     });
 
     // Only the valid field should be applied
     expect(window.MAX_FILE_BYTES).toBe(42); // unchanged
     expect(window.MAX_FILE_SIZE_STR).toBe("1TB"); // updated
     expect(window.ENABLE_STREAMING_UPLOADS).toBe(true); // unchanged
+    expect(window.JB_UPLOADS_DISABLED).toBe(false);
+    expect(window.JB_QUOTA_INFO).toBeNull();
   });
 
   it("returns null and does not change globals when response is not ok", async () => {
@@ -117,6 +136,8 @@ describe("config.js fetchConfig", () => {
     window.MAX_FILE_BYTES = 777;
     window.MAX_FILE_SIZE_STR = "777B";
     window.ENABLE_STREAMING_UPLOADS = true;
+  window.JB_UPLOADS_DISABLED = true;
+  window.JB_QUOTA_INFO = { uploads_blocked: true };
 
     mockFetchNotOk(503, { message: "Service Unavailable" });
 
@@ -127,6 +148,8 @@ describe("config.js fetchConfig", () => {
     expect(window.MAX_FILE_BYTES).toBe(777);
     expect(window.MAX_FILE_SIZE_STR).toBe("777B");
     expect(window.ENABLE_STREAMING_UPLOADS).toBe(true);
+    expect(window.JB_UPLOADS_DISABLED).toBe(true);
+    expect(window.JB_QUOTA_INFO).toEqual({ uploads_blocked: true });
   });
 
   it("returns null and preserves globals on network error", async () => {
@@ -136,6 +159,8 @@ describe("config.js fetchConfig", () => {
     window.MAX_FILE_BYTES = 888;
     window.MAX_FILE_SIZE_STR = "888B";
     window.ENABLE_STREAMING_UPLOADS = false;
+    window.JB_UPLOADS_DISABLED = false;
+    window.JB_QUOTA_INFO = { uploads_blocked: false };
 
     global.fetch = jest.fn().mockRejectedValue(new Error("network down"));
 
@@ -146,5 +171,7 @@ describe("config.js fetchConfig", () => {
     expect(window.MAX_FILE_BYTES).toBe(888);
     expect(window.MAX_FILE_SIZE_STR).toBe("888B");
     expect(window.ENABLE_STREAMING_UPLOADS).toBe(false);
+    expect(window.JB_UPLOADS_DISABLED).toBe(false);
+    expect(window.JB_QUOTA_INFO).toEqual({ uploads_blocked: false });
   });
 });

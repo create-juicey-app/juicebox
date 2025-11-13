@@ -26,7 +26,9 @@ pub use debug::block_debug_endpoints;
 pub use delete::{
     SimpleDeleteForm, delete_handler, simple_delete_handler, simple_delete_post_handler,
 };
-pub use hosting::{ConfigResponse, config_handler, fetch_file_handler, file_handler};
+pub use hosting::{
+    ConfigResponse, config_handler, fetch_file_handler, file_handler, quota_handler,
+};
 pub use reports::{ReportForm, ReportRecordEmail, report_handler};
 pub use security::{add_cache_headers, add_security_headers, ban_gate};
 pub use upload::{
@@ -111,6 +113,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/faq", get(faq_handler))
         .route("/terms", get(terms_handler))
         .route("/api/config", get(config_handler))
+        .route("/api/quota", get(quota_handler))
         .nest_service("/css", css_service.clone())
         .nest_service("/js", js_service.clone())
         .nest_service("/dist", dist_service.clone())

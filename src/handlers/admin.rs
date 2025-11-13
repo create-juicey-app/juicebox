@@ -9,7 +9,9 @@ use tokio::fs;
 use tracing::{info, trace, warn};
 
 use crate::state::{AppState, BanSubject, IpBan};
-use crate::util::{ADMIN_SESSION_TTL, IpVersion, get_cookie, json_error, new_id, now_secs};
+use crate::util::{
+    ADMIN_SESSION_TTL, IpVersion, format_bytes, get_cookie, json_error, new_id, now_secs,
+};
 
 fn is_https(headers: &HeaderMap) -> bool {
     if let Some(v) = headers
@@ -310,6 +312,37 @@ pub async fn admin_files_handler(State(state): State<AppState>, headers: HeaderM
     }
     let mut rows = String::new();
     let now = now_secs();
+    let total_active_bytes = state.global_active_storage_bytes(now);
+    let total_pending_bytes = state.global_pending_chunk_bytes(now);
+    let reserved_bytes = total_active_bytes + total_pending_bytes;
+    let quota_status = if let Some(limit) = state.storage_quota_limit() {
+        let blocked = reserved_bytes >= limit;
+        let remaining = limit.saturating_sub(reserved_bytes);
+        let limit_str = format_bytes(limit);
+        let reserved_str = format_bytes(reserved_bytes);
+        let active_str = format_bytes(total_active_bytes);
+        let pending_str = format_bytes(total_pending_bytes);
+        let remaining_str = format_bytes(remaining);
+        if total_pending_bytes > 0 {
+            if blocked {
+                format!(
+                    "Storage quota {reserved_str}/{limit_str} in use ({active_str} active, {pending_str} pending). Uploads are currently blocked."
+                )
+            } else {
+                format!(
+                    "Storage quota {reserved_str}/{limit_str} in use ({active_str} active, {pending_str} pending). {remaining_str} remaining."
+                )
+            }
+        } else if blocked {
+            format!(
+                "Storage quota {reserved_str}/{limit_str} in use. Uploads are currently blocked."
+            )
+        } else {
+            format!("Storage quota {reserved_str}/{limit_str} in use. {remaining_str} remaining.")
+        }
+    } else {
+        "Global storage quota disabled (unlimited).".to_string()
+    };
     for entry in state.owners.iter() {
         let file = entry.key();
         let meta = entry.value();
@@ -350,7 +383,9 @@ pub async fn admin_files_handler(State(state): State<AppState>, headers: HeaderM
     match fs::read(&tpl_path).await {
         Ok(bytes) => {
             let mut body = String::from_utf8_lossy(&bytes).into_owned();
+            let escaped_quota = htmlescape::encode_minimal(&quota_status);
             body = body.replace("{{FILE_ROWS}}", &rows);
+            body = body.replace("{{QUOTA_STATUS}}", &escaped_quota);
             (
                 StatusCode::OK,
                 [(CONTENT_TYPE, HeaderValue::from_static("text/html"))],

@@ -98,6 +98,7 @@ async fn visitor_debug_reports_hash_and_owner_snapshot() {
             original: "demo.bin".to_string(),
             created: now,
             hash: "deadbeef".into(),
+            size: 0,
         },
     );
 
@@ -146,6 +147,7 @@ async fn admin_files_handler_escapes_html_entities() {
             original: file_name.to_string(),
             created: now,
             hash: "deadbeef".into(),
+            size: 0,
         },
     );
 

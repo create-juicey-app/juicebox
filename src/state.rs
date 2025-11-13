@@ -1,6 +1,6 @@
 use crate::util::{
     ADMIN_KEY_TTL, ADMIN_SESSION_TTL, IpVersion, MAX_ACTIVE_FILES_PER_IP, hash_ip_addr,
-    hash_ip_string, hash_network_from_cidr, hash_network_from_ip, new_id, now_secs,
+    hash_ip_string, hash_network_from_cidr, hash_network_from_ip, max_file_bytes, new_id, now_secs,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -12,7 +12,6 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::SystemTime};
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock, Semaphore};
 use tracing::{debug, error, info, trace, warn};
 
@@ -26,6 +25,8 @@ pub struct FileMeta {
     #[serde(default = "now_secs")]
     pub created: u64,
     pub hash: String,
+    #[serde(default)]
+    pub size: u64,
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ReportRecord {
@@ -78,7 +79,11 @@ pub trait KvStore: Send + Sync {
     async fn load_hash(&self, key: &str) -> Result<Vec<(String, String)>>;
     async fn replace_list(&self, key: &str, values: &[String]) -> Result<()>;
     async fn load_list(&self, key: &str) -> Result<Vec<String>>;
+    async fn set_hash_field(&self, key: &str, field: &str, value: &str) -> Result<()>;
+    async fn delete_hash_field(&self, key: &str, field: &str) -> Result<()>;
 }
+
+const CHUNK_SESSION_STORE_KEY: &str = "chunk_sessions";
 
 pub struct RedisStore {
     prefix: String,
@@ -146,6 +151,29 @@ impl KvStore for RedisStore {
         let entries: Vec<String> = conn.lrange(&redis_key, 0, -1).await?;
         Ok(entries)
     }
+
+    async fn set_hash_field(&self, key: &str, field: &str, value: &str) -> Result<()> {
+        let redis_key = self.key(key);
+        let mut conn = self.manager.lock().await;
+        redis::cmd("HSET")
+            .arg(&redis_key)
+            .arg(field)
+            .arg(value)
+            .query_async::<_, ()>(&mut *conn)
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_hash_field(&self, key: &str, field: &str) -> Result<()> {
+        let redis_key = self.key(key);
+        let mut conn = self.manager.lock().await;
+        redis::cmd("HDEL")
+            .arg(&redis_key)
+            .arg(field)
+            .query_async::<_, ()>(&mut *conn)
+            .await?;
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -203,6 +231,26 @@ impl KvStore for MemoryStore {
         let redis_key = self.key(key);
         let lists = self.lists.lock().await;
         Ok(lists.get(&redis_key).cloned().unwrap_or_default())
+    }
+
+    async fn set_hash_field(&self, key: &str, field: &str, value: &str) -> Result<()> {
+        let redis_key = self.key(key);
+        let mut hashes = self.hashes.lock().await;
+        let map = hashes.entry(redis_key).or_insert_with(HashMap::new);
+        map.insert(field.to_string(), value.to_string());
+        Ok(())
+    }
+
+    async fn delete_hash_field(&self, key: &str, field: &str) -> Result<()> {
+        let redis_key = self.key(key);
+        let mut hashes = self.hashes.lock().await;
+        if let Some(map) = hashes.get_mut(&redis_key) {
+            map.remove(field);
+            if map.is_empty() {
+                hashes.remove(&redis_key);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -410,6 +458,7 @@ pub struct AppState {
     pub admin_key: Arc<RwLock<String>>,
     pub bans_path: Arc<PathBuf>,
     pub bans: Arc<RwLock<Vec<IpBan>>>,
+    pub max_storage_quota: Option<u64>,
     // email notification config
     pub mailgun_api_key: Option<String>,
     pub mailgun_domain: Option<String>,
@@ -520,6 +569,91 @@ impl AppState {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
+    pub fn global_active_file_count(&self, now: u64) -> u64 {
+        let count = self
+            .owners
+            .iter()
+            .filter(|entry| entry.value().expires > now)
+            .count();
+        debug!(count, "global active file count computed");
+        count as u64
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn global_pending_chunk_count(&self, now: u64) -> u64 {
+        let count = self
+            .chunk_sessions
+            .iter()
+            .filter(|entry| {
+                let session = entry.value();
+                !session.is_completed() && session.expires > now
+            })
+            .count();
+        debug!(count, "global pending chunk count computed");
+        count as u64
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn global_active_storage_bytes(&self, now: u64) -> u64 {
+        let total = self
+            .owners
+            .iter()
+            .filter(|entry| entry.value().expires > now)
+            .map(|entry| entry.value().size)
+            .sum();
+        debug!(bytes = total, "global active storage computed");
+        total
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn global_pending_chunk_bytes(&self, now: u64) -> u64 {
+        let total = self
+            .chunk_sessions
+            .iter()
+            .filter(|entry| {
+                let session = entry.value();
+                !session.is_completed() && session.expires > now
+            })
+            .map(|entry| entry.value().total_bytes)
+            .sum();
+        debug!(bytes = total, "global pending chunk storage computed");
+        total
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn global_reserved_storage_bytes(&self, now: u64) -> u64 {
+        let total = self.global_active_storage_bytes(now) + self.global_pending_chunk_bytes(now);
+        debug!(bytes = total, "global reserved storage computed");
+        total
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn storage_quota_limit(&self) -> Option<u64> {
+        self.max_storage_quota.filter(|limit| *limit > 0)
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn storage_quota_remaining(&self, now: u64) -> Option<u64> {
+        self.storage_quota_limit()
+            .map(|limit| limit.saturating_sub(self.global_reserved_storage_bytes(now)))
+    }
+
+    pub fn storage_quota_block_threshold(&self) -> Option<u64> {
+        self.storage_quota_limit().map(|limit| {
+            let guard = max_file_bytes();
+            if guard >= limit { limit } else { limit - guard }
+        })
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub fn storage_quota_reached(&self, now: u64) -> bool {
+        let reserved = self.global_reserved_storage_bytes(now);
+        self.storage_quota_block_threshold()
+            .map(|threshold| reserved >= threshold)
+            .unwrap_or(false)
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn persist_owners_inner(&self) {
         let owners: HashMap<String, FileMeta> = self
             .owners
@@ -625,7 +759,7 @@ impl AppState {
     pub async fn persist_chunk_session(&self, id: &str, session: &ChunkSession) -> Result<()> {
         let _guard = session.persist_lock.lock().await;
         let snapshot = session.snapshot().await;
-        let json = serde_json::to_vec(&snapshot).map_err(|err| {
+        let json = serde_json::to_string(&snapshot).map_err(|err| {
             error!(
                 ?err,
                 session_id = id,
@@ -633,74 +767,49 @@ impl AppState {
             );
             err
         })?;
-        let path = session.storage_dir.join("session.json");
-        let tmp = path.with_extension("tmp");
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).await.map_err(|err| {
-                error!(?err, session_id = id, dir = ?parent, "failed to create chunk session directory");
+        self.kv
+            .set_hash_field(CHUNK_SESSION_STORE_KEY, id, &json)
+            .await
+            .map_err(|err| {
+                error!(
+                    ?err,
+                    session_id = id,
+                    "failed to persist chunk session metadata to kv"
+                );
                 err
             })?;
-        }
-        let mut file = fs::File::create(&tmp).await.map_err(|err| {
-            error!(?err, session_id = id, path = ?tmp, "failed to create chunk session temp file");
-            err
-        })?;
-        file.write_all(&json).await.map_err(|err| {
-            error!(?err, session_id = id, path = ?tmp, "failed to write chunk session temp file");
-            err
-        })?;
-        if let Err(err) = file.sync_all().await {
-            warn!(?err, session_id = id, path = ?tmp, "failed to sync chunk session temp file");
-        }
-        fs::rename(&tmp, &path).await.map_err(|err| {
-            error!(?err, session_id = id, from = ?tmp, to = ?path, "failed to replace chunk session metadata");
-            err
-        })?;
-        debug!(session_id = id, "persisted chunk session metadata");
+        debug!(session_id = id, "persisted chunk session metadata to kv");
         Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn load_chunk_sessions_from_disk(&self) -> Result<()> {
-        let mut dirs = match fs::read_dir(&*self.chunk_dir).await {
-            Ok(d) => d,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                debug!(dir = ?self.chunk_dir, "chunk session directory missing; skipping load");
-                return Ok(());
-            }
+    pub async fn load_chunk_sessions_from_store(&self) -> Result<()> {
+        let entries = match self.kv.load_hash(CHUNK_SESSION_STORE_KEY).await {
+            Ok(entries) => entries,
             Err(err) => {
-                error!(?err, dir = ?self.chunk_dir, "failed to read chunk sessions directory");
-                return Err(err.into());
+                error!(?err, "failed to load chunk session metadata from kv store");
+                return Err(err);
             }
         };
-        let mut loaded = 0usize;
-        while let Some(entry) = dirs.next_entry().await? {
-            if !entry.file_type().await?.is_dir() {
-                continue;
-            }
-            let id = entry.file_name().to_string_lossy().to_string();
-            let meta_path = entry.path().join("session.json");
-            let bytes = match fs::read(&meta_path).await {
-                Ok(bytes) => bytes,
-                Err(err) => {
-                    warn!(?err, session_id = %id, path = ?meta_path, "chunk session metadata missing; removing directory");
-                    let _ = fs::remove_dir_all(entry.path()).await;
-                    continue;
-                }
-            };
-            match serde_json::from_slice::<ChunkSessionRecord>(&bytes) {
+        let mut restored = 0usize;
+        for (id, payload) in entries {
+            match serde_json::from_str::<ChunkSessionRecord>(&payload) {
                 Ok(record) => {
-                    let session = Arc::new(ChunkSession::from_record(record, entry.path()));
+                    let storage_dir = self.chunk_dir.join(&id);
+                    if let Err(err) = fs::create_dir_all(&storage_dir).await {
+                        warn!(?err, session_id = %id, dir = ?storage_dir, "failed to prepare chunk storage directory");
+                        continue;
+                    }
+                    let session = Arc::new(ChunkSession::from_record(record, storage_dir));
                     self.chunk_sessions.insert(id, session);
-                    loaded += 1;
+                    restored += 1;
                 }
                 Err(err) => {
-                    warn!(?err, session_id = %id, "failed to parse chunk session metadata; removing directory");
-                    let _ = fs::remove_dir_all(entry.path()).await;
+                    warn!(?err, session_id = %id, "failed to parse chunk session record from kv");
                 }
             }
         }
-        debug!(loaded, "restored chunk sessions from disk");
+        debug!(restored, "restored chunk sessions from kv");
         Ok(())
     }
 
@@ -711,13 +820,26 @@ impl AppState {
             .iter()
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
-        let count = sessions.len();
+        let mut encoded = Vec::with_capacity(sessions.len());
         for (id, session) in sessions {
-            if let Err(err) = self.persist_chunk_session(&id, &session).await {
-                warn!(?err, session_id = %id, "failed to persist chunk session");
+            let snapshot = session.snapshot().await;
+            match serde_json::to_string(&snapshot) {
+                Ok(payload) => encoded.push((id, payload)),
+                Err(err) => {
+                    warn!(?err, session_id = %id, "failed to serialize chunk session during bulk persist");
+                }
             }
         }
-        debug!(count, "persisted chunk sessions snapshot");
+        let persisted = encoded.len();
+        if let Err(err) = self
+            .kv
+            .replace_hash(CHUNK_SESSION_STORE_KEY, &encoded)
+            .await
+        {
+            warn!(?err, "failed to persist chunk sessions snapshot to kv");
+        } else {
+            debug!(persisted, "persisted chunk sessions snapshot to kv");
+        }
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
@@ -905,7 +1027,15 @@ impl AppState {
 
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn remove_chunk_session(&self, id: &str) {
-        if let Some((_, session)) = self.chunk_sessions.remove(id) {
+        let removed = self.chunk_sessions.remove(id);
+        if let Err(err) = self.kv.delete_hash_field(CHUNK_SESSION_STORE_KEY, id).await {
+            warn!(
+                ?err,
+                session_id = id,
+                "failed to delete chunk session metadata from kv"
+            );
+        }
+        if let Some((_, session)) = removed {
             let dir = (*session.storage_dir).clone();
             tokio::spawn(async move {
                 if let Err(err) = fs::remove_dir_all(&dir).await {
@@ -920,19 +1050,31 @@ impl AppState {
 
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn cleanup_chunk_sessions(&self) {
-        const STALE_GRACE: u64 = 30 * 60; // 30 minutes
+        const STALE_GRACE: u64 = 30 * 60; // 30 minutes once data is flowing
+        const EMPTY_GRACE: u64 = 5 * 60; // give abandoned sessions a short leash
         let now = now_secs();
+        let sessions: Vec<(String, Arc<ChunkSession>)> = self
+            .chunk_sessions
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+
         let mut expired_ids = Vec::new();
-        for entry in self.chunk_sessions.iter() {
-            let session = entry.value();
+        for (id, session) in sessions {
             let expired = session.expires <= now;
-            let idle = session
-                .last_update
-                .load(Ordering::Relaxed)
-                .saturating_add(STALE_GRACE)
-                <= now;
+            let idle_cutoff = if session.is_completed() {
+                1
+            } else {
+                let has_chunks = {
+                    let received = session.received.read().await;
+                    received.iter().any(|flag| *flag)
+                };
+                if has_chunks { STALE_GRACE } else { EMPTY_GRACE }
+            };
+            let last_activity = session.last_update.load(Ordering::Relaxed);
+            let idle = last_activity.saturating_add(idle_cutoff) <= now;
             if expired || idle {
-                expired_ids.push(entry.key().clone());
+                expired_ids.push(id);
             }
         }
         for id in expired_ids.iter() {

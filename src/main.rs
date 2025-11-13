@@ -11,8 +11,8 @@ use juicebox::state::{
     cleanup_expired,
 };
 use juicebox::util::{
-    IpVersion, PROD_HOST, UPLOAD_CONCURRENCY, hash_ip_string, hash_network_from_cidr,
-    looks_like_hash, now_secs, ttl_to_duration,
+    IpVersion, PROD_HOST, UPLOAD_CONCURRENCY, format_bytes, hash_ip_string, hash_network_from_cidr,
+    looks_like_hash, now_secs, parse_size_bytes, ttl_to_duration,
 };
 use redis::AsyncCommands;
 use redis::Client;
@@ -111,6 +111,7 @@ async fn load_owners_with_migration(
                     original: String::new(),
                     created: now_secs(),
                     hash: String::new(),
+                    size: 0,
                 },
             );
         }
@@ -923,6 +924,16 @@ async fn main() -> anyhow::Result<()> {
         "loaded admin sessions"
     );
 
+    let max_storage_quota = std::env::var("MAX_STORAGE_QUOTA")
+        .ok()
+        .and_then(|raw| parse_size_bytes(&raw))
+        .filter(|value| *value > 0);
+    if let Some(limit) = max_storage_quota {
+        info!(limit, human = %format_bytes(limit), "global storage quota enabled");
+    } else {
+        info!("global storage quota disabled");
+    }
+
     let initial_mtime = fs::metadata(&*metadata_path)
         .await
         .ok()
@@ -964,6 +975,7 @@ async fn main() -> anyhow::Result<()> {
         admin_key: Arc::new(RwLock::new(String::new())),
         bans_path: bans_path.clone(),
         bans: Arc::new(RwLock::new(bans_vec)),
+        max_storage_quota,
         mailgun_api_key,
         mailgun_domain,
         report_email_to,
@@ -991,8 +1003,8 @@ async fn main() -> anyhow::Result<()> {
         state.persist_admin_sessions().await;
     }
 
-    if let Err(err) = state.load_chunk_sessions_from_disk().await {
-        warn!(?err, "failed to restore chunk upload sessions from disk");
+    if let Err(err) = state.load_chunk_sessions_from_store().await {
+        warn!(?err, "failed to restore chunk upload sessions from store");
     }
 
     // Load or create admin key after state so helper can use now_secs etc

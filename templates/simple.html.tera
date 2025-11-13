@@ -43,12 +43,13 @@
     <hr>
     <h2 id="mainContent" class="textcenter">{{ t.simple_upload_heading | default(value="Upload Files") }}</h2>
     <form
-      class="upload"
+      class="upload{% if quota_reached %} is-disabled{% endif %}"
       method="post"
       enctype="multipart/form-data"
       action="/simple/upload"
       aria-describedby="mainDesc"
       aria-label="{{ t.simple_form_aria }}"
+      {% if quota_reached %}aria-disabled="true"{% endif %}
     >
     {% if MESSAGE is defined %}
       <div class="status-message status-success" id="delete-success-msg">
@@ -58,7 +59,7 @@
       <fieldset>
         <legend>{{ t.simple_upload_legend | default(value="Select files to upload") }}</legend>
         <label for="file">{{ t.simple_files_label }}</label><br>
-        <input id="file" type="file" name="file" multiple required /><br>
+  <input id="file" type="file" name="file" multiple required {% if quota_reached %}disabled{% endif %} /><br>
         <div class="ttl-box">
           <label for="ttl" class="ttl-label">{{ t.retention }}</label>
           <select name="ttl" id="ttl">
@@ -73,7 +74,7 @@
           <span class="note-extra">{{ t.auto_delete }}</span>
         </div>
         <br>
-        <button class="primary" type="submit">{{ t.simple_upload_btn }}</button>
+  <button class="primary{% if quota_reached %} is-disabled{% endif %}" type="submit" {% if quota_reached %}disabled aria-disabled="true"{% endif %}>{{ t.simple_upload_btn }}</button>
       </fieldset>
     </form>
     <hr>

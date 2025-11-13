@@ -1,12 +1,15 @@
 mod common;
 
 use juicebox::state::{
-    BanSubject, FileMeta, IpBan, check_storage_integrity, cleanup_expired,
+    BanSubject, ChunkSession, FileMeta, IpBan, check_storage_integrity, cleanup_expired,
     verify_user_entries_with_report,
 };
-use juicebox::util::now_secs;
+use juicebox::util::{max_file_bytes, now_secs};
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use tokio::fs;
+use tokio::sync::{Mutex, RwLock};
 
 fn meta(owner_hash: String, expires: u64, original: &str) -> FileMeta {
     FileMeta {
@@ -15,6 +18,7 @@ fn meta(owner_hash: String, expires: u64, original: &str) -> FileMeta {
         original: original.to_string(),
         created: now_secs(),
         hash: "deadbeef".into(),
+        size: 0,
     }
 }
 
@@ -132,6 +136,60 @@ async fn cleanup_expired_removes_metadata_and_files() {
     // Metadata removed and file deleted
     assert!(state.owners.get(&fname).is_none());
     assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn cleanup_chunk_sessions_removes_abandoned_uploads_quickly() {
+    let (state, _tmp) = common::setup_test_app();
+    let now = now_secs();
+    let session_dir = state.chunk_dir.join("abandoned-test");
+    fs::create_dir_all(&session_dir).await.unwrap();
+
+    let total_chunks = 4u32;
+    let chunk_session = Arc::new(ChunkSession {
+        owner_hash: common::hash_fixture_ip("198.51.100.42"),
+        original_name: "stalled.bin".to_string(),
+        storage_name: "stalled.bin".to_string(),
+        ttl_code: "24h".to_string(),
+        expires: now + 3_600,
+        total_bytes: 8 * 1024 * 1024,
+        chunk_size: 2 * 1024 * 1024,
+        total_chunks,
+        hash: None,
+        storage_dir: Arc::new(session_dir),
+        created: now,
+        received: RwLock::new(vec![false; total_chunks as usize]),
+        completed: AtomicBool::new(false),
+        last_update: AtomicU64::new(now.saturating_sub(600)),
+        persist_lock: Mutex::new(()),
+        assembled_chunks: AtomicU32::new(0),
+    });
+
+    state
+        .chunk_sessions
+        .insert("abandoned".into(), chunk_session.clone());
+
+    state
+        .persist_chunk_session("abandoned", chunk_session.as_ref())
+        .await
+        .expect("persist chunk session");
+
+    state.cleanup_chunk_sessions().await;
+
+    assert!(
+        state.chunk_sessions.get("abandoned").is_none(),
+        "expected idle chunk session to be purged after short inactivity"
+    );
+
+    let kv_entries = state
+        .kv
+        .load_hash("chunk_sessions")
+        .await
+        .expect("load chunk session entries");
+    assert!(
+        kv_entries.into_iter().all(|(key, _)| key != "abandoned"),
+        "expected kv store metadata to be purged as well"
+    );
 }
 
 #[tokio::test]
@@ -260,6 +318,53 @@ async fn verify_user_entries_reconciles_with_disk() {
     assert!(stored_map.contains_key(&file_a));
     assert!(stored_map.contains_key(&file_b));
     assert!(stored_map.contains_key(&file_c));
+}
+
+#[tokio::test]
+async fn storage_quota_guard_engages_before_full_usage() {
+    let guard = max_file_bytes();
+    let limit = guard.saturating_mul(3).max(guard.saturating_add(2));
+
+    // Scenario: remaining space a little more than guard -> uploads allowed
+    {
+        let (mut state, _tmp) = common::setup_test_app();
+        state.max_storage_quota = Some(limit);
+        let now = now_secs();
+        let owner = common::hash_fixture_ip("203.0.113.11");
+        state.owners.insert(
+            "pre-guard.bin".to_string(),
+            FileMeta {
+                owner_hash: owner,
+                expires: now + 3_600,
+                original: "pre-guard.bin".to_string(),
+                created: now,
+                hash: String::new(),
+                size: limit.saturating_sub(guard).saturating_sub(1),
+            },
+        );
+        assert!(!state.storage_quota_reached(now));
+    }
+
+    // Scenario: only guard bytes remain -> uploads blocked
+    {
+        let (mut state, _tmp) = common::setup_test_app();
+        state.max_storage_quota = Some(limit);
+        let now = now_secs();
+        let owner = common::hash_fixture_ip("203.0.113.12");
+        state.owners.insert(
+            "guard-hit.bin".to_string(),
+            FileMeta {
+                owner_hash: owner,
+                expires: now + 3_600,
+                original: "guard-hit.bin".to_string(),
+                created: now,
+                hash: String::new(),
+                size: limit.saturating_sub(guard),
+            },
+        );
+        assert!(state.storage_quota_reached(now));
+        assert_eq!(state.storage_quota_remaining(now), Some(guard));
+    }
 }
 
 #[tokio::test]

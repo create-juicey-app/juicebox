@@ -1,6 +1,6 @@
 // js/upload.js
 
-import { list } from "./ui.js";
+import { list, getTTL, disableUploads, getQuotaMessage } from "./ui.js";
 import {
   fmtBytes,
   showSnack,
@@ -8,7 +8,6 @@ import {
   flashCopied,
   animateRemove,
 } from "./utils.js";
-import { getTTL } from "./ui.js";
 import { ownedHandler } from "./owned.js";
 import { deleteHandler } from "./delete.js";
 import {
@@ -524,6 +523,9 @@ export const uploadHandler = {
           if (err?.name === "AbortError" || f.canceled) {
             return;
           }
+          if (err?.code === "quota_full" || err?.quotaBlocked) {
+            return;
+          }
           if (window.DEBUG_LOGS) console.error("Upload failed", err);
           captureException(err, {
             phase: "uploadOne",
@@ -954,7 +956,10 @@ export const uploadHandler = {
           this.handleUploadSuccess(f, batch, payload);
         } else {
           const details = this.normalizeErrorDetails(payload, "Upload failed.");
-          if (this.isForbiddenError(details, xhr.status)) {
+          if (this.isQuotaError(details, xhr.status)) {
+            this.handleQuotaBlocked(details);
+            this.markUploadFailed(f, batch, details.message);
+          } else if (this.isForbiddenError(details, xhr.status)) {
             this.rejectForbiddenFile(f, batch, details.message, {
               reason: details.code || "bad_filetype",
             });
@@ -1057,6 +1062,11 @@ export const uploadHandler = {
             "Failed to start chunked upload."
           );
           this.setStatusMessage(f, "");
+          if (this.isQuotaError(details, initResponse.status)) {
+            this.handleQuotaBlocked(details);
+            this.markUploadFailed(f, batch, details.message);
+            return;
+          }
           if (this.isForbiddenError(details, initResponse.status)) {
             this.rejectForbiddenFile(f, batch, details.message, {
               reason: details.code || "bad_filetype",
@@ -1090,6 +1100,10 @@ export const uploadHandler = {
           await this.uploadChunksSequentially(f, batch, abort);
         } catch (err) {
           this.stopChunkSmoothing(f);
+          if (err?.quotaBlocked || err?.code === "quota_full") {
+            await this.cancelChunkSession(f);
+            return;
+          }
           if (err?.forbiddenUpload) {
             this.setStatusMessage(f, "");
             this.removeLinkForFile(f);
@@ -1213,6 +1227,12 @@ export const uploadHandler = {
             completeResponse,
             "Upload failed."
           );
+          if (this.isQuotaError(details, completeResponse.status)) {
+            this.handleQuotaBlocked(details);
+            this.markUploadFailed(f, batch, details.message);
+            await this.cancelChunkSession(f);
+            return;
+          }
           if (this.isForbiddenError(details, completeResponse.status)) {
             await this.cancelChunkSession(f);
             this.setStatusMessage(f, "");
@@ -1355,6 +1375,11 @@ export const uploadHandler = {
           response,
           "Chunk upload failed."
         );
+        if (this.isQuotaError(details, response.status)) {
+          this.handleQuotaBlocked(details);
+          this.markUploadFailed(f, batch, details.message);
+          throw this.buildUploadError(details);
+        }
         if (this.isForbiddenError(details, response.status)) {
           this.rejectForbiddenFile(f, batch, details.message, {
             reason: details.code || "bad_filetype",
@@ -1664,6 +1689,35 @@ export const uploadHandler = {
     return false;
   },
 
+  isQuotaError(details, status) {
+    if (!details) return false;
+    if (details.code === "quota_full") return true;
+    if (details.quotaReached) return true;
+    if (status === 503) {
+      const message = (details.message || "").toLowerCase();
+      if (message.includes("quota")) {
+        return true;
+      }
+    }
+    return false;
+  },
+
+  handleQuotaBlocked(details) {
+    const message =
+      typeof details?.message === "string" && details.message.trim()
+        ? details.message.trim()
+        : getQuotaMessage();
+    disableUploads(message);
+    if (!window.JB_QUOTA_INFO || typeof window.JB_QUOTA_INFO !== "object") {
+      window.JB_QUOTA_INFO = {};
+    }
+    window.JB_QUOTA_INFO.uploads_blocked = true;
+    window.JB_QUOTA_INFO.quota_message = message;
+    try {
+      showSnack(message, { code: "quota_full" });
+    } catch {}
+  },
+
   normalizeErrorDetails(source, fallbackMessage) {
     const details = {
       message:
@@ -1671,6 +1725,7 @@ export const uploadHandler = {
           ? fallbackMessage
           : "Upload failed.",
       code: null,
+      quotaReached: false,
     };
     if (!source) {
       return details;
@@ -1689,6 +1744,12 @@ export const uploadHandler = {
       if (typeof source.code === "string" && source.code.trim()) {
         details.code = source.code;
       }
+      if (source.quota_reached === true || source.quotaReached === true) {
+        details.quotaReached = true;
+        if (!details.code) {
+          details.code = "quota_full";
+        }
+      }
     }
     return details;
   },
@@ -1698,6 +1759,11 @@ export const uploadHandler = {
     const err = new Error(message);
     if (details?.code) {
       err.code = details.code;
+    } else if (details?.quotaReached) {
+      err.code = "quota_full";
+    }
+    if (details?.quotaReached || details?.code === "quota_full") {
+      err.quotaBlocked = true;
     }
     if (extra.forbidden) {
       err.forbiddenUpload = true;
