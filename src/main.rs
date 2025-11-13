@@ -1,13 +1,13 @@
 use anyhow::{Context, anyhow};
 use axum::http::{Request, Response};
 use axum::{Router, extract::MatchedPath, middleware};
-use axum_server::Handle;
+use axum_server::{Handle, Server};
 use dashmap::DashMap;
 use juicebox::handlers::ban_gate;
 use juicebox::handlers::{add_cache_headers, add_security_headers, build_router};
 use juicebox::rate_limit::{RateLimiterInner, build_rate_limiter};
 use juicebox::state::{
-    AppState, BanSubject, FileMeta, IpBan, RedisStore, ReportRecord, TelemetryState,
+    AppState, BanSubject, FileMeta, IpBan, MailgunConfig, RedisStore, ReportRecord, TelemetryState,
     cleanup_expired,
 };
 use juicebox::util::{
@@ -21,11 +21,12 @@ use sentry::integrations::tracing::{self as sentry_tracing_integration, EventFil
 use sentry::{ClientInitGuard, SessionMode};
 use sentry_tower::{NewSentryLayer, SentryHttpLayer};
 use serde::Deserialize;
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::{
     borrow::Cow,
     collections::HashMap,
     io::ErrorKind,
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime},
@@ -480,6 +481,180 @@ fn read_trimmed_env(key: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn read_bool_env(key: &str) -> Option<bool> {
+    read_trimmed_env(key).map(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn resolve_bind_port(default_port: u16) -> u16 {
+    read_trimmed_env("JUICEBOX_BIND_PORT")
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(default_port)
+}
+
+fn resolve_bind_addr(ipv4_only: bool) -> anyhow::Result<IpAddr> {
+    if let Some(raw) = read_trimmed_env("JUICEBOX_BIND_ADDR") {
+        if raw == "*" {
+            return Ok(if ipv4_only {
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            } else {
+                IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+            });
+        }
+        let parsed: IpAddr = raw
+            .parse()
+            .with_context(|| format!("JUICEBOX_BIND_ADDR must be a valid IP address: {raw}"))?;
+        if ipv4_only && parsed.is_ipv6() {
+            return Err(anyhow!(
+                "JUICEBOX_IPV4_ONLY requested but JUICEBOX_BIND_ADDR is IPv6 ({raw})"
+            ));
+        }
+        if !ipv4_only && parsed.is_ipv4() {
+            info!(
+                "JUICEBOX_BIND_ADDR is IPv4 ({}); binding in IPv4-only mode for this listener",
+                parsed
+            );
+        }
+        return Ok(parsed);
+    }
+    Ok(if ipv4_only {
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+    } else {
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+    })
+}
+
+#[derive(Debug)]
+struct BoundListener {
+    listener: TcpListener,
+    local_addr: SocketAddr,
+    requested_ip: IpAddr,
+    dual_stack: bool,
+    fallback_to_ipv4: bool,
+}
+
+fn ipv4_fallback_candidate(requested_ip: IpAddr, ipv4_only: bool) -> Option<IpAddr> {
+    match requested_ip {
+        IpAddr::V6(addr) if addr.is_unspecified() && !ipv4_only => {
+            Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+        }
+        _ => None,
+    }
+}
+
+fn finalize_listener(
+    socket: Socket,
+    bind_addr: SocketAddr,
+) -> anyhow::Result<(TcpListener, SocketAddr)> {
+    socket.bind(&SockAddr::from(bind_addr))?;
+    socket.listen(1024)?;
+    let std_listener: TcpListener = socket.into();
+    std_listener.set_nonblocking(true)?;
+    let local_addr = std_listener.local_addr()?;
+    Ok((std_listener, local_addr))
+}
+
+fn bind_server_socket(
+    port: u16,
+    requested_ip: IpAddr,
+    ipv4_only: bool,
+) -> anyhow::Result<BoundListener> {
+    let mut effective_ip = requested_ip;
+    let mut domain = match requested_ip {
+        IpAddr::V4(_) => Domain::IPV4,
+        IpAddr::V6(_) => Domain::IPV6,
+    };
+    let fallback_candidate = ipv4_fallback_candidate(requested_ip, ipv4_only);
+    let mut fallback_to_ipv4 = false;
+    let mut dual_stack = false;
+
+    let socket = match Socket::new(domain, Type::STREAM, Some(Protocol::TCP)) {
+        Ok(sock) => sock,
+        Err(err) => {
+            if let Some(fallback_ip) = fallback_candidate {
+                warn!(
+                    ?err,
+                    requested_ip = %requested_ip,
+                    "failed to create IPv6 socket; falling back to IPv4 unspecified bind"
+                );
+                domain = Domain::IPV4;
+                effective_ip = fallback_ip;
+                fallback_to_ipv4 = true;
+                Socket::new(domain, Type::STREAM, Some(Protocol::TCP))
+                    .context("failed to create fallback IPv4 TCP socket after IPv6 attempt")?
+            } else {
+                return Err(
+                    anyhow!(err).context("failed to create TCP socket for requested bind address")
+                );
+            }
+        }
+    };
+
+    socket.set_reuse_address(true)?;
+
+    if domain == Domain::IPV6 {
+        let allow_dual_stack = fallback_candidate.is_some();
+        match socket.set_only_v6(!allow_dual_stack) {
+            Ok(_) => {
+                dual_stack = allow_dual_stack;
+            }
+            Err(err) => {
+                if allow_dual_stack {
+                    warn!(
+                        ?err,
+                        "failed to disable IPV6_V6ONLY; continuing with IPv6-only listener"
+                    );
+                } else {
+                    debug!(?err, "failed to enforce IPv6-only socket");
+                }
+            }
+        }
+    }
+
+    let bind_addr = SocketAddr::new(effective_ip, port);
+    let (listener, local_addr) = match finalize_listener(socket, bind_addr) {
+        Ok(result) => result,
+        Err(err) if fallback_candidate.is_some() && !fallback_to_ipv4 => {
+            warn!(
+                ?err,
+                requested_ip = %requested_ip,
+                port,
+                "failed to bind IPv6 listener; falling back to IPv4 unspecified bind"
+            );
+            let fallback_ip = fallback_candidate.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+            let fallback_addr = SocketAddr::new(fallback_ip, port);
+            let fallback_socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
+                .context("failed to create fallback IPv4 TCP socket after IPv6 bind failure")?;
+            fallback_socket.set_reuse_address(true)?;
+            let (listener, local_addr) = finalize_listener(fallback_socket, fallback_addr)
+                .context("failed to bind fallback IPv4 TCP listener")?;
+            return Ok(BoundListener {
+                listener,
+                local_addr,
+                requested_ip,
+                dual_stack: false,
+                fallback_to_ipv4: true,
+            });
+        }
+        Err(err) => {
+            return Err(err.context(format!("failed to bind TCP listener to {bind_addr}")));
+        }
+    };
+
+    Ok(BoundListener {
+        listener,
+        local_addr,
+        requested_ip,
+        dual_stack,
+        fallback_to_ipv4,
+    })
 }
 
 fn resolve_dir_path(root: Option<&Path>, env_key: &str, default_relative: &str) -> PathBuf {
@@ -955,10 +1130,9 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Initialize Tera
-    let tera = match Tera::new("templates/**/*.tera") {
-        Ok(t) => std::sync::Arc::new(t),
-        Err(e) => panic!("Failed to initialize Tera: {}", e),
-    };
+    let tera = Tera::new("templates/**/*.tera")
+        .map(std::sync::Arc::new)
+        .context("failed to initialize Tera templates")?;
     let mut state = AppState {
         upload_dir,
         static_dir,
@@ -1043,18 +1217,17 @@ async fn main() -> anyhow::Result<()> {
 
     // setup email worker if config present
     let mut email_handle = None;
-    if state.mailgun_api_key.is_some()
-        && state.mailgun_domain.is_some()
-        && state.report_email_to.is_some()
-        && state.report_email_from.is_some()
-    {
+    let mailgun_config = state.mailgun_config()?;
+    if let Some(mail_cfg) = mailgun_config {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<juicebox::handlers::ReportRecordEmail>(100);
         state.email_tx = Some(tx);
-        let api_key = state.mailgun_api_key.clone().unwrap();
-        let domain = state.mailgun_domain.clone().unwrap();
-        let to_addr = state.report_email_to.clone().unwrap();
-        let from_addr = state.report_email_from.clone().unwrap();
-        println!("mail: enabled (domain={domain}, to={to_addr})");
+        let MailgunConfig {
+            api_key,
+            domain,
+            report_email_to: to_addr,
+            report_email_from: from_addr,
+        } = mail_cfg;
+        info!(domain = %domain, to = %to_addr, "mail notifications enabled");
         let email_shutdown = shutdown_notify.clone();
         let handle = tokio::spawn(async move {
             let client = reqwest::Client::new();
@@ -1187,16 +1360,36 @@ async fn main() -> anyhow::Result<()> {
                     Ok(resp) => {
                         if !resp.status().is_success() {
                             let status = resp.status();
-                            let body_txt = resp.text().await.unwrap_or_default();
-                            eprintln!("mail: failed status={status} body={body_txt}");
+                            let body_txt = match resp.text().await {
+                                Ok(body) => body,
+                                Err(read_err) => {
+                                    warn!(?read_err, status = %status, "mailgun error body unavailable");
+                                    String::new()
+                                }
+                            };
+                            warn!(
+                                status = %status,
+                                body = %body_txt,
+                                file = %ev.file,
+                                reason = %ev.reason,
+                                "mailgun email dispatch failed"
+                            );
                         } else {
-                            println!(
-                                "mail: sent report file={} reason={} owner_hash={} reporter_hash={}",
-                                ev.file, ev.reason, ev.owner_hash, ev.reporter_hash
+                            info!(
+                                file = %ev.file,
+                                reason = %ev.reason,
+                                owner_hash = %ev.owner_hash,
+                                reporter_hash = %ev.reporter_hash,
+                                "mailgun email dispatched"
                             );
                         }
                     }
-                    Err(e) => eprintln!("mail: error sending: {e}"),
+                    Err(e) => error!(
+                        error = ?e,
+                        file = %ev.file,
+                        reason = %ev.reason,
+                        "mailgun email dispatch error"
+                    ),
                 }
                     }
                 }
@@ -1205,7 +1398,7 @@ async fn main() -> anyhow::Result<()> {
         .instrument(info_span!("mailgun.dispatcher")));
         email_handle = Some(handle);
     } else {
-        println!("mail: disabled (missing env vars)");
+        info!("mail notifications disabled (missing configuration)");
     }
 
     let router = build_router(state.clone());
@@ -1262,9 +1455,22 @@ async fn main() -> anyhow::Result<()> {
             juicebox::util::max_file_bytes() as usize,
         ));
 
-    let addr: SocketAddr = ([0, 0, 0, 0], 1200).into();
+    let bind_port = resolve_bind_port(1200);
+    let ipv4_only_env = read_bool_env("JUICEBOX_IPV4_ONLY").unwrap_or(false);
+    let requested_ip =
+        resolve_bind_addr(ipv4_only_env).context("failed to resolve bind address")?;
+    let BoundListener {
+        listener,
+        local_addr,
+        dual_stack,
+        fallback_to_ipv4,
+        ..
+    } = bind_server_socket(bind_port, requested_ip, ipv4_only_env)
+        .context("failed to bind TCP listener")?;
+    let requested_socket = SocketAddr::new(requested_ip, local_addr.port());
+    let effective_ipv4_only = !dual_stack && matches!(local_addr.ip(), IpAddr::V4(_));
     println!(
-        "listening on {addr} (prod host: {}), admin key loaded (expires {})",
+        "listening on {local_addr} (requested={requested_socket}, ipv4_only={effective_ipv4_only}, dual_stack={dual_stack}, fallback_to_ipv4={fallback_to_ipv4}, prod host: {}), admin key loaded (expires {})",
         PROD_HOST.as_str(),
         key_file.expires
     );
@@ -1284,7 +1490,7 @@ async fn main() -> anyhow::Result<()> {
         .instrument(info_span!("graceful_shutdown")),
     );
 
-    let server = axum_server::bind(addr)
+    let server = Server::from_tcp(listener)
         .handle(shutdown_handle.clone())
         .serve(app.into_make_service_with_connect_info::<SocketAddr>());
 
@@ -1377,5 +1583,83 @@ async fn listen_for_shutdown() {
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use once_cell::sync::Lazy;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::sync::Mutex;
+
+    static ENV_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+    fn restore_bind_addr_env(original: Option<String>) {
+        if let Some(value) = original {
+            std::env::set_var("JUICEBOX_BIND_ADDR", value);
+        } else {
+            std::env::remove_var("JUICEBOX_BIND_ADDR");
+        }
+    }
+
+    #[test]
+    fn ipv4_fallback_candidate_requires_unspecified_ipv6() {
+        assert_eq!(
+            ipv4_fallback_candidate(IpAddr::V6(Ipv6Addr::UNSPECIFIED), false),
+            Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+        );
+        assert!(ipv4_fallback_candidate(IpAddr::V6(Ipv6Addr::LOCALHOST), false).is_none());
+        assert!(ipv4_fallback_candidate(IpAddr::V6(Ipv6Addr::UNSPECIFIED), true).is_none());
+        assert!(ipv4_fallback_candidate(IpAddr::V4(Ipv4Addr::UNSPECIFIED), false).is_none());
+    }
+
+    #[test]
+    fn resolve_bind_addr_defaults_follow_mode() {
+        let _guard = ENV_GUARD.lock().expect("ENV_GUARD mutex poisoned");
+        let original = std::env::var("JUICEBOX_BIND_ADDR").ok();
+        std::env::remove_var("JUICEBOX_BIND_ADDR");
+
+        let ipv6_default = resolve_bind_addr(false).expect("ipv6 default should succeed");
+        assert_eq!(ipv6_default, IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+
+        let ipv4_default = resolve_bind_addr(true).expect("ipv4 default should succeed");
+        assert_eq!(ipv4_default, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+
+        restore_bind_addr_env(original);
+    }
+
+    #[test]
+    fn resolve_bind_addr_parses_and_respects_input() {
+        let _guard = ENV_GUARD.lock().expect("ENV_GUARD mutex poisoned");
+        let original = std::env::var("JUICEBOX_BIND_ADDR").ok();
+        std::env::set_var("JUICEBOX_BIND_ADDR", "192.0.2.10");
+
+        let addr = resolve_bind_addr(false).expect("ipv4 literal should parse");
+        assert_eq!(addr, IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)));
+
+        std::env::set_var("JUICEBOX_BIND_ADDR", "2001:db8::f00d");
+        let addr_v6 = resolve_bind_addr(false).expect("ipv6 literal should parse");
+        assert_eq!(
+            addr_v6,
+            "2001:db8::f00d"
+                .parse::<IpAddr>()
+                .expect("IPv6 literal should parse")
+        );
+
+        restore_bind_addr_env(original);
+    }
+
+    #[test]
+    fn resolve_bind_addr_errors_for_ipv6_when_ipv4_only() {
+        let _guard = ENV_GUARD.lock().expect("ENV_GUARD mutex poisoned");
+        let original = std::env::var("JUICEBOX_BIND_ADDR").ok();
+        std::env::set_var("JUICEBOX_BIND_ADDR", "2001:db8::1");
+
+        let err = resolve_bind_addr(true).expect_err("ipv6 bind must error for ipv4-only");
+
+        restore_bind_addr_env(original);
+
+        assert!(err.to_string().contains("JUICEBOX_IPV4_ONLY"));
     }
 }

@@ -193,10 +193,10 @@ async fn test_security_headers_respect_existing_and_normalize_charset() {
 async fn test_ban_gate_blocks_banned_ip_and_bypasses_static_assets() {
     let (state, _tmp) = common::setup_test_app();
 
-    // Ban exact hashed IP: 198.51.100.9
+    // fuck that ip i hate it
     let ip_str = "198.51.100.9";
     let hash = state
-        .hash_ip_to_string(ip_str)
+        .hash_ip_to_string(ip_str)127.0.0.1
         .expect("hash of fixture ip available");
     state
         .add_ban(IpBan {

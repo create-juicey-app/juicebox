@@ -81,7 +81,9 @@ describe("config.js fetchConfig", () => {
 
     const returned = await fetchConfig();
     // fetch called with correct endpoint and options
-    expect(global.fetch).toHaveBeenCalledWith("/api/config", { cache: "no-store" });
+    expect(global.fetch).toHaveBeenCalledWith("/api/config", {
+      cache: "no-store",
+    });
 
     // Returns parsed config
     expect(returned).toEqual(cfg);
@@ -136,8 +138,8 @@ describe("config.js fetchConfig", () => {
     window.MAX_FILE_BYTES = 777;
     window.MAX_FILE_SIZE_STR = "777B";
     window.ENABLE_STREAMING_UPLOADS = true;
-  window.JB_UPLOADS_DISABLED = true;
-  window.JB_QUOTA_INFO = { uploads_blocked: true };
+    window.JB_UPLOADS_DISABLED = true;
+    window.JB_QUOTA_INFO = { uploads_blocked: true };
 
     mockFetchNotOk(503, { message: "Service Unavailable" });
 
@@ -167,7 +169,6 @@ describe("config.js fetchConfig", () => {
     const result = await fetchConfig();
     expect(result).toBeNull();
 
-    // No changes applied
     expect(window.MAX_FILE_BYTES).toBe(888);
     expect(window.MAX_FILE_SIZE_STR).toBe("888B");
     expect(window.ENABLE_STREAMING_UPLOADS).toBe(false);

@@ -60,7 +60,7 @@ function mockTracing(overrides = {}) {
 
 async function importTelemetryWithMocks(
   mockSentryOverrides = {},
-  mockTracingOverrides = {}
+  mockTracingOverrides = {},
 ) {
   jest.resetModules();
   resetScopeMocks();
@@ -140,7 +140,7 @@ describe("telemetry.js", () => {
     expect(initResult1).toBe(true);
     expect(telemetry.isTelemetryEnabled()).toBe(true);
     expect(telemetry.getTelemetryClient()).not.toBeNull();
-
+    // To be null, or to be .. Uh, not to be null
     // Sentry.init called once with expected pieces
     expect(Sentry.init).toHaveBeenCalledTimes(1);
     const initArg = Sentry.init.mock.calls[0][0];
@@ -167,11 +167,11 @@ describe("telemetry.js", () => {
     expect(SCOPE.setTag).toHaveBeenCalledWith("profiling", "enabled");
     expect(SCOPE.setExtra).toHaveBeenCalledWith(
       "trace_propagation_targets",
-      expect.any(Array)
+      expect.any(Array),
     );
     expect(SCOPE.setExtra).toHaveBeenCalledWith(
       "profiles_sample_rate",
-      cfg.sentry.profiles_sample_rate
+      cfg.sentry.profiles_sample_rate,
     );
 
     // Second init is no-op, still enabled and not re-initialized
@@ -187,7 +187,7 @@ describe("telemetry.js", () => {
       const out = await telemetry.startSpan(
         "my.span",
         { op: "x" },
-        async () => 42
+        async () => 42,
       );
       expect(out).toBe(42);
       expect(Sentry.startSpan).not.toHaveBeenCalled();
@@ -199,7 +199,7 @@ describe("telemetry.js", () => {
       const out = await telemetry.startSpan(
         "upload",
         { op: "http.client" },
-        async () => "ok"
+        async () => "ok",
       );
       expect(out).toBe("ok");
       expect(Sentry.startSpan).toHaveBeenCalledTimes(1);
@@ -235,7 +235,7 @@ describe("telemetry.js", () => {
     expect(Sentry.captureException).toHaveBeenCalledTimes(1);
     expect(Sentry.captureException).toHaveBeenCalledWith(
       err,
-      expect.any(Function)
+      expect.any(Function),
     );
   });
 
@@ -258,12 +258,12 @@ describe("telemetry.js", () => {
 
     const levels = events.map((e) => e.level);
     expect(levels).toEqual(
-      expect.arrayContaining(["warning", "error", "info"])
+      expect.arrayContaining(["warning", "error", "info"]),
     );
 
     // One of the messages should match our warn
     expect(
-      events.some((e) => String(e.message).includes("something happened"))
+      events.some((e) => String(e.message).includes("something happened")),
     ).toBe(true);
     // Logger should be annotated
     events.forEach((e) => {

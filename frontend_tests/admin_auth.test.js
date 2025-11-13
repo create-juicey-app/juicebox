@@ -173,7 +173,6 @@ describe("admin_auth.js", () => {
     expect(status.textContent).toMatch(/Admin session active\. Reloading/i);
     // Reload inferred from status text announcement
 
-    // no-op (no spy to restore)
   });
 
   it.skip("admin=true but cookie not visible after retries injects help and displays warning", async () => {
@@ -406,6 +405,5 @@ describe("admin_auth.js", () => {
     expect(status.textContent).toMatch(/Session active. Redirecting/i);
     // Redirect inferred from status text announcement
 
-    // no-op (no spy to restore)
   });
 });

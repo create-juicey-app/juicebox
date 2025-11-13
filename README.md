@@ -62,10 +62,10 @@ Juicebox stores all mutable metadata (owners, reports, IP bans, admin sessions) 
 - Set `JUICEBOX_REDIS_PREFIX` if you want to isolate keys per deployment (defaults to `juicebox`).
 - The admin key still lives on disk (`admin_key.json`) so you can rotate it manually if needed.
 
-On startup the server will migrate any legacy JSON files into Redis the first time it sees empty
-keys. Once migrated, the JSON files are no longer written to, and Redis is treated as the source of
-truth. This lets you roll back easily (JSON files stay on disk) while giving you the durability
-and concurrency benefits of a real key-value store.
+Small reminder that Redis is an in-memory database; ensure you have a persistence strategy (RDB/AOF) and backups in place to avoid data loss.
++ Remember to secury redis and never expose it to the public internet. That's what i did, dont do that, idiot (speaking to past self).
+
+On startup the server will migrate any legacy JSON files into Redis the first time it sees empty keys. Once migrated, the JSON files are no longer written to, and Redis is treated as the source of truth. This lets you roll back easily (JSON files stay on disk) while giving you the durability and concurrency benefits of a real key-value store.
 
 ## Frontend (will be deprecated)
 

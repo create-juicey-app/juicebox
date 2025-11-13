@@ -2,7 +2,7 @@ use crate::util::{
     ADMIN_KEY_TTL, ADMIN_SESSION_TTL, IpVersion, MAX_ACTIVE_FILES_PER_IP, hash_ip_addr,
     hash_ip_string, hash_network_from_cidr, hash_network_from_ip, max_file_bytes, new_id, now_secs,
 };
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use redis::AsyncCommands;
@@ -343,6 +343,144 @@ mod telemetry_tests {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MailgunConfig {
+    pub api_key: String,
+    pub domain: String,
+    pub report_email_to: String,
+    pub report_email_from: String,
+}
+
+fn normalize_mailgun_value(value: &Option<String>) -> Option<String> {
+    value
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+fn resolve_mailgun_config(
+    api_key: &Option<String>,
+    domain: &Option<String>,
+    report_email_to: &Option<String>,
+    report_email_from: &Option<String>,
+) -> Result<Option<MailgunConfig>> {
+    let api_key = normalize_mailgun_value(api_key);
+    let domain = normalize_mailgun_value(domain);
+    let report_email_to = normalize_mailgun_value(report_email_to);
+    let report_email_from = normalize_mailgun_value(report_email_from);
+
+    if api_key.is_none()
+        && domain.is_none()
+        && report_email_to.is_none()
+        && report_email_from.is_none()
+    {
+        return Ok(None);
+    }
+
+    let api_key = api_key.ok_or_else(|| {
+        anyhow!("mailgun API key is required when any mail configuration is provided")
+    })?;
+    let domain = domain.ok_or_else(|| {
+        anyhow!("mailgun domain is required when any mail configuration is provided")
+    })?;
+    if domain.contains(char::is_whitespace) {
+        return Err(anyhow!("mailgun domain must not contain whitespace"));
+    }
+    if !domain.contains('.') {
+        return Err(anyhow!("mailgun domain must contain a dot"));
+    }
+
+    let report_email_to = report_email_to.ok_or_else(|| {
+        anyhow!("report email destination is required when mail configuration is provided")
+    })?;
+    let report_email_from = report_email_from.ok_or_else(|| {
+        anyhow!("report email sender is required when mail configuration is provided")
+    })?;
+
+    fn validate_email(label: &str, value: &str) -> Result<()> {
+        if value.contains(char::is_whitespace) {
+            return Err(anyhow!("{label} must not contain whitespace"));
+        }
+        let (local, domain_part) = value
+            .split_once('@')
+            .ok_or_else(|| anyhow!("{label} must contain '@'"))?;
+        if local.is_empty() || domain_part.is_empty() {
+            return Err(anyhow!("{label} must include both local and domain parts"));
+        }
+        if !domain_part.contains('.') {
+            return Err(anyhow!("{label} domain part must contain a dot"));
+        }
+        Ok(())
+    }
+
+    validate_email("report email to", &report_email_to)?;
+    validate_email("report email from", &report_email_from)?;
+
+    Ok(Some(MailgunConfig {
+        api_key,
+        domain,
+        report_email_to,
+        report_email_from,
+    }))
+}
+
+#[cfg(test)]
+mod mailgun_config_tests {
+    use super::{MailgunConfig, normalize_mailgun_value, resolve_mailgun_config};
+
+    #[test]
+    fn returns_none_when_all_fields_absent() {
+        let result =
+            resolve_mailgun_config(&None, &None, &None, &None).expect("resolution should succeed");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn errors_when_configuration_is_partial() {
+        let err = resolve_mailgun_config(
+            &Some("key".into()),
+            &None,
+            &Some("dest@example.com".into()),
+            &Some("from@example.com".into()),
+        )
+        .expect_err("should error for missing domain");
+        assert!(err.to_string().contains("mailgun domain"));
+    }
+
+    #[test]
+    fn resolves_valid_configuration() {
+        let cfg = resolve_mailgun_config(
+            &Some(" key ".into()),
+            &Some("mail.example.com".into()),
+            &Some("report@example.com".into()),
+            &Some("noreply@example.com".into()),
+        )
+        .expect("resolution should succeed")
+        .expect("configuration should be present");
+
+        assert_eq!(
+            cfg,
+            MailgunConfig {
+                api_key: "key".to_string(),
+                domain: "mail.example.com".to_string(),
+                report_email_to: "report@example.com".to_string(),
+                report_email_from: "noreply@example.com".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_mailgun_value_trims_and_filters() {
+        assert_eq!(
+            normalize_mailgun_value(&Some(" value ".into())),
+            Some("value".into())
+        );
+        assert!(normalize_mailgun_value(&Some("   ".into())).is_none());
+        assert!(normalize_mailgun_value(&None).is_none());
+    }
+}
+
 #[derive(Debug)]
 pub struct ChunkSession {
     pub owner_hash: String,
@@ -501,6 +639,15 @@ impl AppState {
 
     pub fn hash_network_from_cidr(&self, cidr: &str) -> Option<(IpVersion, u8, String)> {
         hash_network_from_cidr(self.ip_hash_secret_bytes(), cidr)
+    }
+
+    pub fn mailgun_config(&self) -> Result<Option<MailgunConfig>> {
+        resolve_mailgun_config(
+            &self.mailgun_api_key,
+            &self.mailgun_domain,
+            &self.report_email_to,
+            &self.report_email_from,
+        )
     }
 
     pub fn ban_subject_from_input(&self, input: &str) -> Option<BanSubject> {
@@ -1051,7 +1198,7 @@ impl AppState {
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn cleanup_chunk_sessions(&self) {
         const STALE_GRACE: u64 = 30 * 60; // 30 minutes once data is flowing
-        const EMPTY_GRACE: u64 = 5 * 60; // give abandoned sessions a short leash
+        const EMPTY_GRACE: u64 = 5 * 60; // give abandoned sessions a short leash (that's what she said)
         let now = now_secs();
         let sessions: Vec<(String, Arc<ChunkSession>)> = self
             .chunk_sessions
