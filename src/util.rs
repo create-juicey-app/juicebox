@@ -41,6 +41,8 @@ pub static PROD_HOST: Lazy<String> = Lazy::new(|| {
         .unwrap_or_else(|| "box.juicey.dev".to_string())
 });
 
+const UNKNOWN: &str = "unknown";
+
 fn trim_host(input: &str) -> String {
     let without_path = input.split(['/', '?', '#']).next().unwrap_or(input);
     without_path.trim().trim_matches('/').to_string()
@@ -499,4 +501,38 @@ pub fn format_bytes(n: u64) -> String {
 
 pub fn max_file_bytes() -> u64 {
     *MAX_FILE_BYTES
+}
+
+pub fn git_branch() -> &'static str {
+    sanitized_env(option_env!("JUICEBOX_GIT_BRANCH")).unwrap_or(UNKNOWN)
+}
+
+pub fn git_commit() -> &'static str {
+    sanitized_env(option_env!("JUICEBOX_GIT_COMMIT"))
+        .or_else(|| sanitized_env(option_env!("JUICEBOX_GIT_COMMIT_SHORT")))
+        .unwrap_or(UNKNOWN)
+}
+
+pub fn git_commit_short() -> &'static str {
+    if let Some(short) = sanitized_env(option_env!("JUICEBOX_GIT_COMMIT_SHORT")) {
+        return truncate_commit(short);
+    }
+
+    if let Some(full) = sanitized_env(option_env!("JUICEBOX_GIT_COMMIT")) {
+        return truncate_commit(full);
+    }
+
+    UNKNOWN
+}
+
+fn sanitized_env(value: Option<&'static str>) -> Option<&'static str> {
+    value.map(str::trim).filter(|v| !v.is_empty())
+}
+
+fn truncate_commit(value: &'static str) -> &'static str {
+    value
+        .char_indices()
+        .nth(12)
+        .map(|(idx, _)| &value[..idx])
+        .unwrap_or(value)
 }

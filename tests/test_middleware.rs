@@ -196,7 +196,7 @@ async fn test_ban_gate_blocks_banned_ip_and_bypasses_static_assets() {
     // fuck that ip i hate it
     let ip_str = "198.51.100.9";
     let hash = state
-        .hash_ip_to_string(ip_str)127.0.0.1
+        .hash_ip_to_string(ip_str)
         .expect("hash of fixture ip available");
     state
         .add_ban(IpBan {

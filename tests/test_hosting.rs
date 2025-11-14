@@ -4,13 +4,53 @@ use axum::body::{Body, to_bytes};
 use axum::http::{HeaderValue, Request, StatusCode, header};
 use juicebox::handlers::build_router;
 use juicebox::state::FileMeta;
-use juicebox::util::{max_file_bytes, now_secs};
+use juicebox::util::{git_branch, git_commit, git_commit_short, max_file_bytes, now_secs};
 use once_cell::sync::Lazy;
 use serde_json::Value;
 use std::sync::Mutex;
 use tower::ServiceExt;
 
 static ENV_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+#[tokio::test]
+async fn test_root_page_includes_git_metadata() {
+    let _lock = ENV_GUARD.lock().unwrap();
+    let (state, _tmp) = common::setup_test_app();
+    let app = build_router(state);
+
+    let resp = app
+        .clone()
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).expect("root page should be valid UTF-8");
+
+    let expected_branch = git_branch();
+    let expected_commit_short = git_commit_short();
+    let expected_commit_full = git_commit();
+
+    let footer_line = html
+        .lines()
+        .find(|line| line.contains("footer-build"))
+        .expect("root page should include footer build metadata element");
+
+    let expected_identifier = format!("{}@{}", expected_branch, expected_commit_short);
+    assert!(
+        footer_line.contains(&expected_identifier),
+        "footer build metadata should display {} in footer: {}",
+        expected_identifier,
+        footer_line
+    );
+    let expected_title_attr = format!("title=\"{}\"", expected_commit_full);
+    assert!(
+        footer_line.contains(&expected_title_attr),
+        "footer build metadata should expose full commit hash via title attribute in footer: {}",
+        footer_line
+    );
+}
 
 #[tokio::test]
 async fn test_config_handler_includes_telemetry_and_streaming_flag() {

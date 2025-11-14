@@ -13,8 +13,8 @@ use tracing::{debug, error, trace, warn};
 
 use crate::state::{AppState, BanSubject};
 use crate::util::{
-    IpVersion, MAX_ACTIVE_FILES_PER_IP, extract_client_ip, format_bytes, headers_trusted,
-    max_file_bytes, now_secs, qualify_path, real_client_ip,
+    IpVersion, MAX_ACTIVE_FILES_PER_IP, extract_client_ip, format_bytes, git_branch, git_commit,
+    git_commit_short, headers_trusted, max_file_bytes, now_secs, qualify_path, real_client_ip,
 };
 
 const DEFAULT_QUOTA_MESSAGE: &str =
@@ -60,10 +60,16 @@ pub async fn root_handler(
     trace!(lang, "rendering root page");
     let t_map = load_translation_map(lang).await;
     let mut ctx = Context::new();
+    let branch = git_branch();
+    let commit_short = git_commit_short();
+    let commit_full = git_commit();
     ctx.insert("lang", lang);
     ctx.insert("t", &t_map);
     ctx.insert("max_file_bytes", &max_file_bytes());
     ctx.insert("max_file_size_str", &format_bytes(max_file_bytes()));
+    ctx.insert("git_branch", branch);
+    ctx.insert("git_commit", commit_short);
+    ctx.insert("git_commit_full", commit_full);
     let now = now_secs();
     let quota_limit = state.storage_quota_limit();
     let quota_used = state.global_reserved_storage_bytes(now);
