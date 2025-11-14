@@ -1591,16 +1591,31 @@ async fn listen_for_shutdown() {
 mod tests {
     use super::*;
     use once_cell::sync::Lazy;
+    use std::ffi::OsStr;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::sync::Mutex;
 
     static ENV_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
+    fn set_bind_addr<S>(value: S)
+    where
+        S: AsRef<OsStr>,
+    {
+        // Safety: tests hold ENV_GUARD while mutating process env, preventing
+        // concurrent modification of the shared environment.
+        unsafe { std::env::set_var("JUICEBOX_BIND_ADDR", value) };
+    }
+
+    fn clear_bind_addr() {
+        // Safety: see set_bind_addr safety reasoning; guard serialises env access.
+        unsafe { std::env::remove_var("JUICEBOX_BIND_ADDR") };
+    }
+
     fn restore_bind_addr_env(original: Option<String>) {
         if let Some(value) = original {
-            std::env::set_var("JUICEBOX_BIND_ADDR", value);
+            set_bind_addr(value.as_str());
         } else {
-            std::env::remove_var("JUICEBOX_BIND_ADDR");
+            clear_bind_addr();
         }
     }
 
@@ -1619,7 +1634,7 @@ mod tests {
     fn resolve_bind_addr_defaults_follow_mode() {
         let _guard = ENV_GUARD.lock().expect("ENV_GUARD mutex poisoned");
         let original = std::env::var("JUICEBOX_BIND_ADDR").ok();
-        std::env::remove_var("JUICEBOX_BIND_ADDR");
+    clear_bind_addr();
 
         let ipv6_default = resolve_bind_addr(false).expect("ipv6 default should succeed");
         assert_eq!(ipv6_default, IpAddr::V6(Ipv6Addr::UNSPECIFIED));
@@ -1634,12 +1649,12 @@ mod tests {
     fn resolve_bind_addr_parses_and_respects_input() {
         let _guard = ENV_GUARD.lock().expect("ENV_GUARD mutex poisoned");
         let original = std::env::var("JUICEBOX_BIND_ADDR").ok();
-        std::env::set_var("JUICEBOX_BIND_ADDR", "192.0.2.10");
+        set_bind_addr("192.0.2.10");
 
         let addr = resolve_bind_addr(false).expect("ipv4 literal should parse");
         assert_eq!(addr, IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)));
 
-        std::env::set_var("JUICEBOX_BIND_ADDR", "2001:db8::f00d");
+        set_bind_addr("2001:db8::f00d");
         let addr_v6 = resolve_bind_addr(false).expect("ipv6 literal should parse");
         assert_eq!(
             addr_v6,
@@ -1655,7 +1670,7 @@ mod tests {
     fn resolve_bind_addr_errors_for_ipv6_when_ipv4_only() {
         let _guard = ENV_GUARD.lock().expect("ENV_GUARD mutex poisoned");
         let original = std::env::var("JUICEBOX_BIND_ADDR").ok();
-        std::env::set_var("JUICEBOX_BIND_ADDR", "2001:db8::1");
+    set_bind_addr("2001:db8::1");
 
         let err = resolve_bind_addr(true).expect_err("ipv6 bind must error for ipv4-only");
 

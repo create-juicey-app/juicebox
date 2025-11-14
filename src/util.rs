@@ -83,6 +83,16 @@ static TRUSTED_PROXY_CONFIG: Lazy<RwLock<TrustedProxyConfig>> = Lazy::new(|| {
     })
 });
 
+fn canonical_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(v6)),
+        _ => ip,
+    }
+}
+
 fn is_local_proxy(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
@@ -91,6 +101,7 @@ fn is_local_proxy(ip: &IpAddr) -> bool {
 }
 
 fn proxy_source_trusted(cfg: &TrustedProxyConfig, source_ip: IpAddr) -> bool {
+    let source_ip = canonical_ip(source_ip);
     if is_local_proxy(&source_ip) {
         return true;
     }
@@ -326,6 +337,7 @@ fn ip_in_cidr(ip: IpAddr, cidr: &str) -> bool {
 
 #[allow(dead_code)]
 pub fn is_cloudflare_edge(remote: IpAddr) -> bool {
+    let remote = canonical_ip(remote);
     const CF_CIDRS: &[&str] = &[
         "173.245.48.0/20",
         "103.21.244.0/22",
@@ -354,10 +366,11 @@ pub fn is_cloudflare_edge(remote: IpAddr) -> bool {
 }
 
 fn parse_ip(value: &str) -> Option<IpAddr> {
-    value.trim().parse::<IpAddr>().ok()
+    value.trim().parse::<IpAddr>().ok().map(canonical_ip)
 }
 
 pub fn extract_client_ip(headers: &HeaderMap, fallback: Option<IpAddr>) -> String {
+    let fallback = fallback.map(canonical_ip);
     {
         let cfg = TRUSTED_PROXY_CONFIG
             .read()
