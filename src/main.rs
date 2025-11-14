@@ -535,6 +535,7 @@ fn resolve_bind_addr(ipv4_only: bool) -> anyhow::Result<IpAddr> {
 struct BoundListener {
     listener: TcpListener,
     local_addr: SocketAddr,
+    #[allow(dead_code)]
     requested_ip: IpAddr,
     dual_stack: bool,
     fallback_to_ipv4: bool,
