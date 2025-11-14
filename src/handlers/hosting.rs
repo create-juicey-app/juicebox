@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::header::{
-    ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, EXPIRES, VARY,
+    ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_TYPE, EXPIRES, VARY,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -82,9 +82,10 @@ fn compute_frontend_quota(state: &AppState, now: u64) -> Option<FrontendQuota> {
 }
 
 #[axum::debug_handler]
-#[tracing::instrument(name = "files.fetch", skip(state), fields(file = %file))]
+#[tracing::instrument(name = "files.fetch", skip(state, headers), fields(file = %file))]
 pub async fn fetch_file_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(file): Path<String>,
 ) -> Response {
     trace!(file = %file, "fetch file request received");
@@ -114,33 +115,79 @@ pub async fn fetch_file_handler(
     match fs::read(&file_path).await {
         Ok(bytes) => {
             let mime = MimeGuess::from_path(&file_path).first_or_octet_stream();
-            let mut headers = HeaderMap::new();
-            headers.insert(CONTENT_TYPE, mime.as_ref().parse().unwrap());
+            let mut resp_headers = HeaderMap::new();
+            resp_headers.insert(CONTENT_TYPE, mime.as_ref().parse().unwrap());
+            
+            // Check if request is coming from file-serving subdomain
+            let host = headers.get("host")
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or("");
+            let is_file_host = is_sandbox_host(host);
+            
+            // Detect potentially dangerous content types
+            let mime_str = mime.as_ref();
+            let is_dangerous = mime_str == "text/html" 
+                || mime_str == "image/svg+xml"
+                || mime_str == "application/xhtml+xml"
+                || mime_str == "text/xml"
+                || mime_str == "application/xml";
+            
+            if is_dangerous {
+                if is_file_host {
+                    // On file-serving domain: Apply strict CSP to prevent XSS
+                    resp_headers.insert(
+                        "Content-Security-Policy",
+                        HeaderValue::from_static(
+                            "default-src 'none'; style-src 'unsafe-inline'; img-src data:; media-src data:; font-src data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none';"
+                        ),
+                    );
+                    // Prevent embedding
+                    resp_headers.insert(
+                        "X-Frame-Options",
+                        HeaderValue::from_static("DENY"),
+                    );
+                    // Prevent MIME sniffing
+                    resp_headers.insert(
+                        "X-Content-Type-Options",
+                        HeaderValue::from_static("nosniff"),
+                    );
+                    debug!(file = %file, mime = %mime_str, "serving content on file host with strict CSP");
+                } else {
+                    // On main domain: Force download to prevent rendering
+                    resp_headers.insert(
+                        CONTENT_DISPOSITION,
+                        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", file))
+                            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+                    );
+                    warn!(file = %file, mime = %mime_str, host = %host, "forced download for dangerous content on main domain");
+                }
+            }
+            
             if meta_expires > now {
                 let remaining = meta_expires - now;
                 // If the object expires far in the future, mark it immutable so CDNs cache aggressively.
                 // Otherwise use the remaining TTL as max-age.
                 if remaining > 60 * 60 * 24 * 7 {
                     // more than 7 days -> long cache
-                    headers.insert(
+                    resp_headers.insert(
                         CACHE_CONTROL,
                         HeaderValue::from_static("public, max-age=31536000, immutable"),
                     );
                 } else {
-                    headers.insert(
+                    resp_headers.insert(
                         CACHE_CONTROL,
                         HeaderValue::from_str(&format!("public, max-age={}", remaining)).unwrap(),
                     );
                 }
                 let exp_time = std::time::SystemTime::UNIX_EPOCH
                     + std::time::Duration::from_secs(meta_expires);
-                headers.insert(
+                resp_headers.insert(
                     EXPIRES,
                     HeaderValue::from_str(&httpdate::fmt_http_date(exp_time)).unwrap(),
                 );
             }
             info!(file = %file, size = bytes.len(), "serving file");
-            (headers, bytes).into_response()
+            (resp_headers, bytes).into_response()
         }
         Err(_) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -148,6 +195,48 @@ pub async fn fetch_file_handler(
             "cant read file",
         ),
     }
+}
+
+/// Direct file serving handler for clean URLs on file-serving domains
+/// Serves files at /{filename} instead of /f/{filename}
+/// Only enabled when JUICEBOX_FILE_HOSTS is configured
+#[axum::debug_handler]
+#[tracing::instrument(name = "files.fetch.direct", skip(state, headers), fields(file = %file))]
+pub async fn fetch_file_direct_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(file): Path<String>,
+) -> Response {
+    // On file-serving domains, directly serve files
+    // No need to check host again since route is only added when JUICEBOX_FILE_HOSTS is set
+    trace!(file = %file, "direct file serving request");
+    
+    // Use the same logic as fetch_file_handler
+    fetch_file_handler(State(state), headers, Path(file)).await
+}
+
+/// Check if the request is coming from a file-serving subdomain
+/// File serving domains should be configured via JUICEBOX_FILE_HOSTS env var (comma-separated)
+/// Example: file.juicey.dev,cdn.juicey.dev
+/// 
+/// On file-serving domains, HTML/SVG files are rendered with strict CSP to prevent XSS
+/// On main domain, dangerous files are forced to download
+fn is_sandbox_host(host: &str) -> bool {
+    let file_hosts = std::env::var("JUICEBOX_FILE_HOSTS")
+        .or_else(|_| std::env::var("JUICEBOX_SANDBOX_HOSTS")) // Backward compatibility
+        .ok()
+        .map(|s| s.split(',').map(|h| h.trim().to_lowercase()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    
+    if file_hosts.is_empty() {
+        return false;
+    }
+    
+    let host_lower = host.to_lowercase();
+    // Remove port if present
+    let host_without_port = host_lower.split(':').next().unwrap_or(&host_lower);
+    
+    file_hosts.iter().any(|sh| host_without_port == sh)
 }
 
 pub async fn file_handler(

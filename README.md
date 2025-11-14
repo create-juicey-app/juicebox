@@ -37,8 +37,8 @@ Common options (set in .env or your environment):
 - MAILGUN_DOMAIN - its domain for sending email (e.g. mail.juicey.dev)
 - REPORT_EMAIL_TO - reciever's email for reports (e.g. admin@juicey.dev)
 - REPORT_EMAIL_FROM - domain user (e.g. report@mail.juicey.dev)
-- TRUST_PROXY_HEADERS - security feature if you trust the proxy headers giving you right ip for the job. Required if you ever want to host it
-- TRUSTED_PROXY_CIDRS - linked with TRUST_PROXY_HEADERS, trusted domains / ip's in a list.
+- **TRUST_PROXY_HEADERS** - **CRITICAL**: set to `true` when running behind a reverse proxy/CDN to enable proper client IP detection. Without this, all users will appear to have the same IP and can access each other's files!
+- **TRUSTED_PROXY_CIDRS** - **REQUIRED when TRUST_PROXY_HEADERS=true**: comma-separated list of trusted proxy IP ranges (e.g. `172.18.0.0/16,127.0.0.1/8` for Docker networks and localhost)
 - SENTRY_DSN - sentry link for errors.
 - IP_HASH_SECRET - REQUIRED. Hash secret to avoid hash lookups and get ur ip leaked
 - JUICEBOX_PROD_HOST - the juicebox domain (e.g. box.juicey.dev) only required if you put it in a website
